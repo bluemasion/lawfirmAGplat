@@ -39,12 +39,13 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
 
     # --- Routers ---
-    from app.api import auth, agent, chat, knowledge, file
+    from app.api import auth, agent, chat, knowledge, file, bidding
     app.include_router(auth.router, prefix="/api/auth", tags=["认证"])
     app.include_router(agent.router, prefix="/api/agent", tags=["Agent"])
     app.include_router(chat.router, prefix="/api/chat", tags=["对话"])
     app.include_router(knowledge.router, prefix="/api/knowledge", tags=["知识库"])
     app.include_router(file.router, prefix="/api/file", tags=["文件"])
+    app.include_router(bidding.router, prefix="/api/bidding", tags=["投标"])
 
     # --- Health check ---
     @app.get("/health", tags=["系统"])

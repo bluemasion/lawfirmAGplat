@@ -1,309 +1,433 @@
-import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Upload, FileText, CheckCircle, AlertTriangle, Loader2, ChevronRight, Download, Search, Shield } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { FileText, Send, Loader2, CheckCircle, Building2, User, Phone, Mail, DollarSign, Calendar, MapPin, ClipboardList, Download, RotateCcw, Upload, Sparkles, AlertTriangle, ChevronRight, Eye } from 'lucide-react';
 
-// 政府法律顾问采购 — mock 数据
-const tenderInfo = {
-    projectName: '某市人民政府2026年度常年法律顾问服务采购项目',
-    tenderNo: 'GKCG-2026-0318',
-    budget: '¥120万元/年',
-    deadline: '2026-03-18 17:00',
-    serviceScope: '政府决策合法性审查、规范性文件审核、行政复议/诉讼代理、重大项目法律论证',
-    requirements: [
-        { item: '律所执业年限≥10年', match: true },
-        { item: '具有政府法律顾问服务经验≥3年', match: true },
-        { item: '拟派团队≥3名执业律师', match: true },
-        { item: '近3年无行业处罚记录', match: true },
-        { item: '具备ISO27001信息安全认证', match: false },
-    ],
-    scoring: [
-        { category: '技术方案', weight: 55, details: '服务方案30分 + 团队配置15分 + 创新方案10分' },
-        { category: '商务报价', weight: 30, details: '价格分=最低报价/投标报价×30' },
-        { category: '业绩与资质', weight: 15, details: '同类业绩10分 + 律所荣誉5分' },
-    ],
-};
+const API_BASE = 'http://localhost:8000';
 
-const draftChapters = [
-    { title: '第一章 律所概况及资质', icon: '🏛️', active: false },
-    { title: '第二章 项目理解与分析', icon: '📋', active: false },
-    { title: '第三章 服务方案', icon: '⚖️', active: true },
-    { title: '第四章 项目团队配置', icon: '👥', active: false },
-    { title: '第五章 报价方案', icon: '💰', active: false },
-    { title: '第六章 增值服务', icon: '🌟', active: false },
-];
+export default function BiddingAgent() {
+    const [step, setStep] = useState(1); // 1=上传 2=AI解析中 3=填写信息 4=AI生成中 5=完成
+    const [file, setFile] = useState(null);
+    const [parsing, setParsing] = useState(false);
+    const [parseResult, setParsResult] = useState(null);
+    const [form, setForm] = useState({
+        company_name: '', legal_representative: '', project_name: '', client_name: '',
+        project_id: '', registered_capital: '', established_date: '', address: '',
+        contact_person: '', contact_phone: '', contact_email: '', bid_amount: '',
+        guarantee_amount: '', delegate_name: '', validity_days: '120',
+        parsed_requirements: '', parsed_risks: '', budget: '',
+    });
+    const [output, setOutput] = useState('');
+    const [generating, setGenerating] = useState(false);
+    const [elapsed, setElapsed] = useState(0);
+    const scrollRef = useRef(null);
+    const abortRef = useRef(null);
+    const timerRef = useRef(null);
+    const fileInputRef = useRef(null);
 
-const draftContent = `## 三、服务方案
+    const update = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
 
-### 3.1 常年法律顾问服务框架
-
-根据贵市政府的实际需求及本次招标文件要求，我所将提供以下六大模块的法律顾问服务：
-
-**模块一：政府决策合法性审查**
-- 对政府重大行政决策进行合法性审查，出具书面法律意见
-- 对规范性文件进行合法性审核，确保与上位法一致
-- 建立"事前审查 + 事中监控 + 事后评估"三阶段工作机制
-
-**模块二：合同与协议管理**
-- 审查、修订各类政府采购合同、投资协议、合作框架协议
-- 建立合同模板库（覆盖工程建设、货物采购、服务外包等12个领域）
-- 重大合同实行"双律师会签"制度，确保审核质量
-
-**模块三：行政争议处理**
-- 代理行政复议案件，参与行政诉讼应诉
-- 处理信息公开申请的法律审核
-- 处理重大信访事项的法律意见出具
-
-**模块四：专项法律服务**
-- 城市更新、征地拆迁项目法律论证
-- PPP/EOD项目合规审查
-- 政府债务风险防控法律建议`;
-
-const complianceChecks = [
-    { label: '文件格式合规 (GB/T 9704-2012)', pass: true, detail: '页面设置、字体字号、行间距均符合规范' },
-    { label: '必选项完整性', pass: true, detail: '6/6 章节均已覆盖招标文件强制响应项' },
-    { label: '资质匹配度', pass: false, detail: '缺少 ISO27001 信息安全认证 → 建议补充信息安全管理措施说明' },
-    { label: '报价合理性', pass: true, detail: '报价 ¥98万/年，低于预算上限 ¥120万，竞争力系数 0.82' },
-    { label: '禁用表述检查', pass: true, detail: '未发现《律师法》禁止用语及虚假承诺表述' },
-    { label: '团队合规', pass: true, detail: '3名拟派律师均执业证有效，无不良记录' },
-];
-
-export default function BiddingAgent({ onBack }) {
-    const [step, setStep] = useState(0); // 0=上传, 1=分析, 2=生成
-    const [fileName, setFileName] = useState('');
-    const [analysisItems, setAnalysisItems] = useState([]);
-    const [typedContent, setTypedContent] = useState('');
-    const [activeChapter, setActiveChapter] = useState(2);
-    const contentRef = useRef(null);
-
-    // 模拟文件上传
-    const handleUpload = () => {
-        setFileName('某市政府法律顾问招标文件-GKCG-2026-0318.pdf');
-        setTimeout(() => setStep(1), 600);
+    // ── Demo 数据 ──
+    const fillDemo = () => {
+        setForm(prev => ({
+            ...prev,
+            company_name: '湖南天衡律师事务所',
+            legal_representative: '张建明',
+            registered_capital: '500万元',
+            established_date: '2003年6月15日',
+            address: '湖南省长沙市岳麓区潇湘中路328号',
+            contact_person: '李敏',
+            contact_phone: '0731-88886666',
+            contact_email: 'limin@tianheng-law.com',
+            bid_amount: '180万元（未含税）',
+            delegate_name: '王涛',
+        }));
     };
 
-    // 步骤2: 逐项分析动画
-    useEffect(() => {
-        if (step !== 1) return;
-        const items = [
-            { label: '项目名称', value: tenderInfo.projectName, delay: 400 },
-            { label: '招标编号', value: tenderInfo.tenderNo, delay: 700 },
-            { label: '预算金额', value: tenderInfo.budget, delay: 1000 },
-            { label: '投标截止', value: tenderInfo.deadline, delay: 1300 },
-            { label: '服务范围', value: tenderInfo.serviceScope, delay: 1600 },
-        ];
-        items.forEach(({ label, value, delay }) => {
-            setTimeout(() => setAnalysisItems(prev => [...prev, { label, value }]), delay);
-        });
-        setTimeout(() => setStep(2), 3200);
-    }, [step]);
+    // ── Step 1: 上传招标文件 ──
+    const handleFileSelect = (e) => {
+        const f = e.target.files[0];
+        if (f) setFile(f);
+    };
 
-    // 步骤3: 打字机效果输出草案
-    useEffect(() => {
-        if (step !== 2) return;
-        let i = 0;
-        const timer = setInterval(() => {
-            setTypedContent(draftContent.slice(0, i));
-            i += 3;
-            if (i > draftContent.length) {
-                setTypedContent(draftContent);
-                clearInterval(timer);
+    const handleUploadAndParse = async () => {
+        if (!file) return;
+        setStep(2);
+        setParsing(true);
+
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const res = await fetch(`${API_BASE}/api/bidding/parse`, {
+                method: 'POST',
+                body: formData,
+            });
+
+            const result = await res.json();
+
+            if (result.success && result.data?.parsed) {
+                const p = result.data.parsed;
+                setParsResult(result.data);
+
+                // 自动填充解析出的字段到表单
+                setForm(prev => ({
+                    ...prev,
+                    project_name: p.project_name || prev.project_name,
+                    client_name: p.client_name || prev.client_name,
+                    project_id: p.project_id || prev.project_id,
+                    guarantee_amount: p.guarantee_amount || prev.guarantee_amount,
+                    validity_days: p.validity_days ? String(p.validity_days).replace(/[^\d]/g, '') || '120' : prev.validity_days,
+                    budget: p.budget || prev.budget,
+                    parsed_requirements: Array.isArray(p.requirements) ? p.requirements.join('\n') : (p.requirements || ''),
+                    parsed_risks: Array.isArray(p.disqualification_risks) ? p.disqualification_risks.join('\n') : (p.disqualification_risks || ''),
+                }));
+                setStep(3);
+            } else {
+                alert('解析失败: ' + (result.message || '未知错误'));
+                setStep(1);
             }
-        }, 10);
-        return () => clearInterval(timer);
-    }, [step]);
+        } catch (err) {
+            alert('上传失败: ' + err.message);
+            setStep(1);
+        } finally {
+            setParsing(false);
+        }
+    };
 
-    useEffect(() => {
-        if (contentRef.current) contentRef.current.scrollTop = contentRef.current.scrollHeight;
-    }, [typedContent]);
+    // ── 跳过上传，手动填写 ──
+    const skipUpload = () => setStep(3);
 
-    const stepLabels = [
-        { label: '上传招标文件', desc: '导入招标公告及技术要求' },
-        { label: 'AI 智能解析', desc: '提取关键信息与资质要求' },
-        { label: '生成投标文件', desc: '智能编排标书草案 + 合规审核' },
+    // ── Step 4: 生成标书 ──
+    const generate = async () => {
+        if (!form.company_name || !form.legal_representative || !form.project_name || !form.client_name) return;
+        setStep(4);
+        setOutput('');
+        setGenerating(true);
+        setElapsed(0);
+        timerRef.current = setInterval(() => setElapsed(p => p + 0.1), 100);
+
+        try {
+            const controller = new AbortController();
+            abortRef.current = controller;
+            const res = await fetch(`${API_BASE}/api/bidding/generate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ...form, stream: true }),
+                signal: controller.signal,
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let full = '';
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                const text = decoder.decode(value, { stream: true });
+                for (const line of text.split('\n')) {
+                    if (!line.startsWith('data: ')) continue;
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        if (data.done) break;
+                        full += data.content;
+                        setOutput(full);
+                    } catch (e) { /* partial */ }
+                }
+            }
+            setOutput(full || '[无响应]');
+            setStep(5);
+        } catch (err) {
+            if (err.name === 'AbortError') return;
+            setOutput(`[连接错误] ${err.message}\n\n请确认后端服务运行在 localhost:8000`);
+            setStep(5);
+        } finally {
+            setGenerating(false);
+            clearInterval(timerRef.current);
+            abortRef.current = null;
+        }
+    };
+
+    const reset = () => {
+        setStep(1); setOutput(''); setElapsed(0); setFile(null); setParsResult(null);
+        setForm({
+            company_name: '', legal_representative: '', project_name: '', client_name: '',
+            project_id: '', registered_capital: '', established_date: '', address: '',
+            contact_person: '', contact_phone: '', contact_email: '', bid_amount: '',
+            guarantee_amount: '', delegate_name: '', validity_days: '120',
+            parsed_requirements: '', parsed_risks: '', budget: ''
+        });
+        if (abortRef.current) abortRef.current.abort();
+        clearInterval(timerRef.current);
+    };
+
+    useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [output]);
+    useEffect(() => () => { clearInterval(timerRef.current); if (abortRef.current) abortRef.current.abort(); }, []);
+
+    // ── 步骤指示器 ──
+    const steps = [
+        { n: 1, label: '上传招标文件', covers: [1, 2] },
+        { n: 2, label: 'AI 智能解析', covers: [2] },
+        { n: 3, label: '填写投标信息', covers: [3] },
+        { n: 4, label: 'AI 生成标书', covers: [4, 5] },
     ];
 
+    const getStepState = (s) => {
+        if (step === 2 && s.n === 2) return 'active';
+        if (step === 4 && s.n === 4) return 'active';
+        if (s.covers.includes(step)) return 'active';
+        const maxCover = Math.max(...s.covers);
+        if (step > maxCover) return 'done';
+        return 'pending';
+    };
+
+    const InputField = ({ icon: Icon, label, field, placeholder, required, wide }) => (
+        <div className={wide ? 'col-span-2' : ''}>
+            <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest flex items-center mb-1">
+                <Icon size={10} className="mr-1" />{label}{required && <span className="text-red-500 ml-0.5">*</span>}
+            </label>
+            <input value={form[field]} onChange={e => update(field, e.target.value)}
+                placeholder={placeholder}
+                className="w-full bg-zinc-900 border border-zinc-700 rounded-sm px-3 py-1.5 text-[11px] text-zinc-300 focus:outline-none focus:border-orange-500 font-mono transition-colors" />
+        </div>
+    );
+
     return (
-        <div className="p-6 space-y-5 animate-in">
-            {/* 标题 */}
-            <div className="flex items-center space-x-3 border-b border-zinc-200 pb-4">
-                <button onClick={onBack} className="text-zinc-400 hover:text-zinc-700"><ArrowLeft size={16} /></button>
+        <div className="p-6 max-w-5xl mx-auto">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-5">
                 <div>
-                    <h2 className="text-lg font-bold text-zinc-800 uppercase tracking-tight">智能投标中心 (Bidding Studio)</h2>
-                    <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">AI-Powered Bid Document Generation with Compliance Guardrails</p>
+                    <h2 className="text-lg font-bold text-zinc-900 flex items-center">
+                        <FileText size={20} className="mr-2 text-orange-500" />
+                        智能投标文件生成
+                    </h2>
+                    <p className="text-[11px] text-zinc-500 mt-0.5">上传招标文件 → AI 解析要求 → 填写投标信息 → 自动生成标书框架</p>
                 </div>
-            </div>
-
-            {/* 步骤条 */}
-            <div className="flex items-center space-x-2">
-                {stepLabels.map((s, i) => (
-                    <div key={i} className="flex items-center">
-                        <div className={`flex items-center space-x-2 px-4 py-2.5 rounded-sm border transition-all ${i < step ? 'bg-emerald-50 border-emerald-200' :
-                                i === step ? 'bg-blue-50 border-blue-300 ring-1 ring-blue-200' :
-                                    'bg-zinc-50 border-zinc-200'
-                            }`}>
-                            {i < step ? <CheckCircle size={14} className="text-emerald-600 shrink-0" /> :
-                                i === step ? <div className="w-3.5 h-3.5 border-2 border-blue-500 rounded-full border-t-transparent animate-spin shrink-0"></div> :
-                                    <div className="w-3.5 h-3.5 border-2 border-zinc-300 rounded-full shrink-0"></div>}
-                            <div>
-                                <p className={`text-[11px] font-bold ${i < step ? 'text-emerald-700' : i === step ? 'text-blue-700' : 'text-zinc-400'}`}>{s.label}</p>
-                                <p className="text-[9px] text-zinc-400">{s.desc}</p>
+                <div className="flex items-center space-x-1">
+                    {steps.map((s, i) => {
+                        const state = getStepState(s);
+                        return (
+                            <div key={s.n} className="flex items-center">
+                                <div className={`flex items-center text-[9px] font-bold uppercase tracking-widest px-2.5 py-1.5 rounded-full border transition-all ${state === 'active' ? 'bg-orange-500 text-white border-orange-500' :
+                                        state === 'done' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                                            'bg-zinc-100 text-zinc-400 border-zinc-200'
+                                    }`}>
+                                    {state === 'done' ? <CheckCircle size={9} className="mr-1" /> : null}
+                                    {s.label}
+                                </div>
+                                {i < steps.length - 1 && <ChevronRight size={12} className="text-zinc-300 mx-0.5" />}
                             </div>
-                        </div>
-                        {i < stepLabels.length - 1 && <ChevronRight size={14} className="text-zinc-300 mx-1" />}
-                    </div>
-                ))}
+                        );
+                    })}
+                </div>
             </div>
 
-            {/* 步骤 0: 上传 */}
-            {step === 0 && (
-                <div className="slide-up max-w-2xl mx-auto">
-                    <div onClick={handleUpload}
-                        className="border-2 border-dashed border-zinc-300 rounded-sm p-12 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/30 transition-all group">
-                        <Upload size={40} className="mx-auto text-zinc-300 group-hover:text-blue-500 transition mb-4" />
-                        <p className="text-sm font-bold text-zinc-600 mb-1">点击此处上传招标文件</p>
-                        <p className="text-[10px] text-zinc-400">支持 PDF / DOCX / ZIP，最大 50MB</p>
-                    </div>
-                    <div className="mt-4 bg-zinc-50 border border-zinc-200 rounded-sm p-4">
-                        <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">💡 演示说明</p>
-                        <p className="text-[11px] text-zinc-500">点击上传区域将使用内置的「某市人民政府2026年度常年法律顾问服务采购项目」招标文件进行演示。系统将自动解析文件内容并提取关键信息。</p>
-                    </div>
-                </div>
-            )}
-
-            {/* 步骤 1: AI 分析 */}
+            {/* ══════════ Step 1: 上传招标文件 ══════════ */}
             {step === 1 && (
-                <div className="slide-up max-w-3xl mx-auto space-y-4">
-                    <div className="bg-white border border-zinc-200 rounded-sm p-5 shadow-sm">
-                        <div className="flex items-center space-x-2 mb-4">
-                            <FileText size={14} className="text-blue-600" />
-                            <span className="text-xs font-bold text-zinc-700">{fileName}</span>
-                            <span className="text-[10px] text-zinc-400 italic">( 36 页 · 2.4 MB )</span>
-                        </div>
-                        <div className="space-y-2">
-                            {analysisItems.map((item, i) => (
-                                <div key={i} className="flex items-center space-x-3 py-2 px-3 bg-zinc-50 rounded-sm border border-zinc-100 slide-up">
-                                    <Search size={12} className="text-blue-500 shrink-0" />
-                                    <span className="text-[10px] font-bold text-zinc-500 uppercase w-20 shrink-0">{item.label}</span>
-                                    <span className="text-xs text-zinc-800 font-medium">{item.value}</span>
-                                </div>
-                            ))}
-                            {analysisItems.length < 5 && (
-                                <div className="flex items-center space-x-2 py-3 text-center justify-center">
-                                    <Loader2 size={14} className="animate-spin text-blue-500" />
-                                    <span className="text-[10px] text-blue-600 font-bold animate-pulse uppercase">AI Parsing Document...</span>
-                                </div>
+                <div className="space-y-4 zoom-in">
+                    <div className="bg-white border border-zinc-200 rounded-sm p-6 shadow-sm">
+                        <div className="text-center">
+                            <Upload size={40} className="mx-auto text-orange-400 mb-3" />
+                            <h3 className="text-sm font-bold text-zinc-800 mb-1">上传招标文件</h3>
+                            <p className="text-[11px] text-zinc-500 mb-4">支持 .docx / .txt 格式，AI 将自动解析项目名称、预算、资质要求等关键信息</p>
+
+                            <input ref={fileInputRef} type="file" accept=".docx,.txt" onChange={handleFileSelect} className="hidden" />
+
+                            <div onClick={() => fileInputRef.current?.click()}
+                                className="border-2 border-dashed border-zinc-300 rounded-sm p-8 cursor-pointer hover:border-orange-400 hover:bg-orange-50/50 transition-all group">
+                                {file ? (
+                                    <div className="flex items-center justify-center space-x-3">
+                                        <FileText size={24} className="text-orange-500" />
+                                        <div className="text-left">
+                                            <div className="text-xs font-bold text-zinc-800">{file.name}</div>
+                                            <div className="text-[10px] text-zinc-500">{(file.size / 1024).toFixed(1)} KB</div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div>
+                                        <p className="text-xs text-zinc-400 group-hover:text-orange-500 transition-colors">点击选择文件或拖拽到此处</p>
+                                    </div>
+                                )}
+                            </div>
+
+                            {file && (
+                                <button onClick={handleUploadAndParse}
+                                    className="mt-4 bg-orange-500 text-white px-8 py-2.5 rounded-sm font-bold text-xs hover:bg-orange-600 transition-all shadow-lg flex items-center justify-center mx-auto space-x-2">
+                                    <Sparkles size={14} /><span>开始 AI 解析</span>
+                                </button>
                             )}
                         </div>
                     </div>
 
-                    {analysisItems.length >= 4 && (
-                        <div className="slide-up">
-                            <h4 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">📊 资质匹配分析</h4>
-                            <div className="grid grid-cols-1 gap-1.5">
-                                {tenderInfo.requirements.map((r, i) => (
-                                    <div key={i} className="flex items-center space-x-2 py-2 px-3 bg-white border border-zinc-100 rounded-sm slide-up">
-                                        {r.match ? <CheckCircle size={13} className="text-emerald-500 shrink-0" /> : <AlertTriangle size={13} className="text-amber-500 shrink-0" />}
-                                        <span className={`text-[11px] ${r.match ? 'text-zinc-700' : 'text-amber-700 font-bold'}`}>{r.item}</span>
-                                        {!r.match && <span className="text-[9px] text-amber-500 italic ml-auto">需补充说明</span>}
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {analysisItems.length >= 4 && (
-                        <div className="slide-up">
-                            <h4 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">📐 评分标准</h4>
-                            <div className="grid grid-cols-3 gap-2">
-                                {tenderInfo.scoring.map((s, i) => (
-                                    <div key={i} className="bg-white border border-zinc-200 rounded-sm p-3">
-                                        <div className="flex justify-between items-center mb-1.5">
-                                            <span className="text-[11px] font-bold text-zinc-700">{s.category}</span>
-                                            <span className="text-sm font-bold text-blue-600">{s.weight}分</span>
-                                        </div>
-                                        <div className="w-full bg-zinc-100 h-1.5 rounded-full mb-1.5"><div className="h-full bg-blue-500 rounded-full" style={{ width: `${s.weight}%` }}></div></div>
-                                        <p className="text-[9px] text-zinc-400">{s.details}</p>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
+                    <div className="text-center">
+                        <button onClick={skipUpload} className="text-[10px] text-zinc-400 hover:text-orange-500 transition-colors underline">
+                            跳过上传，直接填写投标信息 →
+                        </button>
+                    </div>
                 </div>
             )}
 
-            {/* 步骤 2: 生成标书 */}
+            {/* ══════════ Step 2: AI 解析中 ══════════ */}
             {step === 2 && (
-                <div className="grid grid-cols-12 gap-4 slide-up" style={{ height: 'calc(100vh - 240px)' }}>
-                    {/* 左侧目录 */}
-                    <div className="col-span-2 bg-white border border-zinc-200 rounded-sm overflow-hidden">
-                        <div className="px-3 py-2.5 bg-zinc-50 border-b border-zinc-200 text-[9px] font-bold text-zinc-500 uppercase tracking-widest">标书目录</div>
-                        <div className="p-1">
-                            {draftChapters.map((c, i) => (
-                                <button key={i} onClick={() => setActiveChapter(i)}
-                                    className={`w-full text-left px-2.5 py-2 rounded-sm text-[10px] transition-all mb-0.5 ${i === activeChapter ? 'bg-blue-50 text-blue-700 font-bold border border-blue-200' : 'text-zinc-600 hover:bg-zinc-50'
-                                        }`}>
-                                    <span className="mr-1">{c.icon}</span>{c.title}
-                                </button>
-                            ))}
-                        </div>
+                <div className="bg-white border border-zinc-200 rounded-sm p-8 shadow-sm text-center zoom-in">
+                    <Loader2 size={40} className="mx-auto text-orange-500 animate-spin mb-4" />
+                    <h3 className="text-sm font-bold text-zinc-800 mb-1">Qwen-Max 正在解析招标文件...</h3>
+                    <p className="text-[11px] text-zinc-500">正在提取项目名称、预算金额、资质要求、否决条件等关键信息</p>
+                    <div className="mt-4 flex items-center justify-center space-x-6 text-[10px] text-zinc-400">
+                        <span>📄 {file?.name}</span>
+                        <span>📏 {file ? (file.size / 1024).toFixed(1) + ' KB' : ''}</span>
+                        <span className="text-emerald-500 flex items-center"><span className="w-1.5 h-1.5 bg-emerald-500 rounded-full mr-1 animate-pulse"></span>Processing</span>
                     </div>
+                </div>
+            )}
 
-                    {/* 中间内容 */}
-                    <div className="col-span-6 bg-white border border-zinc-200 rounded-sm overflow-hidden flex flex-col shadow-sm">
-                        <div className="px-4 py-2.5 bg-zinc-50 border-b border-zinc-200 flex items-center justify-between">
-                            <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">标书草案预览 (AI Draft)</span>
-                            <div className="flex items-center space-x-1 text-[9px] text-blue-500 font-bold">
-                                <Loader2 size={10} className={typedContent.length < draftContent.length ? 'animate-spin' : 'hidden'} />
-                                <span>{typedContent.length < draftContent.length ? 'Generating...' : 'Complete'}</span>
-                            </div>
-                        </div>
-                        <div ref={contentRef} className="flex-1 overflow-y-auto p-6 text-[12px] text-zinc-700 leading-relaxed font-serif whitespace-pre-wrap">
-                            {typedContent || <div className="flex items-center justify-center h-full"><Loader2 size={20} className="animate-spin text-blue-500" /></div>}
-                        </div>
-                    </div>
-
-                    {/* 右侧面板 */}
-                    <div className="col-span-4 space-y-3 overflow-y-auto">
-                        {/* 合规审核 */}
-                        <div className="bg-[#151921] border border-zinc-700 rounded-sm p-4 text-white shadow-inner">
-                            <div className="flex items-center space-x-2 mb-3">
-                                <Shield size={13} className="text-emerald-400" />
-                                <span className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest">合规审核面板 (Compliance)</span>
-                            </div>
-                            <div className="space-y-2">
-                                {complianceChecks.map((c, i) => (
-                                    <div key={i} className="flex items-start space-x-2 py-1.5">
-                                        {c.pass ? <CheckCircle size={12} className="text-emerald-500 mt-0.5 shrink-0" /> : <AlertTriangle size={12} className="text-amber-500 mt-0.5 shrink-0" />}
-                                        <div>
-                                            <p className={`text-[10px] font-bold ${c.pass ? 'text-emerald-400' : 'text-amber-400'}`}>{c.label}</p>
-                                            <p className="text-[9px] text-zinc-500 mt-0.5">{c.detail}</p>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-
-                        {/* 评分预估 */}
-                        <div className="bg-white border border-zinc-200 rounded-sm p-4">
-                            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-2">预估评分</p>
-                            <div className="space-y-2">
-                                {[{ cat: '技术方案', score: 48, max: 55 }, { cat: '商务报价', score: 25, max: 30 }, { cat: '业绩资质', score: 13, max: 15 }].map((s, i) => (
-                                    <div key={i}>
-                                        <div className="flex justify-between text-[10px] mb-1"><span className="text-zinc-600 font-bold">{s.cat}</span><span className="text-blue-600 font-bold">{s.score}/{s.max}</span></div>
-                                        <div className="w-full bg-zinc-100 h-1.5 rounded-full overflow-hidden"><div className="h-full bg-blue-500 rounded-full transition-all" style={{ width: `${(s.score / s.max) * 100}%` }}></div></div>
-                                    </div>
-                                ))}
-                                <div className="mt-2 pt-2 border-t border-zinc-200 flex justify-between">
-                                    <span className="text-xs font-bold text-zinc-800">总分预估</span>
-                                    <span className="text-lg font-bold text-blue-600">86<span className="text-xs text-zinc-400">/100</span></span>
+            {/* ══════════ Step 3: 填写投标信息（含解析结果） ══════════ */}
+            {step === 3 && (
+                <div className="space-y-4 zoom-in">
+                    {/* 解析结果摘要 */}
+                    {parseResult && (
+                        <div className="bg-emerald-50 border border-emerald-200 rounded-sm p-4 shadow-sm">
+                            <div className="flex items-center justify-between mb-2">
+                                <div className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest flex items-center">
+                                    <CheckCircle size={12} className="mr-1.5" />
+                                    招标文件解析完成 · {parseResult.filename} · {parseResult.text_length} 字 · {parseResult.model}
                                 </div>
                             </div>
+                            {parseResult.parsed && (
+                                <div className="grid grid-cols-3 gap-2 text-[10px]">
+                                    {parseResult.parsed.budget && parseResult.parsed.budget !== '未明确' && (
+                                        <div className="bg-white rounded-sm px-2 py-1.5 border border-emerald-100">
+                                            <span className="text-zinc-500">预算：</span>
+                                            <span className="text-emerald-700 font-bold">{parseResult.parsed.budget}</span>
+                                        </div>
+                                    )}
+                                    {parseResult.parsed.evaluation_method && parseResult.parsed.evaluation_method !== '未明确' && (
+                                        <div className="bg-white rounded-sm px-2 py-1.5 border border-emerald-100">
+                                            <span className="text-zinc-500">评标：</span>
+                                            <span className="text-emerald-700 font-bold">{parseResult.parsed.evaluation_method}</span>
+                                        </div>
+                                    )}
+                                    {parseResult.parsed.bid_method && parseResult.parsed.bid_method !== '未明确' && (
+                                        <div className="bg-white rounded-sm px-2 py-1.5 border border-emerald-100">
+                                            <span className="text-zinc-500">方式：</span>
+                                            <span className="text-emerald-700 font-bold">{parseResult.parsed.bid_method}</span>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                            {parseResult.parsed?.requirements?.length > 0 && (
+                                <div className="mt-2">
+                                    <div className="text-[9px] text-emerald-600 font-bold mb-1">关键要求：</div>
+                                    <div className="flex flex-wrap gap-1">
+                                        {parseResult.parsed.requirements.map((r, i) => (
+                                            <span key={i} className="bg-white border border-emerald-200 text-emerald-700 text-[9px] px-2 py-0.5 rounded-full">{r}</span>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            {parseResult.parsed?.disqualification_risks?.length > 0 && (
+                                <div className="mt-2">
+                                    <div className="text-[9px] text-red-600 font-bold mb-1 flex items-center">
+                                        <AlertTriangle size={9} className="mr-1" />否决风险：
+                                    </div>
+                                    <div className="flex flex-wrap gap-1">
+                                        {parseResult.parsed.disqualification_risks.map((r, i) => (
+                                            <span key={i} className="bg-red-50 border border-red-200 text-red-600 text-[9px] px-2 py-0.5 rounded-full">{r}</span>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
+                    )}
 
-                        {/* 操作按钮 */}
-                        <button className="w-full py-3 bg-blue-600 text-white text-xs font-bold rounded-sm uppercase tracking-tight hover:bg-blue-700 transition shadow-lg flex items-center justify-center space-x-2">
-                            <Download size={14} /><span>导出投标文件 (.docx)</span>
+                    <div className="flex justify-between items-center">
+                        <h3 className="text-xs font-bold text-zinc-700 uppercase tracking-widest">
+                            {parseResult ? '确认并补充投标信息' : '投标基本信息'}
+                        </h3>
+                        <button onClick={fillDemo} className="text-[10px] text-orange-500 hover:text-orange-600 font-bold border border-orange-200 px-2 py-1 rounded-sm hover:bg-orange-50 transition-all">
+                            🎯 填充 Demo 数据
                         </button>
                     </div>
+
+                    {/* 自动填充的招标方信息 */}
+                    <div className="bg-white border border-zinc-200 rounded-sm p-4 shadow-sm">
+                        <div className="text-[9px] text-orange-600 font-bold uppercase tracking-widest mb-3 flex items-center">
+                            <span className="w-1.5 h-1.5 bg-orange-500 rounded-full mr-1.5"></span>
+                            {parseResult ? '以下字段已从招标文件自动提取（可修改）' : '核心信息（必填）'}
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <InputField icon={ClipboardList} label="项目名称" field="project_name" placeholder="从招标文件提取或手动输入" required />
+                            <InputField icon={Building2} label="招标人名称" field="client_name" placeholder="从招标文件提取或手动输入" required />
+                            <InputField icon={FileText} label="项目编号" field="project_id" placeholder="HNYD-2026-FW-0032" />
+                            <InputField icon={DollarSign} label="预算/最高限价" field="budget" placeholder="195万元" />
+                            <InputField icon={DollarSign} label="保证金金额" field="guarantee_amount" placeholder="3.6万元" />
+                            <InputField icon={Calendar} label="有效期(天)" field="validity_days" placeholder="120" />
+                        </div>
+                    </div>
+
+                    {/* 投标人信息 */}
+                    <div className="bg-white border border-zinc-200 rounded-sm p-4 shadow-sm">
+                        <div className="text-[9px] text-blue-600 font-bold uppercase tracking-widest mb-3 flex items-center">
+                            <span className="w-1.5 h-1.5 bg-blue-500 rounded-full mr-1.5"></span>投标人信息（必填 *）
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <InputField icon={Building2} label="投标人名称" field="company_name" placeholder="湖南天衡律师事务所" required />
+                            <InputField icon={User} label="法定代表人" field="legal_representative" placeholder="张建明" required />
+                            <InputField icon={DollarSign} label="注册资本" field="registered_capital" placeholder="500万元" />
+                            <InputField icon={Calendar} label="成立时间" field="established_date" placeholder="2003年6月15日" />
+                            <InputField icon={MapPin} label="注册地址" field="address" placeholder="湖南省长沙市..." />
+                            <InputField icon={User} label="联系人" field="contact_person" placeholder="李敏" />
+                            <InputField icon={Phone} label="联系电话" field="contact_phone" placeholder="0731-88886666" />
+                            <InputField icon={Mail} label="电子邮箱" field="contact_email" placeholder="contact@firm.com" />
+                            <InputField icon={DollarSign} label="投标报价" field="bid_amount" placeholder="180万元" />
+                            <InputField icon={User} label="委托代理人" field="delegate_name" placeholder="无则留空" />
+                        </div>
+                    </div>
+
+                    <button onClick={generate}
+                        disabled={!form.company_name || !form.legal_representative || !form.project_name || !form.client_name}
+                        className="w-full bg-orange-500 text-white py-3 rounded-sm font-bold text-sm hover:bg-orange-600 transition-all disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center space-x-2 shadow-lg hover:shadow-xl active:scale-[0.99]">
+                        <Send size={16} /><span>开始生成投标文件框架</span>
+                    </button>
+                </div>
+            )}
+
+            {/* ══════════ Step 4 & 5: 生成中 / 完成 ══════════ */}
+            {(step === 4 || step === 5) && (
+                <div className="space-y-3 zoom-in">
+                    <div className="flex items-center justify-between bg-white border border-zinc-200 rounded-sm p-3 shadow-sm">
+                        <div className="flex items-center space-x-3">
+                            {generating ? <Loader2 size={16} className="text-orange-500 animate-spin" /> : <CheckCircle size={16} className="text-emerald-500" />}
+                            <div>
+                                <div className="text-xs font-bold text-zinc-800">
+                                    {generating ? 'Qwen-Max 正在生成投标文件框架...' : '投标文件框架生成完成'}
+                                </div>
+                                <div className="text-[10px] text-zinc-500 mt-0.5">{form.company_name} → {form.project_name}</div>
+                            </div>
+                        </div>
+                        <div className="flex items-center space-x-3 text-[10px]">
+                            <span className="text-zinc-400 font-mono">{elapsed.toFixed(1)}s</span>
+                            <span className="text-zinc-400 font-mono">{output.length} 字</span>
+                            {generating && <span className="text-emerald-500 font-bold flex items-center"><span className="w-1.5 h-1.5 bg-emerald-500 rounded-full mr-1 animate-pulse"></span>Streaming</span>}
+                        </div>
+                    </div>
+
+                    <div ref={scrollRef}
+                        className="bg-white border border-zinc-200 rounded-sm p-5 shadow-sm overflow-y-auto font-mono text-[11px] text-zinc-700 leading-relaxed whitespace-pre-wrap"
+                        style={{ maxHeight: 'calc(100vh - 320px)', minHeight: '400px' }}>
+                        {output}
+                        {generating && <span className="inline-block w-1.5 h-4 bg-orange-500 ml-0.5 animate-pulse"></span>}
+                    </div>
+
+                    {step === 5 && (
+                        <div className="flex space-x-3">
+                            <button onClick={reset}
+                                className="flex-1 border border-zinc-300 text-zinc-600 py-2.5 rounded-sm font-bold text-xs hover:bg-zinc-50 transition-all flex items-center justify-center space-x-2">
+                                <RotateCcw size={14} /><span>重新开始</span>
+                            </button>
+                            <button onClick={() => { navigator.clipboard.writeText(output); }}
+                                className="flex-1 bg-orange-500 text-white py-2.5 rounded-sm font-bold text-xs hover:bg-orange-600 transition-all flex items-center justify-center space-x-2 shadow-lg">
+                                <Download size={14} /><span>复制全文</span>
+                            </button>
+                        </div>
+                    )}
                 </div>
             )}
         </div>

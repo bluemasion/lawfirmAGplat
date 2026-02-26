@@ -2,7 +2,7 @@
 
 > **用途**：每次开新会话时先读此文档，获取项目完整上下文。开发过程中定期回写重要决策和进展。
 >
-> **最后更新**：2026-02-26 12:13
+> **最后更新**：2026-02-26 19:16
 
 ---
 
@@ -25,7 +25,7 @@
 | 证券底稿核查 | 文件树导航 + NER 日志 + AI 一致性异常预警 + View Evidence Source | 前端 Demo 已有，后端待建 |
 | 高保真翻译 | 双栏对比 + 术语库入口 + 印章版式还原 | 前端 Demo 已有，后端 Phase 4 |
 | 利冲检索 | 5步穿透扫描动画 + 别名识别 + HIGH/LOW 风险分级 + 强制回避建议 | ✅ 前端增强完成 |
-| 智能投标 | 3步交互流程 (上传→AI解析→标书生成) + 合规审核 + 86分评估 | ✅ 前端增强完成 |
+| 智能投标 | 4步工作流：上传招标文件(.docx/.txt)→ Qwen AI 解析提取关键信息 → 自动填充+手动补充 → Qwen-Max SSE 流式生成标书框架 | ✅ 全栈接入完成（含文件解析） |
 | 算力实例管理 | 实例表格 + Register New Node + Launch Console 终端 | 前端 Demo 已有 |
 | 平台治理中心 | 资源监控(GPU/CPU/RAM/SSD) + 会话审计(Terminate) + NER 沙盒 + 算力账单(占位) | 前端 Demo 已有 |
 | AI Copilot | 悬浮对话面板，VPC 隔离推理 | ✅ 已接入 Qwen-Max 真实 LLM |
@@ -144,7 +144,7 @@ npm run dev  # → http://localhost:5173
 | `SecuritiesAgent.jsx` | 底稿核查：文件树导航 + NER 脱敏日志终端 + AI 异常发现卡片 + 合规清单 Checklist |
 | `LegalTranslation.jsx` | 翻译代理：双栏中英对比 + 质量评分 + 术语库管理弹窗 |
 | `ConflictSearch.jsx` | 利冲代理：搜索输入(支持别名穿透) + **5步穿透扫描动画** + 腾讯/华为 mock 结果 + HIGH/LOW 风险分级 + 信息隔离墙建议 |
-| `BiddingAgent.jsx` | 投标代理：**3步交互流程** (上传→AI解析→标书生成) + 政府法律顾问采购 mock + 合规审核面板 + 86/100 评分预估 |
+| `BiddingAgent.jsx` | 投标代理：**4步工作流** (上传招标文件→AI解析提取→确认补充表单→Qwen SSE生成标书) + 文件拖拽上传 + 解析结果展示(预算/要求/否决风险) + Demo数据一键填充 + 复制全文 |
 
 ### Mock 数据说明
 
@@ -249,6 +249,10 @@ uvicorn app.main:app --reload --port 8000
 | 2026-02-26 | Qwen-Max 接入用 dashscope SDK | 国内合规 + 通义千问生态 |
 | 2026-02-26 | chat.py 去掉 DB 依赖 | 无 PostgreSQL 也能跑 LLM 端点 |
 | 2026-02-26 | 投标首选场景=框架搭建 | 客户痛点：律师擅长精修不擅长搭框架 |
+| 2026-02-26 | BiddingAgent 新建 bidding.py 后端 API | `/api/bidding/generate` SSE 流式端点 |
+| 2026-02-26 | BiddingAgent 前端重写为表单+SSE | 15 个输入字段 + Demo 数据一键填充 |
+| 2026-02-26 | 投标 system prompt 嵌入中国移动标书格式 | 生成内容自动含 8 个标准章节 |
+| 2026-02-26 | 保存客户提供的招标文件模板 | `templates/bidding_template_chinamobile.md` |
 ---
 
 ## 9. 当前进度
@@ -278,7 +282,12 @@ uvicorn app.main:app --reload --port 8000
 - [x] AICopilot 前端改为调真实后端 SSE 流式端点
 - [x] 浏览器验证 Qwen 真实 AI 回复通过
 - [x] LLM 接入代码推送 GitHub (commit 0ae6cd1)
-- [/] 投标文件生成 Agent 接入真实 LLM（等客户提供招标文件模板）
+- [x] 收到客户招标文件模板（中国移动标准采购格式）
+- [x] 分析模板结构：报价分册 + 商务分册 + 法人授权（8 个 AI 可生成章节）
+- [x] 新建 bidding.py 后端 API（system prompt 嵌入标书格式规范）
+- [x] BiddingAgent 前端重写（15 字段表单 + Demo 数据 + Qwen SSE 流式）
+- [x] 浏览器验证投标生成通过（50.4s / 1600 字 / 8 章节完整）
+- [ ] 投标生成代码推送 GitHub
 - [ ] 解决 uvicorn watch 排除 venv 问题
 - [ ] 审计日志功能
 - [ ] RBAC 权限体系
@@ -311,6 +320,13 @@ uvicorn app.main:app --reload --port 8000
 | 2026-02-26 12:00 | AICopilot 接入真实 Qwen SSE 流式端点，浏览器验证通过 |
 | 2026-02-26 12:06 | 客户会议纪要沟通：投标=首选，框架搭建是核心痛点 |
 | 2026-02-26 12:13 | 进度回写 + Git push |
+| 2026-02-26 12:38 | 收到客户招标文件（中国移动标准采购模板） |
+| 2026-02-26 12:45 | 分析模板结构，识别 8 个 AI 可生成章节 |
+| 2026-02-26 13:00 | 保存模板分析到 templates/bidding_template_chinamobile.md |
+| 2026-02-26 15:15 | 新建 bidding.py 后端 API + 注册路由到 main.py |
+| 2026-02-26 15:20 | 重写 BiddingAgent.jsx（15 字段表单 + SSE 流式 + Demo 数据） |
+| 2026-02-26 15:37 | 浏览器验证通过：50.4s 生成 1600 字完整标书框架 |
+| 2026-02-26 16:05 | 进度回写到 PROJECT_CONTEXT.md |
 
 ---
 
@@ -337,14 +353,15 @@ uvicorn app.main:app --reload --port 8000
 
 ## 12. 待办
 
-1. **🔥 投标 Agent 接入 Qwen** — 等客户发招标文件模板后改造 BiddingAgent
-2. GLM-4 key 配置（等客户提供）
-3. 解决 uvicorn --reload 排除 venv 问题
-4. 验证 /docs Swagger UI
-5. 审计日志功能
-6. RBAC 权限体系
-7. 证券底稿核查 Agent 后端对接
-8. RAG 知识库对接 (ChromaDB / pgvector)
+1. ~~**🔥 投标 Agent 接入 Qwen**~~ ✅ 已完成（15 字段表单 + Qwen SSE 流式 + 8 章节标书框架）
+2. **投标生成代码推送 GitHub**
+3. GLM-4 key 配置（等客户提供）
+4. 解决 uvicorn --reload 排除 venv 问题
+5. 验证 /docs Swagger UI
+6. 审计日志功能
+7. RBAC 权限体系
+8. 证券底稿核查 Agent 后端对接
+9. RAG 知识库对接 (ChromaDB / pgvector)
 
 ---
 
@@ -365,4 +382,20 @@ uvicorn app.main:app --reload --port 8000
 
 **三大应用优先级**：投标（首选）> 底稿核查 > 归档管理
 
-**待客户提供**：招标文件模板 + 示例场景
+~~**待客户提供**：招标文件模板 + 示例场景~~ ✅ 已收到中国移动标准采购模板
+
+### 投标模板分析结果 (2026-02-26 下午)
+
+**模板来源**：中国移动通信集团湖南有限公司采购招标文件
+
+**AI 可自动生成的 8 个章节**：
+1. 投标函（致招标人的 7 项承诺）
+2. 基本情况表（公司信息结构化填充）
+3. 投标一览表（报价信息填充）
+4. 企业信誉声明函
+5. 非联合体投标承诺函
+6. 商务条款偏离表（默认全部无偏离）
+7. 法定代表人身份证明
+8. 法定代表人授权委托书
+
+**需人工提供**：营业执照扫描件、财务审计报告、业绩合同、银行保函、增值税证明

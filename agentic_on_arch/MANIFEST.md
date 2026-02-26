@@ -3,7 +3,7 @@
 > **用途**：每次开发会话前必读此文件，获取当前项目的技术版本、依赖库和模块结构。
 > 新增或变更 lib/组件时，必须同步回写本文件。
 >
-> **最后更新**：2026-02-26 11:30
+> **最后更新**：2026-02-26 19:16
 
 ---
 
@@ -131,6 +131,7 @@
 | RAG 管道 | app/core/rag/ | ✅ 管道骨架 |
 | 认证服务 | app/services/auth_service.py | ✅ JWT + bcrypt |
 | 错误处理 | app/utils/errors.py | ✅ 统一异常 |
+| 投标文件 API | app/api/bidding.py | ✅ /parse (上传解析) + /generate (SSE生成) |
 | 日志 | app/utils/logger.py | ✅ loguru |
 
 ---
@@ -157,3 +158,4 @@
 | 2026-02-25 | 项目初始化，搭建完整骨架 (30+ 文件) | AI |
 | 2026-02-26 | Git 仓库建立并推送到 GitHub (87 文件) | AI |
 | 2026-02-26 | 前端 5大组件 Demo 增强 (BiddingAgent/ConflictSearch/NER/Copilot/MetricCard) | AI |
+| 2026-02-26 | 投标Agent 4步工作流：/api/bidding/parse (docx上传+Qwen解析) + /api/bidding/generate (SSE生成) + 前端BiddingAgent.jsx重构 | AI |
