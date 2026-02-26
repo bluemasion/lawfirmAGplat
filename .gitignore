@@ -1,0 +1,31 @@
+# === Node / Frontend ===
+node_modules/
+dist/
+.vite/
+
+# === Python / Backend ===
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# === Environment ===
+.env
+.env.local
+
+# === IDE ===
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === Uploads & Logs ===
+uploads/*
+!uploads/.gitkeep
+logs/
+*.log
