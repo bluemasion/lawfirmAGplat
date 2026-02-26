@@ -2,7 +2,7 @@
 
 > **用途**：每次开新会话时先读此文档，获取项目完整上下文。开发过程中定期回写重要决策和进展。
 >
-> **最后更新**：2026-02-26 10:44
+> **最后更新**：2026-02-26 11:30
 
 ---
 
@@ -24,8 +24,8 @@
 | 应用中心 | 4 个 Agent 入口卡片 | 前端 Demo 已有 |
 | 证券底稿核查 | 文件树导航 + NER 日志 + AI 一致性异常预警 + View Evidence Source | 前端 Demo 已有，后端待建 |
 | 高保真翻译 | 双栏对比 + 术语库入口 + 印章版式还原 | 前端 Demo 已有，后端 Phase 4 |
-| 利冲检索 | 穿透式语义搜索 + HIGH/LOW 风险分级 + 强制回避建议 | 前端交互已有 |
-| 智能投标 | 三步进度条 + 标书草案 + 合规审核侧栏 | 前端 Demo 已有 |
+| 利冲检索 | 5步穿透扫描动画 + 别名识别 + HIGH/LOW 风险分级 + 强制回避建议 | ✅ 前端增强完成 |
+| 智能投标 | 3步交互流程 (上传→AI解析→标书生成) + 合规审核 + 86分评估 | ✅ 前端增强完成 |
 | 算力实例管理 | 实例表格 + Register New Node + Launch Console 终端 | 前端 Demo 已有 |
 | 平台治理中心 | 资源监控(GPU/CPU/RAM/SSD) + 会话审计(Terminate) + NER 沙盒 + 算力账单(占位) | 前端 Demo 已有 |
 | AI Copilot | 悬浮对话面板，VPC 隔离推理 | 前端 Demo 已有 |
@@ -135,16 +135,16 @@ npm run dev  # → http://localhost:5173
 |------|------|
 | `GlobalHeader.jsx` | 顶部导航：Logo + 搜索栏 + VPC 连接状态（已加密）+ 用户信息（王大明 @ 天元律所）|
 | `Sidebar.jsx` | 左侧导航：4 个一级菜单 + 当前位置高亮 + 版本号 V2.0.8-Enterprise |
-| `MetricCard.jsx` | 可复用 KPI 指标卡：支持标题、数值、单位、趋势变化、颜色 |
-| `AICopilot.jsx` | 右下角悬浮 AI 面板：模拟 VPC 隔离推理对话 |
-| `Dashboard.jsx` | 控制台首页：4 个 KPI 卡 + 资源利用率柱状图 + 安全合规面板 (L5/AES-256) |
+| `MetricCard.jsx` | 可复用 KPI 指标卡：requestAnimationFrame 计数器动画 + easeOutExpo 缓动 |
+| `AICopilot.jsx` | 右下角悬浮 AI 面板：**打字机效果** + 法律关键词智能回复 (投标/利冲/合同/脱敏) + VPC 状态 |
+| `Dashboard.jsx` | 控制台首页：4 个 KPI 卡(含计数动画) + 资源利用率柱状图 + 安全合规面板 (L5/AES-256) |
 | `AppCenter.jsx` | 应用中心：4 个 Agent 入口卡片 + 状态标签（运行中/稳定/在线）|
 | `ModelHub.jsx` | 算力实例：实例列表表格 + Register New Node + Launch Console 终端 |
-| `Settings.jsx` | 平台管理 3 个 Tab：① 资源监控(GPU/CPU/RAM/SSD) + 会话审计(Terminate) ② NER 沙盒实时脱敏 ③ 算力账单占位 |
+| `Settings.jsx` | 平台管理 3 个 Tab：① 资源监控 + 会话审计 ② **NER 沙盒增强**(实时正则检测 + 红色删除线 + 绿色标签 + 6规则配置 + 实体统计 + 脱敏输出预览) ③ 算力账单占位 |
 | `SecuritiesAgent.jsx` | 底稿核查：文件树导航 + NER 脱敏日志终端 + AI 异常发现卡片 + 合规清单 Checklist |
 | `LegalTranslation.jsx` | 翻译代理：双栏中英对比 + 质量评分 + 术语库管理弹窗 |
-| `ConflictSearch.jsx` | 利冲代理：搜索输入(支持别名穿透) + 扫描执行 + 风险等级 HIGH/LOW + 强制回避建议 |
-| `BiddingAgent.jsx` | 投标代理：3 步进度条 + 标书草案预览 + 合规审核侧栏 |
+| `ConflictSearch.jsx` | 利冲代理：搜索输入(支持别名穿透) + **5步穿透扫描动画** + 腾讯/华为 mock 结果 + HIGH/LOW 风险分级 + 信息隔离墙建议 |
+| `BiddingAgent.jsx` | 投标代理：**3步交互流程** (上传→AI解析→标书生成) + 政府法律顾问采购 mock + 合规审核面板 + 86/100 评分预估 |
 
 ### Mock 数据说明
 
@@ -242,6 +242,10 @@ uvicorn app.main:app --reload --port 8000
 | 2026-02-25 | anthropic SDK 暂不安装 | tokenizers 在 Python 3.8 上需 Rust 编译 |
 | 2026-02-25 | NER 初期用正则，Phase 2 换 Legal-BERT | 先跑通流程再优化模型 |
 | 2026-02-25 | 建立 MANIFEST.md 技术清单 | 每次开发前必读，新增 lib 必须回写 |
+| 2026-02-26 | 前端 NER 沙盒内置 6 条正则规则 | 覆盖人名/机构/金额/案号/身份证/手机号 |
+| 2026-02-26 | BiddingAgent 用政府法律顾问采购场景 | 最贴近真实客户业务 |
+| 2026-02-26 | ConflictSearch 支持别名穿透+快捷芯片 | 降低 Demo 操作复杂度 |
+| 2026-02-26 | AICopilot 打字机效果 + 关键词响应 | 增强 Demo 动态感 |
 ---
 
 ## 9. 当前进度
@@ -260,6 +264,13 @@ uvicorn app.main:app --reload --port 8000
 - [x] FastAPI dev server 启动验证通过 (port 8000)
 - [x] .gitignore + Git 仓库初始化 + 推送 GitHub
 - [x] 验证 /health API 端点
+- [x] BiddingAgent 3步交互流程增强 (上传→AI解析→标书生成+合规审核)
+- [x] ConflictSearch 5步穿透扫描动画 + 多结果支持
+- [x] NER 沙盒增强 (实时正则检测 + 红色删除线/绿色标签 + 6规则 + 实体统计)
+- [x] AICopilot 打字机效果 + 法律关键词智能回复
+- [x] MetricCard 计数器动画 (requestAnimationFrame)
+- [x] 前端 Demo 增强浏览器验证通过（零 JS 错误）
+- [x] Demo 增强代码推送 GitHub (commit 9cc9f2d)
 - [ ] 解决 uvicorn watch 排除 venv 问题
 - [ ] 前后端联调
 - [ ] 审计日志功能
@@ -285,6 +296,9 @@ uvicorn app.main:app --reload --port 8000
 | 2026-02-26 10:04 | Git 仓库初始化 + 配置用户 (bluecms@hotmail.com) |
 | 2026-02-26 10:40 | 代码推送到 GitHub (87 文件, 2 commits) |
 | 2026-02-26 10:44 | 进度回写 + 后端 /health 验证通过 |
+| 2026-02-26 11:00 | 5大前端组件 Demo 增强 (BiddingAgent/ConflictSearch/NER/Copilot/MetricCard) |
+| 2026-02-26 11:25 | 浏览器验证通过 + Git push (9cc9f2d) |
+| 2026-02-26 11:30 | 进度回写到 PROJECT_CONTEXT.md + MANIFEST.md |
 
 ---
 
@@ -313,6 +327,9 @@ uvicorn app.main:app --reload --port 8000
 
 1. 解决 uvicorn --reload 排除 venv 问题
 2. 验证 /docs Swagger UI
-3. 前后端联调准备
+3. 前后端联调准备（services.js mock→fetch 切换）
 4. 审计日志功能
+5. RBAC 权限体系
+6. 证券底稿核查 Agent 后端对接
+7. RAG 知识库对接 (ChromaDB / pgvector)
 
