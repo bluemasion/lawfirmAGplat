@@ -2,7 +2,7 @@
 
 > **用途**：每次开新会话时先读此文档，获取项目完整上下文。开发过程中定期回写重要决策和进展。
 >
-> **最后更新**：2026-02-25 18:40
+> **最后更新**：2026-02-26 10:44
 
 ---
 
@@ -258,9 +258,9 @@ uvicorn app.main:app --reload --port 8000
 - [x] MANIFEST.md 技术清单建立
 - [x] Python 3.8.10 venv 环境 + 依赖安装
 - [x] FastAPI dev server 启动验证通过 (port 8000)
-- [ ] .gitignore + Git 仓库初始化 + 推送远程
+- [x] .gitignore + Git 仓库初始化 + 推送 GitHub
+- [x] 验证 /health API 端点
 - [ ] 解决 uvicorn watch 排除 venv 问题
-- [ ] 验证 /health 和 /docs API 端点
 - [ ] 前后端联调
 - [ ] 审计日志功能
 - [ ] RBAC 权限体系
@@ -282,6 +282,9 @@ uvicorn app.main:app --reload --port 8000
 | 2026-02-25 18:10 | Python 3.8 venv + pip install |
 | 2026-02-25 18:33 | FastAPI server 启动成功 |
 | 2026-02-25 18:40 | 内容回写，准备明天建 Git 仓库 |
+| 2026-02-26 10:04 | Git 仓库初始化 + 配置用户 (bluecms@hotmail.com) |
+| 2026-02-26 10:40 | 代码推送到 GitHub (87 文件, 2 commits) |
+| 2026-02-26 10:44 | 进度回写 + 后端 /health 验证通过 |
 
 ---
 
@@ -302,13 +305,14 @@ uvicorn app.main:app --reload --port 8000
 | 后端路径 | lawfirmAGplat/agentic_on_arch/ |
 | 前端 Dev | localhost:5173 |
 | 后端 Dev | localhost:8000 |
+| Git 仓库 | github.com/bluemasion/lawfirmAGplat |
 
 ---
 
 ## 12. 待办
 
-1. 建 Git 仓库并推送代码
-2. 解决 uvicorn --reload 排除 venv 问题
-3. 验证 /health 和 /docs API 端点
-4. 前后端联调准备
+1. 解决 uvicorn --reload 排除 venv 问题
+2. 验证 /docs Swagger UI
+3. 前后端联调准备
+4. 审计日志功能
 
