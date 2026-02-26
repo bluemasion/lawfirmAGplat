@@ -2,7 +2,7 @@
 
 > **用途**：每次开新会话时先读此文档，获取项目完整上下文。开发过程中定期回写重要决策和进展。
 >
-> **最后更新**：2026-02-26 11:30
+> **最后更新**：2026-02-26 12:13
 
 ---
 
@@ -28,7 +28,7 @@
 | 智能投标 | 3步交互流程 (上传→AI解析→标书生成) + 合规审核 + 86分评估 | ✅ 前端增强完成 |
 | 算力实例管理 | 实例表格 + Register New Node + Launch Console 终端 | 前端 Demo 已有 |
 | 平台治理中心 | 资源监控(GPU/CPU/RAM/SSD) + 会话审计(Terminate) + NER 沙盒 + 算力账单(占位) | 前端 Demo 已有 |
-| AI Copilot | 悬浮对话面板，VPC 隔离推理 | 前端 Demo 已有 |
+| AI Copilot | 悬浮对话面板，VPC 隔离推理 | ✅ 已接入 Qwen-Max 真实 LLM |
 | 数据底座 ETL | 案管/OA/财务跨系统同步 + 案号归一化 | 已有技术平台处理 |
 | 审计日志 | 所有 AI 操作留痕 | 待建 |
 | RBAC 权限 | 合伙人/律师/助理分级权限 | 待建 |
@@ -246,6 +246,9 @@ uvicorn app.main:app --reload --port 8000
 | 2026-02-26 | BiddingAgent 用政府法律顾问采购场景 | 最贴近真实客户业务 |
 | 2026-02-26 | ConflictSearch 支持别名穿透+快捷芯片 | 降低 Demo 操作复杂度 |
 | 2026-02-26 | AICopilot 打字机效果 + 关键词响应 | 增强 Demo 动态感 |
+| 2026-02-26 | Qwen-Max 接入用 dashscope SDK | 国内合规 + 通义千问生态 |
+| 2026-02-26 | chat.py 去掉 DB 依赖 | 无 PostgreSQL 也能跑 LLM 端点 |
+| 2026-02-26 | 投标首选场景=框架搭建 | 客户痛点：律师擅长精修不擅长搭框架 |
 ---
 
 ## 9. 当前进度
@@ -271,8 +274,12 @@ uvicorn app.main:app --reload --port 8000
 - [x] MetricCard 计数器动画 (requestAnimationFrame)
 - [x] 前端 Demo 增强浏览器验证通过（零 JS 错误）
 - [x] Demo 增强代码推送 GitHub (commit 9cc9f2d)
+- [x] Qwen-Max LLM 接入 (.env 配置 + chat.py 重写 + extensions.py 懒加载)
+- [x] AICopilot 前端改为调真实后端 SSE 流式端点
+- [x] 浏览器验证 Qwen 真实 AI 回复通过
+- [x] LLM 接入代码推送 GitHub (commit 0ae6cd1)
+- [/] 投标文件生成 Agent 接入真实 LLM（等客户提供招标文件模板）
 - [ ] 解决 uvicorn watch 排除 venv 问题
-- [ ] 前后端联调
 - [ ] 审计日志功能
 - [ ] RBAC 权限体系
 
@@ -299,6 +306,11 @@ uvicorn app.main:app --reload --port 8000
 | 2026-02-26 11:00 | 5大前端组件 Demo 增强 (BiddingAgent/ConflictSearch/NER/Copilot/MetricCard) |
 | 2026-02-26 11:25 | 浏览器验证通过 + Git push (9cc9f2d) |
 | 2026-02-26 11:30 | 进度回写到 PROJECT_CONTEXT.md + MANIFEST.md |
+| 2026-02-26 11:41 | 收到 Qwen API key，配置 .env |
+| 2026-02-26 11:55 | chat.py 重写（去 DB 依赖 + 律所系统提示），extensions.py 懒加载 |
+| 2026-02-26 12:00 | AICopilot 接入真实 Qwen SSE 流式端点，浏览器验证通过 |
+| 2026-02-26 12:06 | 客户会议纪要沟通：投标=首选，框架搭建是核心痛点 |
+| 2026-02-26 12:13 | 进度回写 + Git push |
 
 ---
 
@@ -325,11 +337,32 @@ uvicorn app.main:app --reload --port 8000
 
 ## 12. 待办
 
-1. 解决 uvicorn --reload 排除 venv 问题
-2. 验证 /docs Swagger UI
-3. 前后端联调准备（services.js mock→fetch 切换）
-4. 审计日志功能
-5. RBAC 权限体系
-6. 证券底稿核查 Agent 后端对接
-7. RAG 知识库对接 (ChromaDB / pgvector)
+1. **🔥 投标 Agent 接入 Qwen** — 等客户发招标文件模板后改造 BiddingAgent
+2. GLM-4 key 配置（等客户提供）
+3. 解决 uvicorn --reload 排除 venv 问题
+4. 验证 /docs Swagger UI
+5. 审计日志功能
+6. RBAC 权限体系
+7. 证券底稿核查 Agent 后端对接
+8. RAG 知识库对接 (ChromaDB / pgvector)
 
+---
+
+## 13. 客户会议纪要摘要
+
+### 投标需求沟通 (2026-02-26)
+
+**核心痛点**：
+- 律师擅长**精修内容**，但搭建标书**框架**很痛苦
+- 秘书做框架，但人员**不稳定**，质量参差
+- 每个项目框架高度重复，但每次都要从零开始
+
+**需求**：
+- 输入律师信息 + 项目背景 → AI 秒出标书框架 → 律师只需精修
+- 支持模板上传：客户可以提供模板让 AI 学习并适配
+- 生成时间 ≤1 分钟
+- 先简单化实现，后续迭代
+
+**三大应用优先级**：投标（首选）> 底稿核查 > 归档管理
+
+**待客户提供**：招标文件模板 + 示例场景
