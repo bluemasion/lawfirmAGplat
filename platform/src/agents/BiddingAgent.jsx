@@ -1,7 +1,59 @@
-import { useState, useRef, useEffect } from 'react';
-import { FileText, Send, Loader2, CheckCircle, Building2, User, Phone, Mail, DollarSign, Calendar, MapPin, ClipboardList, Download, RotateCcw, Upload, Sparkles, AlertTriangle, ChevronRight, Eye } from 'lucide-react';
+import { useState, useRef, useEffect, useMemo } from 'react';
+import { FileText, Send, Loader2, CheckCircle, Building2, User, Phone, Mail, DollarSign, Calendar, MapPin, ClipboardList, Download, RotateCcw, Upload, Sparkles, AlertTriangle, ChevronRight, Eye, Copy, FileDown } from 'lucide-react';
+import { marked } from 'marked';
 
 const API_BASE = 'http://localhost:8000';
+
+// ── Marked 配置：生成干净 HTML ──
+marked.setOptions({ breaks: true, gfm: true });
+
+// ── Word 级排版 CSS ──
+const WORD_STYLES = `
+.bidding-doc { font-family: "SimSun", "宋体", "Songti SC", serif; font-size: 14px; line-height: 1.8; color: #1a1a1a; }
+.bidding-doc h1 { font-family: "SimHei", "黑体", "Heiti SC", sans-serif; font-size: 22px; font-weight: bold; text-align: center; margin: 32px 0 20px; padding-bottom: 8px; border-bottom: 2px solid #c00; }
+.bidding-doc h2 { font-family: "SimHei", "黑体", "Heiti SC", sans-serif; font-size: 17px; font-weight: bold; margin: 24px 0 12px; padding-left: 10px; border-left: 4px solid #c00; }
+.bidding-doc h3 { font-family: "SimHei", "黑体", "Heiti SC", sans-serif; font-size: 15px; font-weight: bold; margin: 18px 0 8px; }
+.bidding-doc h4 { font-size: 14px; font-weight: bold; margin: 14px 0 6px; }
+.bidding-doc p { margin: 6px 0; text-indent: 2em; text-align: justify; }
+.bidding-doc ul, .bidding-doc ol { margin: 8px 0 8px 2em; }
+.bidding-doc li { margin: 3px 0; text-indent: 0; }
+.bidding-doc strong { color: #b00; }
+.bidding-doc table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+.bidding-doc th { background: #f5f0e8; font-weight: bold; text-align: center; }
+.bidding-doc th, .bidding-doc td { border: 1px solid #999; padding: 6px 10px; text-align: left; }
+.bidding-doc hr { border: none; border-top: 1px solid #ccc; margin: 20px 0; }
+.bidding-doc blockquote { border-left: 4px solid #ddd; padding-left: 12px; color: #666; margin: 10px 0; font-style: italic; }
+.bidding-doc code { background: #f5f5f5; padding: 1px 4px; border-radius: 2px; font-size: 12px; }
+`;
+
+// ── 导出 Word (HTML→docx Blob) ──
+function exportToWord(htmlContent, filename) {
+    const fullHtml = `
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+<head><meta charset="utf-8">
+<style>
+body { font-family: "SimSun", "宋体", serif; font-size: 14px; line-height: 1.8; color: #1a1a1a; margin: 40px; }
+h1 { font-family: "SimHei", "黑体", sans-serif; font-size: 22px; font-weight: bold; text-align: center; margin: 32px 0 20px; border-bottom: 2px solid #c00; padding-bottom: 8px; }
+h2 { font-family: "SimHei", "黑体", sans-serif; font-size: 17px; font-weight: bold; margin: 24px 0 12px; border-left: 4px solid #c00; padding-left: 10px; }
+h3 { font-family: "SimHei", "黑体", sans-serif; font-size: 15px; font-weight: bold; margin: 18px 0 8px; }
+p { margin: 6px 0; text-indent: 2em; text-align: justify; }
+table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+th { background: #f5f0e8; font-weight: bold; text-align: center; }
+th, td { border: 1px solid #999; padding: 6px 10px; }
+strong { color: #b00; }
+ul, ol { margin: 8px 0 8px 2em; }
+</style></head>
+<body>${htmlContent}</body></html>`;
+    const blob = new Blob(['\ufeff', fullHtml], { type: 'application/msword' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || '投标文件框架.doc';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
 
 export default function BiddingAgent() {
     const [step, setStep] = useState(1); // 1=上传 2=AI解析中 3=填写信息 4=AI生成中 5=完成
@@ -18,12 +70,19 @@ export default function BiddingAgent() {
     const [output, setOutput] = useState('');
     const [generating, setGenerating] = useState(false);
     const [elapsed, setElapsed] = useState(0);
+    const [copied, setCopied] = useState(false);
     const scrollRef = useRef(null);
     const abortRef = useRef(null);
     const timerRef = useRef(null);
     const fileInputRef = useRef(null);
 
     const update = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
+
+    // ── Markdown → HTML 渲染 ──
+    const renderedHTML = useMemo(() => {
+        if (!output) return '';
+        try { return marked.parse(output); } catch { return output; }
+    }, [output]);
 
     // ── Demo 数据 ──
     const fillDemo = () => {
@@ -146,7 +205,7 @@ export default function BiddingAgent() {
     };
 
     const reset = () => {
-        setStep(1); setOutput(''); setElapsed(0); setFile(null); setParsResult(null);
+        setStep(1); setOutput(''); setElapsed(0); setFile(null); setParsResult(null); setCopied(false);
         setForm({
             company_name: '', legal_representative: '', project_name: '', client_name: '',
             project_id: '', registered_capital: '', established_date: '', address: '',
@@ -156,6 +215,17 @@ export default function BiddingAgent() {
         });
         if (abortRef.current) abortRef.current.abort();
         clearInterval(timerRef.current);
+    };
+
+    const handleCopy = () => {
+        navigator.clipboard.writeText(output);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
+
+    const handleExportWord = () => {
+        const projectName = form.project_name || '投标文件';
+        exportToWord(renderedHTML, `${form.company_name}_${projectName}_投标文件框架.doc`);
     };
 
     useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [output]);
@@ -191,6 +261,9 @@ export default function BiddingAgent() {
 
     return (
         <div className="p-6 max-w-5xl mx-auto">
+            {/* Word 级排版样式注入 */}
+            <style>{WORD_STYLES}</style>
+
             {/* Header */}
             <div className="flex items-center justify-between mb-5">
                 <div>
@@ -206,8 +279,8 @@ export default function BiddingAgent() {
                         return (
                             <div key={s.n} className="flex items-center">
                                 <div className={`flex items-center text-[9px] font-bold uppercase tracking-widest px-2.5 py-1.5 rounded-full border transition-all ${state === 'active' ? 'bg-orange-500 text-white border-orange-500' :
-                                        state === 'done' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
-                                            'bg-zinc-100 text-zinc-400 border-zinc-200'
+                                    state === 'done' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                                        'bg-zinc-100 text-zinc-400 border-zinc-200'
                                     }`}>
                                     {state === 'done' ? <CheckCircle size={9} className="mr-1" /> : null}
                                     {s.label}
@@ -392,12 +465,13 @@ export default function BiddingAgent() {
             {/* ══════════ Step 4 & 5: 生成中 / 完成 ══════════ */}
             {(step === 4 || step === 5) && (
                 <div className="space-y-3 zoom-in">
+                    {/* 状态栏 */}
                     <div className="flex items-center justify-between bg-white border border-zinc-200 rounded-sm p-3 shadow-sm">
                         <div className="flex items-center space-x-3">
                             {generating ? <Loader2 size={16} className="text-orange-500 animate-spin" /> : <CheckCircle size={16} className="text-emerald-500" />}
                             <div>
                                 <div className="text-xs font-bold text-zinc-800">
-                                    {generating ? 'Qwen-Max 正在生成投标文件框架...' : '投标文件框架生成完成'}
+                                    {generating ? 'Qwen-Max 正在生成投标文件框架...' : '✅ 投标文件框架生成完成'}
                                 </div>
                                 <div className="text-[10px] text-zinc-500 mt-0.5">{form.company_name} → {form.project_name}</div>
                             </div>
@@ -409,22 +483,33 @@ export default function BiddingAgent() {
                         </div>
                     </div>
 
+                    {/* ── 文档内容 (Word 级排版) ── */}
                     <div ref={scrollRef}
-                        className="bg-white border border-zinc-200 rounded-sm p-5 shadow-sm overflow-y-auto font-mono text-[11px] text-zinc-700 leading-relaxed whitespace-pre-wrap"
+                        className="bg-white border border-zinc-200 rounded-sm shadow-sm overflow-y-auto"
                         style={{ maxHeight: 'calc(100vh - 320px)', minHeight: '400px' }}>
-                        {output}
-                        {generating && <span className="inline-block w-1.5 h-4 bg-orange-500 ml-0.5 animate-pulse"></span>}
+                        {/* 模拟 A4 纸页面效果 */}
+                        <div className="px-12 py-10 bidding-doc"
+                            style={{ boxShadow: 'inset 0 0 30px rgba(0,0,0,0.02)', background: '#fefefe' }}>
+                            <div dangerouslySetInnerHTML={{ __html: renderedHTML }} />
+                            {generating && <span className="inline-block w-1.5 h-4 bg-orange-500 ml-0.5 animate-pulse"></span>}
+                        </div>
                     </div>
 
+                    {/* ── 操作按钮 ── */}
                     {step === 5 && (
                         <div className="flex space-x-3">
                             <button onClick={reset}
                                 className="flex-1 border border-zinc-300 text-zinc-600 py-2.5 rounded-sm font-bold text-xs hover:bg-zinc-50 transition-all flex items-center justify-center space-x-2">
                                 <RotateCcw size={14} /><span>重新开始</span>
                             </button>
-                            <button onClick={() => { navigator.clipboard.writeText(output); }}
-                                className="flex-1 bg-orange-500 text-white py-2.5 rounded-sm font-bold text-xs hover:bg-orange-600 transition-all flex items-center justify-center space-x-2 shadow-lg">
-                                <Download size={14} /><span>复制全文</span>
+                            <button onClick={handleCopy}
+                                className="flex-1 border border-zinc-300 text-zinc-600 py-2.5 rounded-sm font-bold text-xs hover:bg-zinc-50 transition-all flex items-center justify-center space-x-2">
+                                {copied ? <><CheckCircle size={14} className="text-emerald-500" /><span className="text-emerald-600">已复制</span></> :
+                                    <><Copy size={14} /><span>复制 Markdown</span></>}
+                            </button>
+                            <button onClick={handleExportWord}
+                                className="flex-1 bg-blue-600 text-white py-2.5 rounded-sm font-bold text-xs hover:bg-blue-700 transition-all flex items-center justify-center space-x-2 shadow-lg">
+                                <FileDown size={14} /><span>导出 Word 文档</span>
                             </button>
                         </div>
                     )}
