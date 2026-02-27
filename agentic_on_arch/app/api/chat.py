@@ -51,14 +51,20 @@ async def chat_completions(req: ChatRequest):
             # SSE streaming response
             async def event_generator():
                 try:
+                    logger.info("SSE event_generator started")
                     demasker = NERDemasker()
+                    chunk_count = 0
                     async for chunk in llm.stream(masked_message, system=SYSTEM_PROMPT):
                         # Re-identify entities in streamed chunks
                         restored = demasker.demask(chunk, mapping) if mapping else chunk
+                        chunk_count += 1
+                        if chunk_count <= 3:
+                            logger.info(f"SSE chunk #{chunk_count}: [{restored[:30]}]")
                         yield f"data: {json.dumps({'content': restored, 'done': False}, ensure_ascii=False)}\n\n"
+                    logger.info(f"SSE complete: {chunk_count} chunks total")
                     yield f"data: {json.dumps({'content': '', 'done': True}, ensure_ascii=False)}\n\n"
                 except Exception as e:
-                    logger.error(f"Stream error: {e}")
+                    logger.error(f"Stream error: {traceback.format_exc()}")
                     yield f"data: {json.dumps({'content': f'[错误] {str(e)}', 'done': True}, ensure_ascii=False)}\n\n"
 
             return StreamingResponse(event_generator(), media_type="text/event-stream")
