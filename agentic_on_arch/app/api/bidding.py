@@ -243,3 +243,300 @@ async def generate_bidding_document(req: BiddingRequest):
     except Exception as e:
         logger.error(f"Bidding generation error: {e}")
         return {"success": False, "message": str(e)}
+
+
+# ─────────────────────────────────────────────
+#  3. 新版完整投标管线 (Phase 1)
+# ─────────────────────────────────────────────
+
+import os
+import time
+import asyncio
+from typing import Dict, Any, List
+
+from app.core.skills.builtin.tender_parsing import TenderParsingSkill
+from app.core.skills.builtin.requirement_extraction import RequirementExtractionSkill
+from app.core.skills.builtin.content_generation import ContentGenerationSkill
+from app.core.skills.builtin.template_filling import TemplateFillingSkill
+from app.core.skills.builtin.docx_assembly import DocxAssemblySkill
+from app.core.skills.builtin.rule_verification import RuleVerificationSkill
+from app.config import settings
+
+# In-memory storage for bidding tasks (production would use DB)
+_bidding_tasks: Dict[str, Dict[str, Any]] = {}
+
+# Skill instances
+_parser = TenderParsingSkill()
+_extractor = RequirementExtractionSkill()
+_generator = ContentGenerationSkill()
+_filler = TemplateFillingSkill()
+_assembler = DocxAssemblySkill()
+_verifier = RuleVerificationSkill()
+
+
+class FullBiddingRequest(BaseModel):
+    """Request for full bidding pipeline."""
+    company_data: Optional[Dict[str, str]] = None
+    llm_provider: str = "qwen"
+
+
+@router.post("/parse-structure")
+async def parse_tender_structure(file: UploadFile = File(...)):
+    """上传招标文件 → 解析结构 → 提取投标要求 JSON
+
+    Returns structured requirements that define the bid document structure.
+    """
+    try:
+        file_bytes = await file.read()
+        filename = file.filename or "unknown.docx"
+        logger.info(f"[Full Pipeline] Parse structure: {filename} ({len(file_bytes)} bytes)")
+
+        if not filename.endswith('.docx'):
+            return {"success": False, "message": "目前仅支持 .docx 格式招标文件"}
+
+        # Save uploaded file temporarily
+        os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+        temp_path = os.path.join(settings.UPLOAD_DIR, f"tender_{int(time.time())}_{filename}")
+        with open(temp_path, "wb") as f:
+            f.write(file_bytes)
+
+        # Step 1: Parse document structure
+        parse_result = await _parser.execute({"file_path": temp_path})
+
+        # Step 2: Extract requirements using LLM
+        extract_result = await _extractor.execute({
+            "raw_text": parse_result["raw_text"],
+            "sections": parse_result["sections"],
+            "llm_provider": "qwen",
+        })
+
+        # Store task for later use
+        task_id = f"bid_{int(time.time())}"
+        _bidding_tasks[task_id] = {
+            "task_id": task_id,
+            "status": "parsed",
+            "tender_file": temp_path,
+            "parse_result": parse_result,
+            "requirements": extract_result,
+            "generated_sections": [],
+            "verification": None,
+            "output_file": None,
+            "created_at": time.time(),
+        }
+
+        return {
+            "success": True,
+            "data": {
+                "task_id": task_id,
+                "requirements": extract_result,
+                "raw_sections_count": parse_result["total_sections"],
+                "text_length": len(parse_result["raw_text"]),
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"[Full Pipeline] Parse error: {e}", exc_info=True)
+        return {"success": False, "message": str(e)}
+
+
+@router.post("/generate-full/{task_id}")
+async def generate_full_document(task_id: str, req: FullBiddingRequest):
+    """逐章节生成完整投标文件 — SSE 流式进度
+
+    Reads the requirements from parse_structure step, generates each section,
+    assembles into .docx, and runs verification.
+    """
+    task = _bidding_tasks.get(task_id)
+    if not task:
+        return {"success": False, "message": f"任务 {task_id} 不存在"}
+
+    requirements = task.get("requirements", {})
+    company_data = req.company_data or {}
+    llm_provider = req.llm_provider
+
+    # Get company info summary for prompts
+    company_info = TemplateFillingSkill.get_company_info_summary(company_data)
+
+    async def event_generator():
+        generated_sections = []
+        total_sections = 0
+        current = 0
+
+        # Collect all sections from all volumes
+        all_sections = []
+        for volume in requirements.get("volumes", []):
+            for section in volume.get("sections", []):
+                all_sections.append(section)
+        total_sections = len(all_sections)
+
+        if total_sections == 0:
+            yield _sse({"type": "error", "message": "未找到需要生成的章节"})
+            return
+
+        yield _sse({
+            "type": "start",
+            "total_sections": total_sections,
+            "message": f"开始生成投标文件，共 {total_sections} 个章节",
+        })
+
+        # Generate each section
+        for section in all_sections:
+            current += 1
+            title = section.get("title", f"章节{current}")
+
+            yield _sse({
+                "type": "progress",
+                "current": current,
+                "total": total_sections,
+                "section_title": title,
+                "status": "generating",
+            })
+
+            try:
+                result = await _generator.execute({
+                    "section": section,
+                    "company_info": company_info,
+                    "reference_data": "暂无参考资料（RAG 未接入）",
+                    "llm_provider": llm_provider,
+                })
+
+                result["order"] = section.get("order", current)
+                result["type"] = section.get("type", "narrative")
+                result["level"] = 2  # Default heading level
+                generated_sections.append(result)
+
+                yield _sse({
+                    "type": "section_done",
+                    "current": current,
+                    "total": total_sections,
+                    "section_title": title,
+                    "status": result.get("status", "generated"),
+                    "content_length": len(result.get("content", "")),
+                    "missing_fields": result.get("missing_fields", []),
+                })
+
+            except Exception as e:
+                logger.error(f"Error generating section '{title}': {e}")
+                generated_sections.append({
+                    "title": title,
+                    "content": f"[生成失败：{str(e)}]",
+                    "order": section.get("order", current),
+                    "type": section.get("type", "narrative"),
+                    "level": 2,
+                    "missing_fields": [],
+                    "status": "error",
+                })
+                yield _sse({
+                    "type": "section_error",
+                    "current": current,
+                    "section_title": title,
+                    "error": str(e),
+                })
+
+        # Assemble document
+        yield _sse({"type": "assembling", "message": "正在组装 Word 文档..."})
+
+        try:
+            assembly_result = await _assembler.execute({
+                "bid_title": requirements.get("bid_title", "投标文件"),
+                "sections": generated_sections,
+                "format_rules": requirements.get("format_requirements", {}),
+            })
+
+            task["output_file"] = assembly_result["file_path"]
+            task["output_filename"] = assembly_result["filename"]
+        except Exception as e:
+            logger.error(f"Assembly error: {e}")
+            assembly_result = {"file_path": None, "error": str(e)}
+
+        # Run verification
+        yield _sse({"type": "verifying", "message": "正在校验投标文件..."})
+
+        try:
+            verification = await _verifier.execute({
+                "tender_requirements": requirements,
+                "generated_sections": generated_sections,
+            })
+            task["verification"] = verification
+        except Exception as e:
+            logger.error(f"Verification error: {e}")
+            verification = {"overall_status": "ERROR", "error": str(e)}
+
+        # Update task
+        task["status"] = "completed"
+        task["generated_sections"] = generated_sections
+
+        yield _sse({
+            "type": "complete",
+            "task_id": task_id,
+            "file_path": assembly_result.get("file_path"),
+            "filename": assembly_result.get("filename"),
+            "page_estimate": assembly_result.get("page_count_estimate", 0),
+            "section_count": len(generated_sections),
+            "verification": verification,
+        })
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/verify/{task_id}")
+async def verify_document(task_id: str):
+    """对已生成的投标文件重新运行校验"""
+    task = _bidding_tasks.get(task_id)
+    if not task:
+        return {"success": False, "message": f"任务 {task_id} 不存在"}
+
+    if not task.get("generated_sections"):
+        return {"success": False, "message": "尚未生成投标文件"}
+
+    try:
+        verification = await _verifier.execute({
+            "tender_requirements": task.get("requirements", {}),
+            "generated_sections": task["generated_sections"],
+        })
+        task["verification"] = verification
+
+        return {"success": True, "data": verification}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
+@router.get("/download/{task_id}")
+async def download_document(task_id: str):
+    """下载生成的投标文件 .docx"""
+    from fastapi.responses import FileResponse
+
+    task = _bidding_tasks.get(task_id)
+    if not task:
+        return {"success": False, "message": f"任务 {task_id} 不存在"}
+
+    file_path = task.get("output_file")
+    if not file_path or not os.path.exists(file_path):
+        return {"success": False, "message": "文件尚未生成或已被删除"}
+
+    filename = task.get("output_filename", "bid_document.docx")
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+
+@router.get("/tasks")
+async def list_tasks():
+    """列出所有投标任务"""
+    tasks = []
+    for tid, t in _bidding_tasks.items():
+        tasks.append({
+            "task_id": tid,
+            "status": t.get("status"),
+            "created_at": t.get("created_at"),
+            "section_count": len(t.get("generated_sections", [])),
+            "has_output": t.get("output_file") is not None,
+        })
+    return {"success": True, "data": tasks}
+
+
+def _sse(data: dict) -> str:
+    """Format data as SSE event."""
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
