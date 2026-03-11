@@ -2,7 +2,7 @@
 
 > **用途**：每次开新会话时先读此文档，获取项目完整上下文。开发过程中定期回写重要决策和进展。
 >
-> **最后更新**：2026-02-26 19:16
+> **最后更新**：2026-03-11 17:53
 
 ---
 
@@ -25,7 +25,7 @@
 | 证券底稿核查 | 文件树导航 + NER 日志 + AI 一致性异常预警 + View Evidence Source | 前端 Demo 已有，后端待建 |
 | 高保真翻译 | 双栏对比 + 术语库入口 + 印章版式还原 | 前端 Demo 已有，后端 Phase 4 |
 | 利冲检索 | 5步穿透扫描动画 + 别名识别 + HIGH/LOW 风险分级 + 强制回避建议 | ✅ 前端增强完成 |
-| 智能投标 | 4步工作流：上传招标文件(.docx/.txt)→ Qwen AI 解析提取关键信息 → 自动填充+手动补充 → Qwen-Max SSE 流式生成标书框架 | ✅ 全栈接入完成（含文件解析） |
+| 智能投标 | **Phase 1 完整管线**：上传招标文件(.docx) → python-docx 结构解析 → Qwen-Max 需求提取(3分册14章节) → 逐章节内容生成(4类型分流) → python-docx 文档组装(.docx) → 5维代码规则校验 | ✅ 后端管线全栈通过(~7min生成19页) |
 | 算力实例管理 | 实例表格 + Register New Node + Launch Console 终端 | 前端 Demo 已有 |
 | 平台治理中心 | 资源监控(GPU/CPU/RAM/SSD) + 会话审计(Terminate) + NER 沙盒 + 算力账单(占位) | 前端 Demo 已有 |
 | AI Copilot | 悬浮对话面板，VPC 隔离推理 | ✅ 已接入 Qwen-Max 真实 LLM |
@@ -327,6 +327,12 @@ uvicorn app.main:app --reload --port 8000
 | 2026-02-26 15:20 | 重写 BiddingAgent.jsx（15 字段表单 + SSE 流式 + Demo 数据） |
 | 2026-02-26 15:37 | 浏览器验证通过：50.4s 生成 1600 字完整标书框架 |
 | 2026-02-26 16:05 | 进度回写到 PROJECT_CONTEXT.md |
+| 2026-02-27 | Word 级文档渲染 + 导出功能 (v2.1.0, tag) |
+| 2026-03-10 | 智能投标系统技术架构文档完成（能力分层/处理流/模板学习/多模型校验/Agent-Skill-MCP） |
+| 2026-03-10 | Phase 1 实施计划制定 + 创建 `feature/bidding-pipeline` 分支 |
+| 2026-03-10 | 6 个 Skill 模块编码完成 (tender_parsing/requirement_extraction/content_generation/template_filling/docx_assembly/rule_verification) |
+| 2026-03-10 | 5 个新 API 端点实现 (/parse-structure /generate-full /verify /download /tasks) |
+| 2026-03-11 | 端到端测试通过：中国移动样例 → 14章节生成 → 47KB .docx 输出 → 校验报告 |
 
 ---
 
@@ -354,14 +360,21 @@ uvicorn app.main:app --reload --port 8000
 ## 12. 待办
 
 1. ~~**🔥 投标 Agent 接入 Qwen**~~ ✅ 已完成（15 字段表单 + Qwen SSE 流式 + 8 章节标书框架）
-2. **投标生成代码推送 GitHub**
-3. GLM-4 key 配置（等客户提供）
-4. 解决 uvicorn --reload 排除 venv 问题
-5. 验证 /docs Swagger UI
-6. 审计日志功能
-7. RBAC 权限体系
-8. 证券底稿核查 Agent 后端对接
-9. RAG 知识库对接 (ChromaDB / pgvector)
+2. ~~**🔥 投标完整管线 Phase 1**~~ ✅ 已完成（解析→提取→生成→组装→校验，端到端验证通过）
+3. **🔥 投标前端 UI 升级** — BiddingAgent.jsx 4步新流程（上传→确认结构→逐章生成→校验下载）
+4. **投标多模型交叉校验 Phase 2** — DeepSeek + GLM-4 交叉审阅
+5. **RAG 知识库对接** — pgvector 向量检索 + 律所数据接入
+6. GLM-4 key 配置（等客户提供）
+7. 审计日志功能
+8. RBAC 权限体系
+9. 证券底稿核查 Agent 后端对接
+
+### Git 分支策略
+
+| 分支 | 说明 |
+|------|------|
+| `main` | 稳定版 (v2.1.0, commit 36505d6) |
+| `feature/bidding-pipeline` | 投标完整管线开发 (当前，commit 1600152) |
 
 ---
 

@@ -3,7 +3,7 @@
 > **用途**：每次开发会话前必读此文件，获取当前项目的技术版本、依赖库和模块结构。
 > 新增或变更 lib/组件时，必须同步回写本文件。
 >
-> **最后更新**：2026-02-26 19:16
+> **最后更新**：2026-03-11 17:53
 
 ---
 
@@ -14,7 +14,7 @@
 | Python | 3.8 | 系统自带，代码需兼容 3.8 语法 |
 | OS | macOS | mason 用户 |
 | 包管理 | pip | requirements.txt |
-| Git 仓库 | github.com/bluemasion/lawfirmAGplat | main 分支 |
+| Git 仓库 | github.com/bluemasion/lawfirmAGplat | feature/bidding-pipeline 分支开发中 |
 
 ### ⚠️ Python 3.8 兼容注意事项
 
@@ -70,6 +70,7 @@
 | torch | 2.4.0 | PyTorch 推理 | ⏸ 待启用 |
 | paddleocr | 2.8.0 | OCR 文档提取 | ⏸ 待启用 |
 | paddlepaddle | 2.6.0 | PaddlePaddle 引擎 | ⏸ 待启用 |
+| python-docx | 1.1.2 | Word 文档解析与生成 | ✅ 已安装 |
 
 ---
 
@@ -131,7 +132,13 @@
 | RAG 管道 | app/core/rag/ | ✅ 管道骨架 |
 | 认证服务 | app/services/auth_service.py | ✅ JWT + bcrypt |
 | 错误处理 | app/utils/errors.py | ✅ 统一异常 |
-| 投标文件 API | app/api/bidding.py | ✅ /parse (上传解析) + /generate (SSE生成) |
+| 投标文件 API | app/api/bidding.py | ✅ /parse + /generate (旧版) + /parse-structure + /generate-full + /verify + /download + /tasks (Phase 1 新管线) |
+| 招标解析 Skill | app/core/skills/builtin/tender_parsing.py | ✅ python-docx 结构提取 + 中文标题识别 |
+| 需求提取 Skill | app/core/skills/builtin/requirement_extraction.py | ✅ LLM 需求结构化 (单/多轮提取+合并) |
+| 内容生成 Skill | app/core/skills/builtin/content_generation.py | ✅ 4 类型分流 (narrative/table/form/qualification) |
+| 模板填充 Skill | app/core/skills/builtin/template_filling.py | ✅ 预设数据 + 模糊匹配 |
+| 文档组装 Skill | app/core/skills/builtin/docx_assembly.py | ✅ Markdown→Word 转换 + 中文字体 + 红色占位符 |
+| 规则校验 Skill | app/core/skills/builtin/rule_verification.py | ✅ 5维校验 (结构/顺序/缺项/合规/质量) |
 | 日志 | app/utils/logger.py | ✅ loguru |
 
 ---
@@ -143,7 +150,8 @@
 | JWT 中间件 | app/middleware/auth.py | Phase 1 |
 | NER 过滤中间件 | app/middleware/ner_filter.py | Phase 1 |
 | OCR 服务 | app/core/ocr/ | Phase 2 |
-| 律所业务 Skill | app/core/skills/builtin/ | Phase 2 |
+| 投标多模型校验 | app/core/skills/builtin/ | Phase 2 — DeepSeek+GLM-4 交叉审阅 |
+| 投标模板学习 | app/core/skills/builtin/ | Phase 2 — 向量相似度匹配 |
 | 定时任务 | app/tasks/scheduler.py | Phase 2 |
 | WebSocket | app/websocket/events.py | Phase 2 |
 | Docker | docker/ | Phase 3 |
@@ -159,3 +167,8 @@
 | 2026-02-26 | Git 仓库建立并推送到 GitHub (87 文件) | AI |
 | 2026-02-26 | 前端 5大组件 Demo 增强 (BiddingAgent/ConflictSearch/NER/Copilot/MetricCard) | AI |
 | 2026-02-26 | 投标Agent 4步工作流：/api/bidding/parse (docx上传+Qwen解析) + /api/bidding/generate (SSE生成) + 前端BiddingAgent.jsx重构 | AI |
+| 2026-02-27 | Word 级文档渲染 + 导出功能，CORS 修复 (v2.1.0) | AI |
+| 2026-03-10 | feature/bidding-pipeline 分支创建，安装 python-docx 1.1.2 | AI |
+| 2026-03-10 | 6 个投标 Skill 模块编码 (tender_parsing / requirement_extraction / content_generation / template_filling / docx_assembly / rule_verification) | AI |
+| 2026-03-10 | bidding.py 新增 5 个 API 端点 (parse-structure / generate-full / verify / download / tasks) | AI |
+| 2026-03-11 | 端到端测试通过：中国移动法律服务采购样例 → 3分册14章节 → 47KB .docx → 校验报告 (score=14, 2 errors, 22 warnings) | AI |
