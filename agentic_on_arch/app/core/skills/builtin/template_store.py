@@ -175,7 +175,47 @@ class TemplateStoreSkill(BaseSkill):
         return templates
 
     def _compute_similarity(self, title: str, new_sections: set, tpl: Dict) -> float:
-        """Simple keyword + structural overlap scoring."""
+        """Compute similarity using embedding model (with keyword fallback)."""
+        try:
+            from app.core.rag.embedding_service import embedding_service
+
+            # Title semantic similarity (weight: 0.4)
+            tpl_name = tpl.get("name", "")
+            if title and tpl_name:
+                title_sim = embedding_service.similarity(title, tpl_name)
+            else:
+                title_sim = 0.0
+
+            # Section title similarity (weight: 0.5)
+            tpl_sections = list(tpl.get("section_skeletons", {}).keys())
+            if new_sections and tpl_sections:
+                new_list = list(new_sections)
+                sim_matrix = embedding_service.similarity_matrix(new_list, tpl_sections)
+                # For each new section, find best match in template
+                import numpy as np
+                best_matches = np.max(sim_matrix, axis=1)  # best match per new section
+                section_sim = float(np.mean(best_matches[best_matches > 0.5]))  # average of good matches
+                if np.isnan(section_sim):
+                    section_sim = 0.0
+            else:
+                section_sim = 0.0
+
+            # Tag overlap (weight: 0.1)
+            tpl_tags = set(tpl.get("tags", []))
+            title_tags = set(self._extract_tags(title, ""))
+            tag_score = 0.0
+            if tpl_tags and title_tags:
+                tag_score = min(len(tpl_tags & title_tags) * 0.1, 0.2)
+
+            score = title_sim * 0.4 + section_sim * 0.5 + tag_score
+            return score
+
+        except Exception:
+            # Fallback: keyword overlap (original logic)
+            return self._compute_similarity_keyword(title, new_sections, tpl)
+
+    def _compute_similarity_keyword(self, title: str, new_sections: set, tpl: Dict) -> float:
+        """Fallback: simple keyword + structural overlap scoring."""
         score = 0.0
 
         # Title keyword overlap

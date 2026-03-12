@@ -3,7 +3,7 @@
 > **用途**：每次开发会话前必读此文件，获取当前项目的技术版本、依赖库和模块结构。
 > 新增或变更 lib/组件时，必须同步回写本文件。
 >
-> **最后更新**：2026-03-11 17:53
+> **最后更新**：2026-03-12 17:35
 
 ---
 
@@ -66,11 +66,19 @@
 | 库 | 版本 | 用途 | 状态 |
 |----|------|------|------|
 | tiktoken | 0.7.0 | Token 计数 | 已安装 |
-| transformers | 4.44.0 | Legal-BERT NER | ⏸ 待启用 |
-| torch | 2.4.0 | PyTorch 推理 | ⏸ 待启用 |
+| sentence-transformers | 3.2.1 | BGE Embedding 服务 | ✅ 已启用 |
+| transformers | 4.46.3 | Hugging Face 模型加载 | ✅ 已启用 |
+| torch | 2.2.2 (CPU) | PyTorch 推理 | ✅ 已启用 |
 | paddleocr | 2.8.0 | OCR 文档提取 | ⏸ 待启用 |
 | paddlepaddle | 2.6.0 | PaddlePaddle 引擎 | ⏸ 待启用 |
 | python-docx | 1.1.2 | Word 文档解析与生成 | ✅ 已安装 |
+
+### 本地模型
+
+| 模型 | 大小 | 维度 | 用途 | 状态 |
+|------|------|------|------|------|
+| BAAI/bge-small-zh-v1.5 | 95MB | 512 | Embedding + 章节分类 | ✅ 已部署 |
+| BAAI/bge-large-zh-v1.5 | 1.3GB | 1024 | 升级候选 | 待切换 |
 
 ---
 
@@ -135,10 +143,15 @@
 | 投标文件 API | app/api/bidding.py | ✅ /parse + /generate (旧版) + /parse-structure + /generate-full + /verify + /download + /tasks (Phase 1 新管线) |
 | 招标解析 Skill | app/core/skills/builtin/tender_parsing.py | ✅ python-docx 结构提取 + 中文标题识别 |
 | 需求提取 Skill | app/core/skills/builtin/requirement_extraction.py | ✅ LLM 需求结构化 (单/多轮提取+合并) |
-| 内容生成 Skill | app/core/skills/builtin/content_generation.py | ✅ 4 类型分流 (narrative/table/form/qualification) |
+| 内容生成 Skill | app/core/skills/builtin/content_generation.py | ✅ Phase 2: table/form → 代码模板(13种), narrative → LLM |
 | 模板填充 Skill | app/core/skills/builtin/template_filling.py | ✅ 预设数据 + 模糊匹配 |
 | 文档组装 Skill | app/core/skills/builtin/docx_assembly.py | ✅ Markdown→Word 转换 + 中文字体 + 红色占位符 |
 | 规则校验 Skill | app/core/skills/builtin/rule_verification.py | ✅ 5维校验 (结构/顺序/缺项/合规/质量) |
+| 模板库 Skill | app/core/skills/builtin/template_store.py | ✅ Phase 2: 模板 CRUD + 向量相似度匹配 |
+| 数据检索 Skill | app/core/skills/builtin/data_retrieval.py | ✅ Phase 2: 律所数据 RAG (JSON 后端) |
+| Embedding 服务 | app/core/rag/embedding_service.py | ✅ Phase 2: BGE-Small-zh 单例服务 |
+| 章节分类器 | app/core/rag/section_classifier.py | ✅ Phase 2: Zero-Shot 分类 (90.9% 准确率) |
+| RAG 管道 | app/core/rag/pipeline.py | ✅ Phase 2: 真实 BGE Embedding (替换零向量) |
 | 日志 | app/utils/logger.py | ✅ loguru |
 
 ---
@@ -151,7 +164,7 @@
 | NER 过滤中间件 | app/middleware/ner_filter.py | Phase 1 |
 | OCR 服务 | app/core/ocr/ | Phase 2 |
 | 投标多模型校验 | app/core/skills/builtin/ | Phase 2 — DeepSeek+GLM-4 交叉审阅 |
-| 投标模板学习 | app/core/skills/builtin/ | Phase 2 — 向量相似度匹配 |
+| 向量数据库集成 | app/core/rag/ | Phase 3 — pgvector/ChromaDB |
 | 定时任务 | app/tasks/scheduler.py | Phase 2 |
 | WebSocket | app/websocket/events.py | Phase 2 |
 | Docker | docker/ | Phase 3 |
@@ -172,3 +185,6 @@
 | 2026-03-10 | 6 个投标 Skill 模块编码 (tender_parsing / requirement_extraction / content_generation / template_filling / docx_assembly / rule_verification) | AI |
 | 2026-03-10 | bidding.py 新增 5 个 API 端点 (parse-structure / generate-full / verify / download / tasks) | AI |
 | 2026-03-11 | 端到端测试通过：中国移动法律服务采购样例 → 3分册14章节 → 47KB .docx → 校验报告 (score=14, 2 errors, 22 warnings) | AI |
+| 2026-03-12 | **Phase 2**: 模板库 + 内容生成重构 — template_store.py (CRUD+匹配), data_retrieval.py (RAG数据层), content_generation.py 重构(5种表单+8种表格代码模板, 仅narrative用LLM), 4个模板API端点, 前端方法标签+存为模板 | AI |
+| 2026-03-12 | **本地算法模型**: BGE-Small-zh-v1.5 (95MB) 部署 — embedding_service.py (单例服务), section_classifier.py (Zero-Shot分类90.9%准确率), pipeline.py(真实Embedding), requirement_extraction(分类器校正LLM类型), template_store(向量相似度匹配) | AI |
+| 2026-03-12 | **招标自检索 (Self-RAG)**: tender_index.py (内存向量索引, 43 chunks), bidding.py parse-structure构建索引+结构校验, generate-full narrative章节从招标文件检索top-5相关段落作为reference_data | AI |

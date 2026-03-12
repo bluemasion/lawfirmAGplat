@@ -2,7 +2,7 @@
 
 > **用途**：每次开新会话时先读此文档，获取项目完整上下文。开发过程中定期回写重要决策和进展。
 >
-> **最后更新**：2026-03-11 17:53
+> **最后更新**：2026-03-12 17:35
 
 ---
 
@@ -25,7 +25,7 @@
 | 证券底稿核查 | 文件树导航 + NER 日志 + AI 一致性异常预警 + View Evidence Source | 前端 Demo 已有，后端待建 |
 | 高保真翻译 | 双栏对比 + 术语库入口 + 印章版式还原 | 前端 Demo 已有，后端 Phase 4 |
 | 利冲检索 | 5步穿透扫描动画 + 别名识别 + HIGH/LOW 风险分级 + 强制回避建议 | ✅ 前端增强完成 |
-| 智能投标 | **Phase 1 完整管线**：上传招标文件(.docx) → python-docx 结构解析 → Qwen-Max 需求提取(3分册14章节) → 逐章节内容生成(4类型分流) → python-docx 文档组装(.docx) → 5维代码规则校验 | ✅ 后端管线全栈通过(~7min生成19页) |
+| 智能投标 | **Phase 2 完整管线**：上传招标文件(.docx) → python-docx 结构解析 → Qwen-Max 需求提取 + BGE分类器校正 → 模板匹配(向量相似度) → 4类型分流(table/form→代码模板, narrative→LLM) → python-docx 组装 → 5维校验 | ✅ Phase 2 完成 (8 Skills, 本地模型已部署) |
 | 算力实例管理 | 实例表格 + Register New Node + Launch Console 终端 | 前端 Demo 已有 |
 | 平台治理中心 | 资源监控(GPU/CPU/RAM/SSD) + 会话审计(Terminate) + NER 沙盒 + 算力账单(占位) | 前端 Demo 已有 |
 | AI Copilot | 悬浮对话面板，VPC 隔离推理 | ✅ 已接入 Qwen-Max 真实 LLM |
@@ -52,13 +52,14 @@
 
 ### 3.2 定制/微调模型 — 本地部署
 
-| 模型 | 用途 | 说明 |
-|------|------|------|
-| Legal-BERT (微调) | NER 脱敏 | 必须本地，延迟 <10ms |
-| BGE-Large-zh / M3E | 文档 Embedding | 法律语料微调，支持 RAG |
-| PaddleOCR / PP-Structure | 底稿凭证 OCR | 结构化提取表格/数据 |
-| LayoutLMv3 | 翻译版式感知 | Phase 4 再做，技术风险较高 |
-| 实体链接模型 | 利冲关联方穿透 | 可先用规则引擎+知识图谱顶 |
+| 模型 | 用途 | 说明 | 状态 |
+|------|------|------|------|
+| **BAAI/bge-small-zh-v1.5** | 文档 Embedding + 章节分类 | 95MB, 512维, 12.4ms/条, 分类90.9%准确率 | **✅ 已部署** |
+| BAAI/bge-large-zh-v1.5 | Embedding 升级 | 1.3GB, 1024维, 更高精度 | 待切换 |
+| Legal-BERT (微调) | NER 脱敏 | 必须本地，延迟 <10ms | 待启用 |
+| PaddleOCR / PP-Structure | 底稿凭证 OCR | 结构化提取表格/数据 | 待启用 |
+| LayoutLMv3 | 翻译版式感知 | Phase 4 再做，技术风险较高 | 待评估 |
+| 实体链接模型 | 利冲关联方穿透 | 可先用规则引擎+知识图谱顶 | 待评估 |
 
 ### 3.3 纯工程（无模型）
 
@@ -76,7 +77,7 @@
 | 证券底稿核查 | 一致性推理、异常检测 | OCR (PaddleOCR)、NER | 文件树导航、证据链接 |
 | 高保真翻译 | 翻译生成 | 版式感知 (LayoutLMv3) | 术语库 CRUD、XML 重构 |
 | 利冲检索 | — | Embedding 语义搜索 | 知识图谱、实体链接、规则引擎 |
-| 智能投标 | 标书草案生成 | — | 合规词拦截、模板填充 |
+| 智能投标 | 叙述型方案生成 + 需求理解 | **BGE Embedding** (章节分类 + 模板匹配) | 代码模板填充(table/form) + RAG数据 + 模板库 |
 | NER 网关 | — | Legal-BERT | De-ID/Re-ID 映射表 |
 | RAG 知识库 | 回答生成 | Embedding | 向量库、检索管线 |
 | Copilot | 对话生成 | — | 上下文管理、VPC 路由 |

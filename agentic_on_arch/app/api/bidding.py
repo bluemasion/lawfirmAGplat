@@ -262,6 +262,7 @@ from app.core.skills.builtin.docx_assembly import DocxAssemblySkill
 from app.core.skills.builtin.rule_verification import RuleVerificationSkill
 from app.core.skills.builtin.template_store import TemplateStoreSkill
 from app.core.skills.builtin.data_retrieval import DataRetrievalSkill
+from app.core.rag.tender_index import TenderIndex
 from app.config import settings
 
 # In-memory storage for bidding tasks (production would use DB)
@@ -316,17 +317,51 @@ async def parse_tender_structure(file: UploadFile = File(...)):
 
         # Store task for later use
         task_id = f"bid_{int(time.time())}"
+
+        # Build tender vector index for self-RAG
+        tender_index = TenderIndex()
+        try:
+            chunk_count = tender_index.build(
+                raw_text=parse_result["raw_text"],
+                sections=parse_result["sections"],
+            )
+            logger.info(f"Tender index built: {chunk_count} chunks")
+        except Exception as e:
+            logger.warning(f"Tender index build failed (will proceed without RAG): {e}")
+            tender_index = None
+
         _bidding_tasks[task_id] = {
             "task_id": task_id,
             "status": "parsed",
             "tender_file": temp_path,
             "parse_result": parse_result,
             "requirements": extract_result,
+            "tender_index": tender_index,
             "generated_sections": [],
             "verification": None,
             "output_file": None,
             "created_at": time.time(),
         }
+
+        # Structure verification: check for uncovered requirements
+        structure_warnings = []
+        if tender_index and tender_index.is_built:
+            try:
+                all_titles = []
+                for vol in extract_result.get("volumes", []):
+                    for sec in vol.get("sections", []):
+                        all_titles.append(sec.get("title", ""))
+
+                verification = tender_index.verify_structure(all_titles)
+                uncovered = [v for v in verification if not v["covered"]]
+                if uncovered:
+                    structure_warnings = [
+                        f"招标要求 '{v['requirement']}' 可能未覆盖 (最接近: '{v['best_match']}', 相似度: {v['similarity']})"
+                        for v in uncovered[:5]
+                    ]
+                    logger.warning(f"Structure gaps found: {len(uncovered)} requirements may not be covered")
+            except Exception as e:
+                logger.warning(f"Structure verification failed: {e}")
 
         return {
             "success": True,
@@ -335,6 +370,8 @@ async def parse_tender_structure(file: UploadFile = File(...)):
                 "requirements": extract_result,
                 "raw_sections_count": parse_result["total_sections"],
                 "text_length": len(parse_result["raw_text"]),
+                "index_chunks": tender_index.chunk_count if tender_index else 0,
+                "structure_warnings": structure_warnings,
             }
         }
 
@@ -422,10 +459,20 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
                 skeleton_info = matched_skeletons.get(title, {})
                 skeleton_text = skeleton_info.get("skeleton") if skeleton_info else None
 
+                # Self-RAG: retrieve relevant tender sections for narrative chapters
+                reference_data = "暂无参考资料"
+                tender_index = task.get("tender_index")
+                if sec_type == "narrative" and tender_index and tender_index.is_built:
+                    query = f"{title} {section.get('content_hints', '')}"
+                    relevant_chunks = tender_index.search(query, top_k=5)
+                    if relevant_chunks:
+                        reference_data = "\n\n---\n\n".join(relevant_chunks)
+                        logger.info(f"Self-RAG: found {len(relevant_chunks)} relevant chunks for '{title}'")
+
                 result = await _generator.execute({
                     "section": section,
                     "company_info": company_info,
-                    "reference_data": "暂无参考资料（RAG 未接入）",
+                    "reference_data": reference_data,
                     "llm_provider": llm_provider,
                     "skeleton": skeleton_text,
                 })

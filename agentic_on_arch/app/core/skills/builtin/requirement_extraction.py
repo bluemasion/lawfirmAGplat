@@ -173,6 +173,9 @@ class RequirementExtractionSkill(BaseSkill):
             # Fallback: create structure from parsed sections
             result = self._fallback_from_sections(sections)
 
+        # Post-LLM: refine section types using local classifier (90.9% accuracy)
+        result = self._refine_section_types(result)
+
         logger.info(f"Extraction complete: {len(result.get('volumes', []))} volumes, "
                      f"{sum(len(v.get('sections', [])) for v in result.get('volumes', []))} sections")
         return result
@@ -277,3 +280,46 @@ class RequirementExtractionSkill(BaseSkill):
             "evaluation_criteria": [],
             "deadline_info": {},
         }
+
+    def _refine_section_types(self, result: Dict) -> Dict:
+        """Use local BGE classifier to correct section types assigned by LLM.
+
+        LLM sometimes misclassifies section types (e.g., assigns "narrative" to
+        what should be "table" or "form"). The local classifier has 90.9% accuracy
+        on real tender data and runs in <1ms per section.
+
+        Only overrides LLM type when classifier confidence > 0.7.
+        """
+        try:
+            from app.core.rag.section_classifier import section_classifier
+
+            corrections = 0
+            for volume in result.get("volumes", []):
+                titles = [s.get("title", "") for s in volume.get("sections", [])]
+                if not titles:
+                    continue
+
+                classifications = section_classifier.classify_batch(titles)
+
+                for section, (predicted_type, confidence) in zip(volume.get("sections", []), classifications):
+                    llm_type = section.get("type", "narrative")
+                    if predicted_type != llm_type and confidence > 0.7:
+                        logger.debug(
+                            f"Type correction: '{section.get('title')}' "
+                            f"{llm_type} → {predicted_type} (conf={confidence:.2f})"
+                        )
+                        section["type"] = predicted_type
+                        section["type_confidence"] = round(confidence, 3)
+                        section["type_source"] = "classifier"
+                        corrections += 1
+                    else:
+                        section["type_source"] = "llm"
+
+            if corrections > 0:
+                logger.info(f"Section type classifier corrected {corrections} section types")
+
+        except Exception as e:
+            logger.warning(f"Section classifier not available, keeping LLM types: {e}")
+
+        return result
+
