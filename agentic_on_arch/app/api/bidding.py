@@ -260,6 +260,8 @@ from app.core.skills.builtin.content_generation import ContentGenerationSkill
 from app.core.skills.builtin.template_filling import TemplateFillingSkill
 from app.core.skills.builtin.docx_assembly import DocxAssemblySkill
 from app.core.skills.builtin.rule_verification import RuleVerificationSkill
+from app.core.skills.builtin.template_store import TemplateStoreSkill
+from app.core.skills.builtin.data_retrieval import DataRetrievalSkill
 from app.config import settings
 
 # In-memory storage for bidding tasks (production would use DB)
@@ -272,6 +274,8 @@ _generator = ContentGenerationSkill()
 _filler = TemplateFillingSkill()
 _assembler = DocxAssemblySkill()
 _verifier = RuleVerificationSkill()
+_template_store = TemplateStoreSkill()
+_data_retrieval = DataRetrievalSkill()
 
 
 class FullBiddingRequest(BaseModel):
@@ -373,31 +377,57 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
             yield _sse({"type": "error", "message": "未找到需要生成的章节"})
             return
 
+        # ── Step 3: Template matching ──
+        matched_skeletons = {}
+        match_result = _template_store.match_template({"requirements": requirements})
+        if match_result.get("matched"):
+            matched_skeletons = match_result.get("skeletons", {})
+            yield _sse({
+                "type": "template_matched",
+                "template_name": match_result.get("template_name", ""),
+                "score": match_result.get("score", 0),
+                "skeleton_count": len(matched_skeletons),
+            })
+
+        # Count how many will use LLM vs code templates
+        llm_count = sum(1 for s in all_sections if s.get("type") == "narrative")
+        code_count = total_sections - llm_count
+
         yield _sse({
             "type": "start",
             "total_sections": total_sections,
-            "message": f"开始生成投标文件，共 {total_sections} 个章节",
+            "llm_sections": llm_count,
+            "code_sections": code_count,
+            "message": f"开始生成投标文件：{code_count} 个章节用代码模板，{llm_count} 个用LLM",
         })
 
         # Generate each section
         for section in all_sections:
             current += 1
             title = section.get("title", f"章节{current}")
+            sec_type = section.get("type", "narrative")
 
             yield _sse({
                 "type": "progress",
                 "current": current,
                 "total": total_sections,
                 "section_title": title,
+                "section_type": sec_type,
                 "status": "generating",
+                "method": "llm" if sec_type == "narrative" else "template",
             })
 
             try:
+                # Get skeleton from matched template (if any)
+                skeleton_info = matched_skeletons.get(title, {})
+                skeleton_text = skeleton_info.get("skeleton") if skeleton_info else None
+
                 result = await _generator.execute({
                     "section": section,
                     "company_info": company_info,
                     "reference_data": "暂无参考资料（RAG 未接入）",
                     "llm_provider": llm_provider,
+                    "skeleton": skeleton_text,
                 })
 
                 result["order"] = section.get("order", current)
@@ -535,6 +565,50 @@ async def list_tasks():
             "has_output": t.get("output_file") is not None,
         })
     return {"success": True, "data": tasks}
+
+
+# ── Template management endpoints ──
+
+@router.get("/templates")
+async def list_templates():
+    """列出所有投标模板"""
+    result = _template_store.list_templates()
+    return {"success": True, "data": result}
+
+
+@router.get("/templates/{template_id}")
+async def get_template(template_id: str):
+    """获取单个模板详情"""
+    result = _template_store.get_template(template_id)
+    if "error" in result:
+        return {"success": False, "message": result["error"]}
+    return {"success": True, "data": result}
+
+
+@router.post("/templates/save/{task_id}")
+async def save_as_template(task_id: str):
+    """将已完成的投标任务存为模板"""
+    task = _bidding_tasks.get(task_id)
+    if not task:
+        return {"success": False, "message": f"任务 {task_id} 不存在"}
+    if not task.get("generated_sections"):
+        return {"success": False, "message": "尚未生成投标文件"}
+
+    result = _template_store.save_template({
+        "requirements": task.get("requirements", {}),
+        "generated_sections": task["generated_sections"],
+        "source_file": task.get("tender_file", "unknown"),
+    })
+    return {"success": True, "data": result}
+
+
+@router.delete("/templates/{template_id}")
+async def delete_template(template_id: str):
+    """删除模板"""
+    result = _template_store.delete_template(template_id)
+    if "error" in result:
+        return {"success": False, "message": result["error"]}
+    return {"success": True, "data": result}
 
 
 def _sse(data: dict) -> str:

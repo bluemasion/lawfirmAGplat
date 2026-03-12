@@ -1,0 +1,66 @@
+{
+    "projects": [
+        {
+            "name": "中国移动湖南有限公司常年法律顾问服务",
+            "client": "中国移动通信集团湖南有限公司",
+            "industry": "通信",
+            "type": "常年法律顾问",
+            "contract_amount": "120万元/年",
+            "start_date": "2023-01",
+            "end_date": "2025-12",
+            "status": "在执行",
+            "lead_lawyer": "李文华",
+            "team_size": 5,
+            "description": "为中国移动湖南公司提供常年法律顾问服务，包括合同审查、合规咨询、诉讼代理等。年均审查合同300余份，处理法律咨询200余件。",
+            "key_achievements": [
+                "年度最佳法律服务供应商（2024年）",
+                "合同合规率提升至98%"
+            ]
+        },
+        {
+            "name": "长沙市政府法律顾问服务",
+            "client": "长沙市人民政府法制办",
+            "industry": "政府",
+            "type": "政府法律顾问",
+            "contract_amount": "80万元/年",
+            "start_date": "2022-06",
+            "end_date": "2025-06",
+            "status": "在执行",
+            "lead_lawyer": "张建明",
+            "team_size": 4,
+            "description": "为长沙市政府提供法律顾问服务，参与规范性文件审查、行政复议、重大决策合法性审查等工作。",
+            "key_achievements": [
+                "参与市级规范性文件合法性审查50余件"
+            ]
+        },
+        {
+            "name": "湖南高速公路集团PPP项目法律服务",
+            "client": "湖南高速公路集团有限公司",
+            "industry": "交通基建",
+            "type": "专项法律服务",
+            "contract_amount": "45万元",
+            "start_date": "2024-03",
+            "end_date": "2024-12",
+            "status": "已完成",
+            "lead_lawyer": "王大明",
+            "team_size": 3,
+            "description": "为集团PPP项目提供专项法律服务，包括项目协议审查、风险评估、争议解决方案等。",
+            "key_achievements": [
+                "项目顺利推进，无重大法律风险事件"
+            ]
+        },
+        {
+            "name": "株洲市某区政府法律服务采购",
+            "client": "株洲市某区人民政府",
+            "industry": "政府",
+            "type": "政府采购法律服务",
+            "contract_amount": "35万元/年",
+            "start_date": "2023-09",
+            "end_date": "2025-09",
+            "status": "在执行",
+            "lead_lawyer": "张建明",
+            "team_size": 3,
+            "description": "提供政府采购相关法律服务，包括采购文件审查、投诉处理、行政争议协调等。"
+        }
+    ]
+}

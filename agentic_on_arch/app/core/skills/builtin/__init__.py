@@ -7,6 +7,8 @@ from app.core.skills.builtin.content_generation import ContentGenerationSkill
 from app.core.skills.builtin.template_filling import TemplateFillingSkill
 from app.core.skills.builtin.docx_assembly import DocxAssemblySkill
 from app.core.skills.builtin.rule_verification import RuleVerificationSkill
+from app.core.skills.builtin.template_store import TemplateStoreSkill
+from app.core.skills.builtin.data_retrieval import DataRetrievalSkill
 
 
 def register_builtin_skills():
@@ -18,6 +20,8 @@ def register_builtin_skills():
         TemplateFillingSkill(),
         DocxAssemblySkill(),
         RuleVerificationSkill(),
+        TemplateStoreSkill(),
+        DataRetrievalSkill(),
     ]
     for skill in skills:
         skill_registry.register(skill)
@@ -25,3 +29,4 @@ def register_builtin_skills():
 
 # Auto-register on import
 register_builtin_skills()
+

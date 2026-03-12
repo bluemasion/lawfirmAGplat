@@ -1,0 +1,53 @@
+{
+    "qualifications": [
+        {
+            "name": "律师事务所执业许可证",
+            "number": "湘司律字第0088号",
+            "issuer": "湖南省司法厅",
+            "valid_until": "长期",
+            "status": "有效",
+            "file_available": true
+        },
+        {
+            "name": "营业执照",
+            "number": "91430100MA4LXXX00X",
+            "issuer": "长沙市市场监督管理局",
+            "valid_until": "长期",
+            "status": "有效",
+            "file_available": true
+        },
+        {
+            "name": "税务登记证",
+            "number": "湘国税登字430100XXXX号",
+            "issuer": "长沙市国家税务局",
+            "valid_until": "长期",
+            "status": "有效（三证合一）",
+            "file_available": true
+        },
+        {
+            "name": "增值税一般纳税人资格",
+            "number": "430100XXXX",
+            "issuer": "长沙市国家税务局",
+            "valid_until": "长期",
+            "status": "有效",
+            "file_available": true
+        },
+        {
+            "name": "职业责任保险",
+            "number": "PICC-2026-HN-00123",
+            "issuer": "中国人民财产保险股份有限公司",
+            "valid_until": "2026-12-31",
+            "status": "有效",
+            "file_available": true,
+            "amount": "500万元/年"
+        }
+    ],
+    "compliance_records": {
+        "no_major_violations_3_years": true,
+        "no_tax_arrears": true,
+        "no_social_insurance_arrears": true,
+        "no_criminal_records": true,
+        "last_audit_year": 2025,
+        "audit_opinion": "无保留意见"
+    }
+}

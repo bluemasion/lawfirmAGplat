@@ -1,0 +1,37 @@
+{
+    "company_name": "湖南天衡律师事务所",
+    "license_no": "湘司律字第0088号",
+    "legal_rep": "张建明",
+    "address": "湖南省长沙市岳麓区潇湘中路328号湘江世纪城悦江苑6栋2601-2606",
+    "phone": "0731-88886666",
+    "fax": "0731-88886667",
+    "email": "contact@tianheng-law.com",
+    "website": "www.tianheng-law.com",
+    "bank_name": "中国建设银行长沙岳麓支行",
+    "bank_account": "4300 1560 8080 5250 3456",
+    "registered_capital": "500万元",
+    "established_year": "2003",
+    "lawyer_count": "50",
+    "partner_count": "12",
+    "total_staff": "68",
+    "office_area": "约1200平方米",
+    "practice_areas": [
+        "公司法律顾问",
+        "政府法律顾问",
+        "知识产权",
+        "建筑工程",
+        "金融证券",
+        "刑事辩护",
+        "民商事诉讼与仲裁"
+    ],
+    "honors": [
+        "湖南省优秀律师事务所（2018年、2020年、2022年）",
+        "长沙市十佳律师事务所（2019年）",
+        "湖南省律师协会理事单位"
+    ],
+    "insurance": {
+        "type": "职业责任保险",
+        "insurer": "中国人民财产保险股份有限公司",
+        "amount": "500万元/年"
+    }
+}

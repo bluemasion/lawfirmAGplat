@@ -44,8 +44,9 @@ export default function BiddingAgent() {
     });
 
     // Generation progress
-    const [genProgress, setGenProgress] = useState({ current: 0, total: 0, sections: [] });
+    const [genProgress, setGenProgress] = useState({ current: 0, total: 0, sections: [], llmCount: 0, codeCount: 0 });
     const [generating, setGenerating] = useState(false);
+    const [matchedTemplate, setMatchedTemplate] = useState(null);
 
     // Results
     const [verification, setVerification] = useState(null);
@@ -214,15 +215,18 @@ export default function BiddingAgent() {
 
     const handleSSEEvent = (data) => {
         switch (data.type) {
+            case 'template_matched':
+                setMatchedTemplate({ name: data.template_name, score: data.score, skeletons: data.skeleton_count });
+                break;
             case 'start':
-                setGenProgress(p => ({ ...p, total: data.total_sections }));
+                setGenProgress(p => ({ ...p, total: data.total_sections, llmCount: data.llm_sections || 0, codeCount: data.code_sections || 0 }));
                 break;
             case 'progress':
                 setGenProgress(p => ({
                     ...p,
                     current: data.current,
                     sections: [...p.sections.filter(s => s.title !== data.section_title),
-                    { title: data.section_title, status: 'generating', current: data.current }],
+                    { title: data.section_title, status: 'generating', current: data.current, method: data.method || 'llm', type: data.section_type || '' }],
                 }));
                 break;
             case 'section_done':
@@ -270,16 +274,33 @@ export default function BiddingAgent() {
         document.body.removeChild(a);
     };
 
+    // ── Save as template ──
+    const handleSaveTemplate = async () => {
+        if (!taskId) return;
+        try {
+            const res = await fetch(`${API_BASE}/api/bidding/templates/save/${taskId}`, { method: 'POST' });
+            const result = await res.json();
+            if (result.success) {
+                alert(`✅ 模板保存成功！ID: ${result.data.template_id}\n包含 ${result.data.sections} 个章节骨架`);
+            } else {
+                alert('保存失败: ' + result.message);
+            }
+        } catch (err) {
+            alert('保存失败: ' + err.message);
+        }
+    };
+
     // ── Reset ──
     const reset = () => {
         setStep(1);
         setFile(null);
         setTaskId(null);
         setRequirements(null);
-        setGenProgress({ current: 0, total: 0, sections: [] });
+        setGenProgress({ current: 0, total: 0, sections: [], llmCount: 0, codeCount: 0 });
         setVerification(null);
         setOutputFilename('');
         setElapsed(0);
+        setMatchedTemplate(null);
         if (abortRef.current) abortRef.current.abort();
         clearInterval(timerRef.current);
     };
@@ -501,7 +522,9 @@ export default function BiddingAgent() {
                                             genProgress.phase === 'verifying' ? '正在校验投标文件...' :
                                                 `正在生成章节 ${genProgress.current}/${genProgress.total}`}
                                     </div>
-                                    <div className="text-[10px] text-zinc-500">{genProgress.message || 'Qwen-Max 逐章节生成中'}</div>
+                                    <div className="text-[10px] text-zinc-500">
+                                        {genProgress.message || `代码模板 ${genProgress.codeCount} 个 · LLM 生成 ${genProgress.llmCount} 个`}
+                                    </div>
                                 </div>
                             </div>
                             <div className="text-[10px] text-zinc-400 font-mono">{elapsed.toFixed(1)}s</div>
@@ -526,7 +549,8 @@ export default function BiddingAgent() {
                                             sec.status === 'placeholder' ? <AlertTriangle size={10} className="mr-1.5" /> :
                                                 <CheckCircle size={10} className="mr-1.5" />}
                                     <span className="truncate">{sec.title}</span>
-                                    {sec.length > 0 && <span className="ml-auto text-[8px] opacity-60">{sec.length}字</span>}
+                                    {sec.method && <span className={`ml-auto text-[7px] px-1 py-0.5 rounded font-bold ${sec.method === 'llm' ? 'bg-purple-100 text-purple-600' : 'bg-blue-100 text-blue-600'}`}>{sec.method === 'llm' ? 'LLM' : '模板'}</span>}
+                                    {sec.length > 0 && <span className="ml-1 text-[8px] opacity-60">{sec.length}字</span>}
                                     {sec.missing?.length > 0 && <span className="ml-1 text-[8px] text-amber-600">({sec.missing.length}待补)</span>}
                                 </div>
                             ))}
@@ -625,6 +649,10 @@ export default function BiddingAgent() {
                         <button onClick={reset}
                             className="flex-1 border border-zinc-300 text-zinc-600 py-2.5 rounded-sm font-bold text-xs hover:bg-zinc-50 transition-all flex items-center justify-center space-x-2">
                             <RotateCcw size={14} /><span>重新开始</span>
+                        </button>
+                        <button onClick={handleSaveTemplate}
+                            className="flex-1 border border-orange-300 text-orange-600 py-2.5 rounded-sm font-bold text-xs hover:bg-orange-50 transition-all flex items-center justify-center space-x-2">
+                            <Copy size={14} /><span>存为模板</span>
                         </button>
                         <button onClick={handleDownload}
                             className="flex-[2] bg-blue-600 text-white py-2.5 rounded-sm font-bold text-xs hover:bg-blue-700 transition-all flex items-center justify-center space-x-2 shadow-lg">
