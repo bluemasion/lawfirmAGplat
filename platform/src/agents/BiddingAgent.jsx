@@ -141,18 +141,65 @@ export default function BiddingAgent() {
 
             const reader = res.body.getReader();
             const decoder = new TextDecoder();
+            let buffer = '';
+            let gotComplete = false;
 
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
 
-                const text = decoder.decode(value, { stream: true });
-                for (const line of text.split('\n')) {
+                buffer += decoder.decode(value, { stream: true });
+
+                // SSE events are separated by double newlines
+                const parts = buffer.split('\n\n');
+                buffer = parts.pop() || ''; // keep incomplete last part
+
+                for (const part of parts) {
+                    for (const line of part.split('\n')) {
+                        if (!line.startsWith('data: ')) continue;
+                        try {
+                            const data = JSON.parse(line.slice(6));
+                            handleSSEEvent(data);
+                            if (data.type === 'complete') gotComplete = true;
+                        } catch (e) {
+                            console.warn('SSE JSON parse error:', e.message, line.slice(0, 100));
+                        }
+                    }
+                }
+            }
+
+            // Process any remaining data in buffer
+            if (buffer.trim()) {
+                for (const line of buffer.split('\n')) {
                     if (!line.startsWith('data: ')) continue;
                     try {
                         const data = JSON.parse(line.slice(6));
                         handleSSEEvent(data);
-                    } catch (e) { /* partial JSON */ }
+                        if (data.type === 'complete') gotComplete = true;
+                    } catch (e) { /* ignore */ }
+                }
+            }
+
+            // Fallback: if stream ended without 'complete', fetch results via REST
+            if (!gotComplete && taskId) {
+                console.warn('SSE stream ended without complete event, fetching via REST...');
+                try {
+                    const verifyRes = await fetch(`${API_BASE}/api/bidding/verify/${taskId}`, { method: 'POST' });
+                    const verifyData = await verifyRes.json();
+                    if (verifyData.success) {
+                        setVerification(verifyData.data);
+                    }
+                    // Get task info for filename
+                    const taskRes = await fetch(`${API_BASE}/api/bidding/tasks`);
+                    const taskData = await taskRes.json();
+                    const thisTask = taskData.data?.find(t => t.task_id === taskId);
+                    if (thisTask?.has_output) {
+                        setOutputFilename(`bid_document_${taskId}.docx`);
+                    }
+                    setStep(5);
+                } catch (fallbackErr) {
+                    console.error('Fallback fetch failed:', fallbackErr);
+                    alert('生成可能已完成但未收到结果，请刷新页面后在任务列表中查看');
                 }
             }
         } catch (err) {
@@ -291,8 +338,8 @@ export default function BiddingAgent() {
                         return (
                             <div key={s.n} className="flex items-center">
                                 <div className={`flex items-center text-[9px] font-bold uppercase tracking-widest px-2 py-1.5 rounded-full border transition-all ${state === 'active' ? 'bg-orange-500 text-white border-orange-500' :
-                                        state === 'done' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
-                                            'bg-zinc-100 text-zinc-400 border-zinc-200'
+                                    state === 'done' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                                        'bg-zinc-100 text-zinc-400 border-zinc-200'
                                     }`}>
                                     {state === 'done' ? <CheckCircle size={9} className="mr-1" /> : <Icon size={9} className="mr-1" />}
                                     {s.label}
@@ -380,9 +427,9 @@ export default function BiddingAgent() {
                                     {vol.sections?.map((sec, si) => (
                                         <div key={si} className="bg-white border border-emerald-100 rounded-sm px-2 py-1 flex items-center text-[10px]">
                                             <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${sec.type === 'narrative' ? 'bg-blue-400' :
-                                                    sec.type === 'table' ? 'bg-purple-400' :
-                                                        sec.type === 'form' ? 'bg-orange-400' :
-                                                            'bg-amber-400'
+                                                sec.type === 'table' ? 'bg-purple-400' :
+                                                    sec.type === 'form' ? 'bg-orange-400' :
+                                                        'bg-amber-400'
                                                 }`}></span>
                                             <span className="text-zinc-600 truncate">{sec.order}. {sec.title}</span>
                                             <span className="ml-auto text-zinc-400 text-[8px]">{sec.type}</span>
@@ -470,9 +517,9 @@ export default function BiddingAgent() {
                         <div className="grid grid-cols-2 gap-1.5 max-h-80 overflow-y-auto">
                             {genProgress.sections.map((sec, i) => (
                                 <div key={i} className={`flex items-center text-[10px] px-2 py-1.5 rounded-sm border ${sec.status === 'generating' ? 'bg-orange-50 border-orange-200 text-orange-700' :
-                                        sec.status === 'error' ? 'bg-red-50 border-red-200 text-red-600' :
-                                            sec.status === 'placeholder' ? 'bg-amber-50 border-amber-200 text-amber-700' :
-                                                'bg-emerald-50 border-emerald-200 text-emerald-700'
+                                    sec.status === 'error' ? 'bg-red-50 border-red-200 text-red-600' :
+                                        sec.status === 'placeholder' ? 'bg-amber-50 border-amber-200 text-amber-700' :
+                                            'bg-emerald-50 border-emerald-200 text-emerald-700'
                                     }`}>
                                     {sec.status === 'generating' ? <Loader2 size={10} className="mr-1.5 animate-spin" /> :
                                         sec.status === 'error' ? <XCircle size={10} className="mr-1.5" /> :
@@ -493,8 +540,8 @@ export default function BiddingAgent() {
                 <div className="space-y-4 zoom-in">
                     {/* 整体状态 */}
                     <div className={`border rounded-sm p-4 shadow-sm ${verification.overall_status === 'PASS' ? 'bg-emerald-50 border-emerald-200' :
-                            verification.overall_status === 'WARNING' ? 'bg-amber-50 border-amber-200' :
-                                'bg-red-50 border-red-200'
+                        verification.overall_status === 'WARNING' ? 'bg-amber-50 border-amber-200' :
+                            'bg-red-50 border-red-200'
                         }`}>
                         <div className="flex items-center justify-between">
                             <div className="flex items-center space-x-3">
@@ -512,8 +559,8 @@ export default function BiddingAgent() {
                             </div>
                             <div className="text-right">
                                 <div className={`text-2xl font-bold font-mono ${verification.overall_score >= 80 ? 'text-emerald-600' :
-                                        verification.overall_score >= 50 ? 'text-amber-600' :
-                                            'text-red-600'
+                                    verification.overall_score >= 50 ? 'text-amber-600' :
+                                        'text-red-600'
                                     }`}>{verification.overall_score}</div>
                                 <div className="text-[9px] text-zinc-400">校验分数</div>
                             </div>
