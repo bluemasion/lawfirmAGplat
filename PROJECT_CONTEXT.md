@@ -2,7 +2,7 @@
 
 > **用途**：每次开新会话时先读此文档，获取项目完整上下文。开发过程中定期回写重要决策和进展。
 >
-> **最后更新**：2026-03-12 17:35
+> **最后更新**：2026-03-17 16:40
 
 ---
 
@@ -55,6 +55,8 @@
 | 模型 | 用途 | 说明 | 状态 |
 |------|------|------|------|
 | **BAAI/bge-small-zh-v1.5** | 文档 Embedding + 章节分类 | 95MB, 512维, 12.4ms/条, 分类90.9%准确率 | **✅ 已部署** |
+| **Qwen2.5-32B-Instruct** | 叙述方案生成 (Phase 3) | 64GB FP16, GB10本地部署, 替代Qwen-Max API | **⚙️ 规划中** |
+| **Qwen2.5-7B-Instruct** | 结构提取专用 (Phase 3) | QLoRA微调, 50对数据, GB10本地部署 | **⚙️ 规划中** |
 | BAAI/bge-large-zh-v1.5 | Embedding 升级 | 1.3GB, 1024维, 更高精度 | 待切换 |
 | Legal-BERT (微调) | NER 脱敏 | 必须本地，延迟 <10ms | 待启用 |
 | PaddleOCR / PP-Structure | 底稿凭证 OCR | 结构化提取表格/数据 | 待启用 |
@@ -77,7 +79,7 @@
 | 证券底稿核查 | 一致性推理、异常检测 | OCR (PaddleOCR)、NER | 文件树导航、证据链接 |
 | 高保真翻译 | 翻译生成 | 版式感知 (LayoutLMv3) | 术语库 CRUD、XML 重构 |
 | 利冲检索 | — | Embedding 语义搜索 | 知识图谱、实体链接、规则引擎 |
-| 智能投标 | 叙述型方案生成 + 需求理解 | **BGE Embedding** (章节分类 + 模板匹配) | 代码模板填充(table/form) + RAG数据 + 模板库 |
+| 智能投标 | 叙述方案生成(Qwen2.5-32B本地) + 需求理解(7B QLoRA微调) | **BGE Embedding** (章节分类 + 模板匹配 + Self-RAG) | 代码模板填充(table/form) + RAG数据 + 模板库 + 历史标书向量库 |
 | NER 网关 | — | Legal-BERT | De-ID/Re-ID 映射表 |
 | RAG 知识库 | 回答生成 | Embedding | 向量库、检索管线 |
 | Copilot | 对话生成 | — | 上下文管理、VPC 路由 |

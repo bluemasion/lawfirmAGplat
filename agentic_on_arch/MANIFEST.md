@@ -3,7 +3,7 @@
 > **用途**：每次开发会话前必读此文件，获取当前项目的技术版本、依赖库和模块结构。
 > 新增或变更 lib/组件时，必须同步回写本文件。
 >
-> **最后更新**：2026-03-16 16:10
+> **最后更新**：2026-03-17 16:40
 
 ---
 
@@ -152,6 +152,8 @@
 | Embedding 服务 | app/core/rag/embedding_service.py | ✅ Phase 2: BGE-Small-zh 单例服务 |
 | 章节分类器 | app/core/rag/section_classifier.py | ✅ Phase 2: Zero-Shot 分类 (90.9% 准确率) |
 | RAG 管道 | app/core/rag/pipeline.py | ✅ Phase 2: 真实 BGE Embedding (替换零向量) |
+| 招标自检索 | app/core/rag/tender_index.py | ✅ Phase 2: 内存向量索引 (Self-RAG, 43 chunks) |
+| 训练数据准备 | scripts/prepare_training_data.py | ✅ Phase 3: 批量处理成对招/投标文档 → JSONL |
 | 日志 | app/utils/logger.py | ✅ loguru |
 
 ---
@@ -165,10 +167,12 @@
 | OCR 服务 | app/core/ocr/ | Phase 2 |
 | 投标多模型校验 | app/core/skills/builtin/ | Phase 2 — DeepSeek+GLM-4 交叉审阅 |
 | 向量数据库集成 | app/core/rag/ | Phase 3 — pgvector/ChromaDB |
+| 本地大模型部署 | deploy/ | Phase 3 — vLLM + Qwen2.5-32B/7B on GB10 |
+| QLoRA 微调 | scripts/train_structure_model.py | Phase 3 — 结构提取专用模型 |
+| 历史标书 RAG | app/core/rag/historical_index.py | Phase 3 — 50份标书向量库 |
 | 定时任务 | app/tasks/scheduler.py | Phase 2 |
 | WebSocket | app/websocket/events.py | Phase 2 |
 | Docker | docker/ | Phase 3 |
-| 测试 | tests/ | Phase 3 |
 
 ---
 
@@ -189,3 +193,5 @@
 | 2026-03-12 | **本地算法模型**: BGE-Small-zh-v1.5 (95MB) 部署 — embedding_service.py (单例服务), section_classifier.py (Zero-Shot分类90.9%准确率), pipeline.py(真实Embedding), requirement_extraction(分类器校正LLM类型), template_store(向量相似度匹配) | AI |
 | 2026-03-12 | **招标自检索 (Self-RAG)**: tender_index.py (内存向量索引, 43 chunks), bidding.py parse-structure构建索引+结构校验, generate-full narrative章节从招标文件检索top-5相关段落作为reference_data | AI |
 | 2026-03-16 | **qwen.py 修复**: 适配 DashScope SDK 双响应格式 (output.choices vs output.text) + null-safety + 错误日志; Self-RAG 端到端测试通过 (50 sections → 54页 .docx) | AI |
+| 2026-03-17 | **Phase 3 规划**: 本地模型部署方案确定 — GB10 (128GB) + Qwen2.5-32B(方案生成) + Qwen2.5-7B QLoRA微调(结构提取), 全本地化不调API | AI |
+| 2026-03-17 | **训练数据准备脚本**: scripts/prepare_training_data.py — 批量处理50对文档, 输出 structure_pairs.jsonl + narrative_chunks.jsonl + rag_corpus.jsonl | AI |
