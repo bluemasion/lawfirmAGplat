@@ -30,3 +30,5 @@ uploads/*
 logs/
 *.log
 models/
+training_data/
+data/paired_docs/
