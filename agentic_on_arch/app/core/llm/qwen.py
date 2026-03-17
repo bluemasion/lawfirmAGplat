@@ -25,7 +25,19 @@ class QwenLLM(BaseLLM):
                 ],
                 result_format="message",
             )
-            return response.output.choices[0].message.content
+            # Safety: check for errors first
+            if response.status_code != 200:
+                raise RuntimeError(f"Qwen API error {response.status_code}: {response.message}")
+            if not response.output:
+                raise RuntimeError(f"Qwen returned empty output. Full response: {response}")
+            # Handle both response formats:
+            # Newer SDK: output.text (choices=null)
+            # Older SDK: output.choices[0].message.content
+            if response.output.choices:
+                return response.output.choices[0].message.content
+            if hasattr(response.output, 'text') and response.output.text:
+                return response.output.text
+            raise RuntimeError(f"Qwen response has no text or choices: {response.output}")
         return await loop.run_in_executor(None, _call)
 
     async def stream(self, prompt: str, system: str = "", **kwargs) -> AsyncGenerator[str, None]:
@@ -51,8 +63,13 @@ class QwenLLM(BaseLLM):
                     incremental_output=True,
                 )
                 for response in responses:
-                    if response.output and response.output.choices:
-                        chunk = response.output.choices[0].message.content
+                    if response.output:
+                        if response.output.choices:
+                            chunk = response.output.choices[0].message.content
+                        elif response.output.text:
+                            chunk = response.output.text
+                        else:
+                            continue
                         loop.call_soon_threadsafe(queue.put_nowait, chunk)
             except Exception as e:
                 loop.call_soon_threadsafe(queue.put_nowait, f"[错误] {str(e)}")

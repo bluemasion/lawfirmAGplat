@@ -3,7 +3,7 @@
 > **用途**：每次开发会话前必读此文件，获取当前项目的技术版本、依赖库和模块结构。
 > 新增或变更 lib/组件时，必须同步回写本文件。
 >
-> **最后更新**：2026-03-12 17:35
+> **最后更新**：2026-03-16 16:10
 
 ---
 
@@ -188,3 +188,4 @@
 | 2026-03-12 | **Phase 2**: 模板库 + 内容生成重构 — template_store.py (CRUD+匹配), data_retrieval.py (RAG数据层), content_generation.py 重构(5种表单+8种表格代码模板, 仅narrative用LLM), 4个模板API端点, 前端方法标签+存为模板 | AI |
 | 2026-03-12 | **本地算法模型**: BGE-Small-zh-v1.5 (95MB) 部署 — embedding_service.py (单例服务), section_classifier.py (Zero-Shot分类90.9%准确率), pipeline.py(真实Embedding), requirement_extraction(分类器校正LLM类型), template_store(向量相似度匹配) | AI |
 | 2026-03-12 | **招标自检索 (Self-RAG)**: tender_index.py (内存向量索引, 43 chunks), bidding.py parse-structure构建索引+结构校验, generate-full narrative章节从招标文件检索top-5相关段落作为reference_data | AI |
+| 2026-03-16 | **qwen.py 修复**: 适配 DashScope SDK 双响应格式 (output.choices vs output.text) + null-safety + 错误日志; Self-RAG 端到端测试通过 (50 sections → 54页 .docx) | AI |
