@@ -1,26 +1,55 @@
 """Template filling skill — fill structured data into templates."""
 
+import json
+import os
 from typing import Any, Dict, List, Optional
 from app.core.skills.base import BaseSkill
 from app.utils.logger import logger
 
 
-# Default company data template — can be overridden at runtime
-DEFAULT_COMPANY_DATA = {
-    "company_name": "[待补充：律所名称]",
-    "license_no": "[待补充：执业许可证号]",
-    "legal_rep": "[待补充：法定代表人]",
-    "address": "[待补充：律所地址]",
-    "phone": "[待补充：联系电话]",
-    "fax": "[待补充：传真号码]",
-    "email": "[待补充：电子邮箱]",
-    "bank_name": "[待补充：开户银行]",
-    "bank_account": "[待补充：银行账号]",
-    "registered_capital": "[待补充：注册资本]",
-    "established_year": "[待补充：成立年份]",
-    "lawyer_count": "[待补充：律师人数]",
-    "partner_count": "[待补充：合伙人人数]",
+_COMPANY_DATA_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "..", "data", "company", "company_profile.json"
+)
+
+# Field labels for placeholder generation when data is missing
+_FIELD_LABELS = {
+    "company_name": "律所名称",
+    "license_no": "执业许可证号",
+    "legal_rep": "法定代表人",
+    "address": "律所地址",
+    "phone": "联系电话",
+    "fax": "传真号码",
+    "email": "电子邮箱",
+    "bank_name": "开户银行",
+    "bank_account": "银行账号",
+    "registered_capital": "注册资本",
+    "established_year": "成立年份",
+    "lawyer_count": "律师人数",
+    "partner_count": "合伙人人数",
 }
+
+
+def _load_company_data() -> Dict[str, str]:
+    """Load company data from JSON file, with placeholder fallbacks."""
+    data = {}  # type: Dict[str, str]
+    # Try to load from file
+    if os.path.exists(_COMPANY_DATA_PATH):
+        try:
+            with open(_COMPANY_DATA_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to load company_profile.json: {e}")
+
+    # Fill missing fields with placeholders
+    result = {}
+    for key, label in _FIELD_LABELS.items():
+        value = data.get(key, "")
+        result[key] = value if value else f"[待补充：{label}]"
+    return result
+
+
+# For backward compatibility
+DEFAULT_COMPANY_DATA = _load_company_data()
 
 
 class TemplateFillingSkill(BaseSkill):
