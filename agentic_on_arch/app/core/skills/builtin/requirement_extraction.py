@@ -98,6 +98,43 @@ SECTION_EXTRACTION_PROMPT = """请分析以下招标文件的某个章节，提�
 只输出 JSON，不要额外文字。"""
 
 
+# ── V2: Batch classify prompt (LLM only classifies, doesn't generate structure) ──
+
+BATCH_CLASSIFY_SYSTEM = """你是招标文件分析专家。你的任务是对招标文件的章节标题进行分类标注。
+你必须输出严格的 JSON 格式，不要包含任何其他内容。"""
+
+BATCH_CLASSIFY_PROMPT = """以下是从招标文件中提取的原始章节标题列表。
+请为每个标题标注两个信息：
+1. type: 投标文件中该章节应该用什么形式呈现
+   - narrative: 需要撰写叙述性内容（如方案、说明、承诺等）
+   - table: 需要用表格呈现（如报价表、业绩一览表、人员配置表等）
+   - form: 需要用固定格式表单（如投标函、声明函、承诺书等）
+   - qualification: 需要提供资质证明文件（如营业执照、执业证等）
+2. content_hints: 根据招标文件上下文，该章节在投标文件中应该包含什么内容（简要描述）
+
+【招标文件原文参考】
+{tender_context}
+
+【章节标题列表】
+{section_list}
+
+请输出 JSON 数组，格式如下：
+[
+  {{
+    "order": 1,
+    "title": "原始标题（必须与上面的标题完全一致，不要修改）",
+    "type": "narrative|table|form|qualification",
+    "content_hints": "该章节应包含的内容描述",
+    "data_fields": ["需要填写的具体数据字段"]
+  }}
+]
+
+重要：
+- title 必须和输入的标题完全一致，一字不改
+- 每个标题都必须有对应的输出项
+- 只输出 JSON 数组，不要额外文字"""
+
+
 def _safe_parse_json(text: str) -> Any:
     """Try to parse JSON from LLM output, handling common issues."""
     text = text.strip()
@@ -144,6 +181,7 @@ class RequirementExtractionSkill(BaseSkill):
             raw_text (str): Full text of the tender document
             sections (List[Dict]): Parsed sections from tender_parsing
             llm_provider (str, optional): Which LLM to use (default: "qwen")
+            mode (str): 'structure' (V2, default) or 'legacy' (V1)
 
         Returns:
             Dict: Structured tender requirements JSON
@@ -151,34 +189,177 @@ class RequirementExtractionSkill(BaseSkill):
         raw_text = params.get("raw_text", "")
         sections = params.get("sections", [])
         llm_provider = params.get("llm_provider", "qwen")
+        mode = params.get("mode", "structure")
 
         if not raw_text and not sections:
             raise ValueError("Either raw_text or sections must be provided")
 
         llm = get_llm(llm_provider)
-        logger.info(f"Extracting requirements using {llm.get_model_name()}")
+        logger.info(f"Extracting requirements using {llm.get_model_name()}, mode={mode}")
 
-        # Strategy: if text is short enough, send all at once.
-        # Otherwise, split by sections and merge.
-        text_length = len(raw_text)
-
-        if text_length <= self.MAX_CHUNK_SIZE:
-            # Single-pass extraction
-            result = await self._extract_full(llm, raw_text)
+        if mode == "structure" and sections:
+            # ── V2: Use original section titles from tender_parsing ──
+            # LLM only classifies types + extracts content_hints
+            result = await self._structure_from_sections(llm, sections, raw_text)
         else:
-            # Multi-pass: extract per-section, then merge
-            result = await self._extract_by_sections(llm, sections, raw_text)
+            # ── V1 Legacy: LLM generates the entire structure ──
+            text_length = len(raw_text)
+            if text_length <= self.MAX_CHUNK_SIZE:
+                result = await self._extract_full(llm, raw_text)
+            else:
+                result = await self._extract_by_sections(llm, sections, raw_text)
 
         if result is None:
-            # Fallback: create structure from parsed sections
             result = self._fallback_from_sections(sections)
 
         # Post-LLM: refine section types using local classifier (90.9% accuracy)
         result = self._refine_section_types(result)
 
+        total_sections = sum(len(v.get('sections', [])) for v in result.get('volumes', []))
         logger.info(f"Extraction complete: {len(result.get('volumes', []))} volumes, "
-                     f"{sum(len(v.get('sections', [])) for v in result.get('volumes', []))} sections")
+                     f"{total_sections} sections (mode={mode})")
         return result
+
+    def _filter_bid_sections(self, sections: List[Dict]) -> List[Dict]:
+        """Filter tender_parsing sections to keep only bid-relevant headings.
+
+        tender_parsing extracts ALL headings, including instructional text from
+        the tender document itself (e.g. "投标人应当按照招标文件的要求编制投标文件").
+        We only want actual bid document section titles.
+
+        Filters:
+        1. Title length <= 60 chars (longer = paragraph text, not heading)
+        2. No duplicate titles
+        3. Skip tender instruction patterns
+        """
+        import re
+
+        # Patterns that indicate tender instructions (not bid sections)
+        SKIP_PATTERNS = [
+            r'投标人应当',
+            r'投标人递交',
+            r'投标人没有',
+            r'招标人有权',
+            r'招标人不予',
+            r'投标文件应当使用不褪色',
+            r'应当按照招标文件',
+            r'应当认真阅读',
+            r'并加盖单位公章',
+        ]
+        skip_regex = re.compile('|'.join(SKIP_PATTERNS))
+
+        MAX_TITLE_LEN = 60
+        seen_titles = set()  # type: set
+        filtered = []
+
+        for sec in sections:
+            title = sec.get("title", "").strip()
+            if not title:
+                continue
+
+            # Skip titles that are too long (paragraph text, not headings)
+            if len(title) > MAX_TITLE_LEN:
+                continue
+
+            # Skip tender instruction patterns
+            if skip_regex.search(title):
+                continue
+
+            # Skip duplicates
+            if title in seen_titles:
+                continue
+            seen_titles.add(title)
+
+            filtered.append(sec)
+
+        logger.info(f"Section filter: {len(sections)} → {len(filtered)} "
+                     f"(removed {len(sections) - len(filtered)} non-bid sections)")
+        return filtered
+
+    async def _structure_from_sections(self, llm, sections: List[Dict],
+                                       raw_text: str) -> Dict:
+        """V2: Build structure directly from parsed sections, LLM only classifies.
+
+        Instead of asking LLM to generate the directory structure (which causes
+        title drift), we use the exact titles from tender_parsing and only ask
+        LLM to classify each section's type and extract content hints.
+        """
+        logger.info(f"V2 structure mode: {len(sections)} raw sections from tender_parsing")
+
+        # Step 1: Filter to bid-relevant sections only
+        sections = self._filter_bid_sections(sections)
+
+        # Step 2: Build section list for the LLM prompt
+        section_lines = []
+        for i, sec in enumerate(sections, 1):
+            title = sec.get("title", f"第{i}节")
+            section_lines.append(f"{i}. {title}")
+
+        section_list_text = "\n".join(section_lines)
+
+        # Use first 8000 chars of raw text as context for classification
+        tender_context = raw_text[:8000] if raw_text else "暂无原文"
+
+        prompt = BATCH_CLASSIFY_PROMPT.format(
+            tender_context=tender_context,
+            section_list=section_list_text,
+        )
+
+        # Step 3: LLM batch classification
+        try:
+            response = await llm.generate(prompt, system=BATCH_CLASSIFY_SYSTEM)
+            classifications = _safe_parse_json(response)
+        except Exception as e:
+            logger.error(f"LLM classification failed: {e}")
+            classifications = None
+
+        # Build classification lookup: title -> {type, content_hints, data_fields}
+        classify_map = {}  # type: Dict[str, Dict]
+        if classifications and isinstance(classifications, list):
+            for item in classifications:
+                title = item.get("title", "")
+                if title:
+                    classify_map[title] = {
+                        "type": item.get("type", "narrative"),
+                        "content_hints": item.get("content_hints", ""),
+                        "data_fields": item.get("data_fields", []),
+                    }
+            logger.info(f"LLM classified {len(classify_map)}/{len(sections)} sections")
+        else:
+            logger.warning("LLM classification returned no results, using heuristic types")
+
+        # Step 4: Build final structure using original titles + LLM classifications
+        bid_sections = []
+        for i, sec in enumerate(sections):
+            title = sec.get("title", f"第{i+1}节")
+            original_type = sec.get("section_type", "narrative")
+            content = sec.get("content", "")
+
+            # Try to get LLM classification for this title
+            classification = classify_map.get(title, {})
+
+            # Use LLM type if available, otherwise use tender_parsing's heuristic
+            sec_type = classification.get("type", original_type)
+            hints = classification.get("content_hints", content[:100] if content else "")
+            fields = classification.get("data_fields", [])
+
+            bid_sections.append({
+                "order": i + 1,
+                "title": title,  # Original title, never modified
+                "type": sec_type,
+                "required": True,
+                "content_hints": hints,
+                "data_fields": fields,
+            })
+
+        return {
+            "bid_title": "投标文件",
+            "volumes": [{"name": "投标文件", "sections": bid_sections}],
+            "qualification_requirements": [],
+            "format_requirements": {},
+            "evaluation_criteria": [],
+            "deadline_info": {},
+        }
 
     async def _extract_full(self, llm, raw_text: str) -> Any:
         """Single-pass extraction for shorter documents."""

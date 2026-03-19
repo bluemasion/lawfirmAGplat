@@ -144,7 +144,7 @@
 | 投标文件 API | app/api/bidding.py | ✅ /parse-structure + /generate-full + /verify + /download + /tasks, 支持 llm_provider 参数切换 (qwen/local/ollama/vllm) |
 | 公司数据 API | app/api/company.py | ✅ 10 个 CRUD 端点 (profile/team/projects/qualifications) |
 | 招标解析 Skill | app/core/skills/builtin/tender_parsing.py | ✅ python-docx 结构提取 + 中文标题识别 |
-| 需求提取 Skill | app/core/skills/builtin/requirement_extraction.py | ✅ LLM 需求结构化 (单/多轮提取+合并) |
+| 需求提取 Skill | app/core/skills/builtin/requirement_extraction.py | ✅ V2: 原文目录提取 + LLM批量分类 + 智能过滤 (555→78章节) |
 | 内容生成 Skill | app/core/skills/builtin/content_generation.py | ✅ Phase 2: 8种表单+9种表格代码模板, narrative→LLM(增强prompt), 团队详细简历+业绩详表 |
 | 模板填充 Skill | app/core/skills/builtin/template_filling.py | ✅ 动态读取 company_profile.json + 模糊匹配 |
 | 文档组装 Skill | app/core/skills/builtin/docx_assembly.py | ✅ Markdown→Word 转换 + 中文字体 + 红色占位符 |
@@ -205,3 +205,4 @@
 | 2026-03-18 | **全链路本地验证**: Ollama qwen2.5:3b CPU → 占位符从62%→17%, 总耗时34min | AI |
 | 2026-03-19 | **Qwen API key 更新**: sk-d5e3...476b, Qwen-Max 管线重新验证通过 (32%, 15min) | AI |
 | 2026-03-19 | **P2 准确性优化**: prompt增强(禁止编造+逐项回应), 新增4种表单模板(投标一览表/履约保证金/投标保证金/控股关系表), 团队表增加详细简历, 业绩表增加7列, 扩展关键词匹配 | AI |
+| 2026-03-19 | **S1 结构精确对应**: requirement_extraction.py V2改造 — 原文目录提取+LLM批量分类+智能过滤(555→78章节), 占位符率33%→20%, 结构准确率100% | AI |
