@@ -1,6 +1,6 @@
 """投标文件生成 API — 上传解析 + Qwen 生成标书框架，全链路打通。"""
 
-from fastapi import APIRouter, UploadFile, File
+from fastapi import APIRouter, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -286,7 +286,8 @@ class FullBiddingRequest(BaseModel):
 
 
 @router.post("/parse-structure")
-async def parse_tender_structure(file: UploadFile = File(...)):
+async def parse_tender_structure(file: UploadFile = File(...),
+                                  llm_provider: str = Form("qwen")):
     """上传招标文件 → 解析结构 → 提取投标要求 JSON
 
     Returns structured requirements that define the bid document structure.
@@ -294,7 +295,7 @@ async def parse_tender_structure(file: UploadFile = File(...)):
     try:
         file_bytes = await file.read()
         filename = file.filename or "unknown.docx"
-        logger.info(f"[Full Pipeline] Parse structure: {filename} ({len(file_bytes)} bytes)")
+        logger.info(f"[Full Pipeline] Parse structure: {filename} ({len(file_bytes)} bytes), LLM={llm_provider}")
 
         if not filename.endswith('.docx'):
             return {"success": False, "message": "目前仅支持 .docx 格式招标文件"}
@@ -312,7 +313,7 @@ async def parse_tender_structure(file: UploadFile = File(...)):
         extract_result = await _extractor.execute({
             "raw_text": parse_result["raw_text"],
             "sections": parse_result["sections"],
-            "llm_provider": "qwen",
+            "llm_provider": llm_provider,
         })
 
         # Store task for later use

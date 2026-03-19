@@ -14,38 +14,46 @@ from app.utils.logger import logger
 
 # ── LLM Prompts (only used for narrative sections) ──
 
-SECTION_GENERATION_SYSTEM = """你是一位资深的律所投标文件撰写专家。你的任务是根据招标要求和参考资料，
-为投标文件的指定章节撰写专业、精准的内容。
+SECTION_GENERATION_SYSTEM = """你是一位资深的律所投标文件撰写专家，拥有10年以上政府采购和企业招标经验。
+你的任务是根据招标要求和参考资料，为投标文件的指定章节撰写专业、精准的内容。
 
-写作要求：
-1. 语言正式、专业，符合法律文书规范
-2. 如果提供了参考资料，必须基于参考资料撰写，不要编造
-3. 涉及具体数据（公司名、人名、金额、日期等）时，如果没有提供真实数据，
-   用 [待补充：xxx] 格式标注，不要编造假数据
-4. 内容要完整覆盖招标要求的每一项
-5. 使用标准投标文件的格式和措辞"""
+# 核心规则（必须严格遵守）
+
+1. **禁止编造**：不得编造律师姓名、资质编号、案例名称、金额等具体事实数据。
+   如无真实数据，必须用 [待补充：xxx] 格式标注。
+2. **逐项回应**：招标要求的每一条必须在投标内容中有对应回应段落，不得遗漏。
+3. **引用参考**：如果提供了参考资料（来自招标原文），必须基于参考资料的具体要求
+   来组织内容，不要泛泛而谈。
+4. **使用真实律所信息**：提供的律所基本信息中的数据是真实的，直接引用即可。
+
+# 格式规范
+- 正式法律文书语言，避免口语化
+- 段落清晰，逻辑分明
+- 引用法律法规时精确到条款
+- 方案类内容需有：目标→方法→保障措施→时间安排的完整逻辑"""
 
 NARRATIVE_PROMPT = """请为投标文件撰写以下章节的内容：
 
 【章节标题】
 {section_title}
 
-【招标要求】
+【招标要求（必须逐项回应）】
 {content_hints}
 
-【参考资料】
+【来自招标文件的原文参考】
 {reference_data}
 
-【律所基本信息】
+【我方律所信息（真实数据，可直接引用）】
 {company_info}
 
 {skeleton_hint}
 
-请直接输出该章节的正文内容，使用 Markdown 格式：
-- 二级标题用 ## 
-- 三级标题用 ###
-- 表格用 Markdown 表格
-- 需要填写的具体数据如果没有，用 [待补充：字段名] 标注"""
+# 输出要求
+1. 直接输出该章节的正文内容
+2. 使用 Markdown 格式（## 二级标题，### 三级标题，| 表格）
+3. 对招标要求中的每一条核心要求，都要有明确的回应段落
+4. 没有真实数据的字段用 [待补充：字段名] 标注
+5. 内容应具体、有针对性，不得使用空泛的承诺性语句"""
 
 
 # ── Built-in Form Templates (code, no LLM) ──
@@ -147,18 +155,54 @@ FORM_TEMPLATES = {
 
 | 项目 | 信息 |
 |------|------|
-| 企业名称 | {company_name} |
-| 统一社会信用代码 | [待补充：统一社会信用代码] |
-| 企业类型 | [待补充：小型/微型/中型] |
-| 从业人员 | {total_staff}人 |
-| 营业收入 | [待补充：上年度营业收入] |
-| 资产总额 | [待补充：资产总额] |
-
-以上企业，不属于大企业的分支机构，不存在控股股东为大企业的情形，也不存在与大企业的负责人为同一人的情形。
+{fields}
 
 本企业对上述声明内容的真实性负责。如有虚假，将依法承担相应责任。
 
 声明单位（盖章）：{company_name}
+日期：[待补充：日期]
+""",
+
+    "投标一览表": """## 投标一览表
+
+| 序号 | 项目 | 内容 |
+|------|------|------|
+| 1 | 投标人名称 | {company_name} |
+| 2 | 投标总价（人民币） | [待补充：投标总价] |
+| 3 | 投标总价（大写） | [待补充：大写金额] |
+| 4 | 服务期限 | [待补充：服务期限] |
+| 5 | 质量标准 | 符合国家法律法规及行业标准 |
+| 6 | 投标有效期 | [待补充：投标有效期] |
+| 7 | 是否接受招标文件的全部条款 | 是 |
+
+投标人（盖章）：{company_name}
+法定代表人或其授权代理人（签字）：
+日期：[待补充：投标日期]
+""",
+
+    "履约保证金承诺": """## 履约保证金承诺书
+
+致：[待补充：招标方名称]
+
+{company_name}就参加[待补充：项目名称]投标事宜，郑重承诺如下：
+
+1. 若我方中标，我方将按照招标文件要求，在收到中标通知书后 [待补充：天数] 个工作日内缴纳履约保证金人民币 [待补充：金额] 元。
+2. 在合同履行期间，如因我方原因造成合同无法履行或未按合同约定履行义务的，招标人有权扣除全部或部分履约保证金。
+3. 合同履行完毕后，招标人应在验收合格后 [待补充：天数] 个工作日内，无息退还履约保证金。
+
+投标人（盖章）：{company_name}
+法定代表人或其授权代理人（签字）：
+日期：[待补充：日期]
+""",
+
+    "投标保证金": """## 投标保证金承诺
+
+致：[待补充：招标方名称]
+
+{company_name}了解并承诺：若我方在投标有效期内撤回投标文件，或中标后未按规定签订合同，贵方有权不予退还投标保证金。
+
+投标人（盖章）：{company_name}
+法定代表人或其授权代理人（签字）：
 日期：[待补充：日期]
 """,
 }
@@ -172,32 +216,37 @@ TABLE_TEMPLATES = {
         "generator": "_gen_company_basic_table",
     },
     "报价一览表": {
-        "match_keywords": ["报价一览", "投标报价", "报价汇总"],
+        "match_keywords": ["报价", "一览表", "投标一览", "分项报价"],
         "generator": "_gen_price_overview_table",
     },
-    "分项报价表": {
-        "match_keywords": ["分项报价", "报价明细"],
+    "报价明细表": {
+        "match_keywords": ["报价明细", "费用明细", "分项明细"],
         "generator": "_gen_price_detail_table",
     },
-    "业绩一览表": {
-        "match_keywords": ["业绩一览", "项目业绩", "类似项目", "近三年"],
+    "业绩表": {
+        "match_keywords": ["业绩", "项目经验", "类似项目", "合同业绩", "业绩统计"],
         "generator": "_gen_project_history_table",
     },
-    "人员一览表": {
-        "match_keywords": ["人员一览", "拟投入人员", "团队配置", "人员简历"],
+    "人员配置表": {
+        "match_keywords": ["人员配置", "团队配置", "人员安排", "律师团队", "项目组",
+                         "拟投入", "人员简历", "主要人员", "项目负责人"],
         "generator": "_gen_team_table",
     },
-    "商务偏离表": {
-        "match_keywords": ["商务偏离", "商务条款偏离"],
+    "偏离表": {
+        "match_keywords": ["偏离", "偏差", "响应偏离"],
         "generator": "_gen_deviation_table",
     },
     "技术偏离表": {
-        "match_keywords": ["技术偏差", "技术偏离", "技术规格响应"],
+        "match_keywords": ["技术偏离", "技术偏差", "技术响应"],
         "generator": "_gen_tech_deviation_table",
     },
     "评审索引表": {
         "match_keywords": ["评审索引", "索引表"],
         "generator": "_gen_review_index_table",
+    },
+    "控股关系表": {
+        "match_keywords": ["控股", "管理关系", "股东"],
+        "generator": "_gen_shareholder_table",
     },
 }
 
@@ -369,20 +418,70 @@ class ContentGenerationSkill(BaseSkill):
 """
 
     def _gen_project_history_table(self, title: str, profile: Dict) -> str:
-        projects = self._data_retrieval.get_similar_projects("", 5).get("projects", [])
-        table = DataRetrievalSkill.format_project_table(projects)
-        return f"## {title}\n\n{table}\n"
+        projects = self._data_retrieval.get_similar_projects("", 10).get("projects", [])
+        if not projects:
+            return f"## {title}\n\n暂无业绩数据，请补充。\n"
+
+        lines = [f"## {title}\n"]
+        lines.append("| 序号 | 项目名称 | 委托方 | 服务内容 | 合同金额 | 服务期间 | 项目负责人 |")
+        lines.append("|------|---------|-------|---------|---------|---------|----------|")
+        for i, p in enumerate(projects, 1):
+            name = p.get('project_name', '[待补充]')
+            client = p.get('client', '[待补充]')
+            desc = p.get('description', '')[:30]
+            amount = p.get('contract_amount', '[待补充]')
+            period = f"{p.get('start_date', '?')} 至 {p.get('end_date', '?')}"
+            lead = p.get('lead_lawyer', '[待补充]')
+            lines.append(f"| {i} | {name} | {client} | {desc} | {amount} | {period} | {lead} |")
+
+        lines.append("")
+        lines.append("> 注：以上业绩均为本律所近五年内完成的代表性项目，相关合同文件可供查验。")
+        return "\n".join(lines) + "\n"
 
     def _gen_team_table(self, title: str, profile: Dict) -> str:
-        team = {
-            "partners": self._data_retrieval.get_team_for_project("", 5).get("recommended_team", []),
-        }
-        # Restructure for format_team_table
-        all_members = team["partners"]
-        partners = [m for m in all_members if "合伙人" in m.get("title", "")]
-        seniors = [m for m in all_members if "合伙人" not in m.get("title", "")]
-        table = DataRetrievalSkill.format_team_table({"partners": partners, "senior_lawyers": seniors})
-        return f"## {title}\n\n{table}\n"
+        team_result = self._data_retrieval.get_team_for_project("", 10)
+        all_members = team_result.get("recommended_team", [])
+        if not all_members:
+            return f"## {title}\n\n暂无团队数据，请补充。\n"
+
+        lines = [f"## {title}\n"]
+
+        # Summary table
+        lines.append("### 项目团队一览表\n")
+        lines.append("| 序号 | 姓名 | 职务/职称 | 执业证号 | 专业领域 | 本项目拟担任角色 |")
+        lines.append("|------|------|---------|---------|---------|---------------|")
+        for i, m in enumerate(all_members, 1):
+            name = m.get('name', '[待补充]')
+            title_str = m.get('title', '[待补充]')
+            license_no = m.get('license_no', m.get('bar_number', '[待补充]'))
+            specs = '、'.join(m.get('specialties', [])[:3]) if m.get('specialties') else '[待补充]'
+            role = '项目负责人' if i == 1 else ('主办律师' if i <= 3 else '协办律师')
+            lines.append(f"| {i} | {name} | {title_str} | {license_no} | {specs} | {role} |")
+
+        # Individual resumes
+        lines.append("\n### 主要人员简历\n")
+        for i, m in enumerate(all_members[:5], 1):
+            name = m.get('name', '[待补充]')
+            title_str = m.get('title', '')
+            years = m.get('years_experience', m.get('experience_years', '[待补充]'))
+            specs = '、'.join(m.get('specialties', [])) if m.get('specialties') else '[待补充]'
+            edu = m.get('education', '[待补充：学历]')
+            cases = m.get('representative_cases', m.get('notable_cases', []))
+
+            lines.append(f"#### {i}. {name} — {title_str}\n")
+            lines.append(f"- **执业年限**：{years}年")
+            lines.append(f"- **专业领域**：{specs}")
+            lines.append(f"- **学历**：{edu}")
+            if cases:
+                lines.append(f"- **代表案例**：")
+                for c in cases[:3]:
+                    if isinstance(c, str):
+                        lines.append(f"  - {c}")
+                    elif isinstance(c, dict):
+                        lines.append(f"  - {c.get('name', c.get('case_name', str(c)))}")
+            lines.append("")
+
+        return "\n".join(lines) + "\n"
 
     def _gen_deviation_table(self, title: str, profile: Dict) -> str:
         return f"""## {title}
@@ -420,6 +519,26 @@ class ContentGenerationSkill(BaseSkill):
 | 7 | 项目实施方案 | [待补充：页码] | |
 | 8 | 服务团队配置 | [待补充：页码] | |
 | 9 | 报价文件 | [待补充：页码] | |
+"""
+
+    def _gen_shareholder_table(self, title: str, profile: Dict) -> str:
+        cn = profile.get("company_name", "[待补充：律所名称]")
+        lr = profile.get("legal_rep", "[待补充：法定代表人]")
+        return f"""## {title}
+
+| 项目 | 内容 |
+|------|------|
+| 投标人名称 | {cn} |
+| 法定代表人 | {lr} |
+| 控股股东 | [待补充：控股股东名称] |
+| 实际控制人 | [待补充：实际控制人] |
+| 是否存在控股或管理关系 | [待补充：是/否] |
+| 关联企业名称 | [待补充：关联企业名称（如有）] |
+
+> 本公司郑重声明：以上信息真实、准确，如有隐瞒，愿承担相关法律责任。
+
+投标人（盖章）：{cn}
+日期：[待补充：日期]
 """
 
     # ── Generic fallbacks ──

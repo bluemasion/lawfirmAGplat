@@ -2,7 +2,7 @@
 
 > **用途**：每次开新会话时先读此文档，获取项目完整上下文。开发过程中定期回写重要决策和进展。
 >
-> **最后更新**：2026-03-17 16:40
+> **最后更新**：2026-03-19 14:00
 
 ---
 
@@ -25,7 +25,7 @@
 | 证券底稿核查 | 文件树导航 + NER 日志 + AI 一致性异常预警 + View Evidence Source | 前端 Demo 已有，后端待建 |
 | 高保真翻译 | 双栏对比 + 术语库入口 + 印章版式还原 | 前端 Demo 已有，后端 Phase 4 |
 | 利冲检索 | 5步穿透扫描动画 + 别名识别 + HIGH/LOW 风险分级 + 强制回避建议 | ✅ 前端增强完成 |
-| 智能投标 | **Phase 2 完整管线**：上传招标文件(.docx) → python-docx 结构解析 → Qwen-Max 需求提取 + BGE分类器校正 → 模板匹配(向量相似度) → 4类型分流(table/form→代码模板, narrative→LLM) → python-docx 组装 → 5维校验 | ✅ Phase 2 完成 (8 Skills, 本地模型已部署) |
+| 智能投标 | **Phase 2 完整管线 + 本地LLM支持**：上传招标文件(.docx) → python-docx 结构解析 → Qwen-Max/Ollama 需求提取 + BGE分类器校正 → 模板匹配(向量相似度) → 4类型分流(table/form→代码模板, narrative→LLM) → python-docx 组装 → 5维校验 | ✅ Phase 2 完成 + 本地LLM已验证 + 准确性优化完成 |
 | 算力实例管理 | 实例表格 + Register New Node + Launch Console 终端 | 前端 Demo 已有 |
 | 平台治理中心 | 资源监控(GPU/CPU/RAM/SSD) + 会话审计(Terminate) + NER 沙盒 + 算力账单(占位) | 前端 Demo 已有 |
 | AI Copilot | 悬浮对话面板，VPC 隔离推理 | ✅ 已接入 Qwen-Max 真实 LLM |
@@ -336,6 +336,15 @@ uvicorn app.main:app --reload --port 8000
 | 2026-03-10 | 6 个 Skill 模块编码完成 (tender_parsing/requirement_extraction/content_generation/template_filling/docx_assembly/rule_verification) |
 | 2026-03-10 | 5 个新 API 端点实现 (/parse-structure /generate-full /verify /download /tasks) |
 | 2026-03-11 | 端到端测试通过：中国移动样例 → 14章节生成 → 47KB .docx 输出 → 校验报告 |
+| 2026-03-12 | Phase 2: 模板库+内容生成重构+本地算法模型+Self-RAG |
+| 2026-03-16 | qwen.py 修复 + Self-RAG 端到端测试通过 (50 sections) |
+| 2026-03-17 | Phase 3 规划: 本地模型部署方案 + 训练数据准备脚本 |
+| 2026-03-18 | **产品技术对齐**: 5点共识(全本地/轻量数据层/暂缓微调) |
+| 2026-03-18 | **P0 律所数据管理**: company.py CRUD API + 动态JSON读取 |
+| 2026-03-18 | **Ollama 安装**: v0.18.1 + qwen2.5:3b, 本地管线验证通过 (占位符 62%→17%) |
+| 2026-03-18 | **LocalLLM 适配器**: Ollama + vLLM 双后端 |
+| 2026-03-19 | **Qwen API key 更新**: Qwen-Max 管线验证通过 (32% 占位符, 15min) |
+| 2026-03-19 | **P2 准确性优化**: prompt增强 + 4新表单模板 + 团队/业绩表增强 |
 
 ---
 
@@ -362,15 +371,16 @@ uvicorn app.main:app --reload --port 8000
 
 ## 12. 待办
 
-1. ~~**🔥 投标 Agent 接入 Qwen**~~ ✅ 已完成（15 字段表单 + Qwen SSE 流式 + 8 章节标书框架）
-2. ~~**🔥 投标完整管线 Phase 1**~~ ✅ 已完成（解析→提取→生成→组装→校验，端到端验证通过）
-3. **🔥 投标前端 UI 升级** — BiddingAgent.jsx 4步新流程（上传→确认结构→逐章生成→校验下载）
-4. **投标多模型交叉校验 Phase 2** — DeepSeek + GLM-4 交叉审阅
-5. **RAG 知识库对接** — pgvector 向量检索 + 律所数据接入
-6. GLM-4 key 配置（等客户提供）
-7. 审计日志功能
-8. RBAC 权限体系
-9. 证券底稿核查 Agent 后端对接
+1. ~~**🔥 投标 Agent 接入 Qwen**~~ ✅ 已完成
+2. ~~**🔥 投标完整管线 Phase 1**~~ ✅ 已完成
+3. ~~**P0 律所数据管理**~~ ✅ 已完成 (company.py + template_filling.py 动态JSON)
+4. ~~**P1-A 本地LLM适配**~~ ✅ 已完成 (local.py + Ollama/vLLM 双后端)
+5. ~~**P2 准确性优化**~~ ✅ 已完成 (prompt增强 + 4新模板 + 团队/业绩表增强)
+6. **🔥 投标前端 UI 升级** — BiddingAgent.jsx 对接新后端 API
+7. **历史标书 RAG 范文库** — 等 5 份历史标书数据
+8. **GB10 vLLM 部署** — 等硬件到位, 代码已就绪
+9. 审计日志功能
+10. RBAC 权限体系
 
 ### Git 分支策略
 

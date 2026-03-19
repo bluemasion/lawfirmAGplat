@@ -3,7 +3,7 @@
 > **用途**：每次开发会话前必读此文件，获取当前项目的技术版本、依赖库和模块结构。
 > 新增或变更 lib/组件时，必须同步回写本文件。
 >
-> **最后更新**：2026-03-17 16:40
+> **最后更新**：2026-03-19 14:00
 
 ---
 
@@ -55,9 +55,9 @@
 | 库 | 版本 | 对应模型 | 状态 |
 |----|------|---------|------|
 | anthropic | 0.34.0 | Claude | 已集成 |
-| dashscope | 1.20.0 | Qwen (通义千问) | 已集成 |
+| dashscope | 1.20.0 | Qwen (通义千问) | ✅ 已集成 (sk-d5e3...476b) |
 | zhipuai | 2.1.0 | GLM-4 (智谱) | 已集成 |
-| httpx | 0.27.0 | 通用 HTTP 客户端 | 已集成 |
+| httpx | 0.27.0 | 通用 HTTP 客户端 (LocalLLM) | ✅ 已集成 |
 
 ---
 
@@ -79,6 +79,7 @@
 |------|------|------|------|------|
 | BAAI/bge-small-zh-v1.5 | 95MB | 512 | Embedding + 章节分类 | ✅ 已部署 |
 | BAAI/bge-large-zh-v1.5 | 1.3GB | 1024 | 升级候选 | 待切换 |
+| **qwen2.5:3b (Ollama)** | 1.9GB | — | 本地开发测试 | ✅ 已部署 (Mac CPU) |
 
 ---
 
@@ -133,22 +134,24 @@
 | 对话 API | app/api/chat.py | ✅ SSE 流式 + NER |
 | 知识库 API | app/api/knowledge.py | ✅ 骨架 |
 | 文件 API | app/api/file.py | ✅ 上传 |
-| LLM 适配层 | app/core/llm/ | ✅ Claude/Qwen/GLM-4 |
+| LLM 适配层 | app/core/llm/ | ✅ Claude/Qwen/GLM-4/**LocalLLM(Ollama+vLLM)** |
 | NER 网关 | app/core/ner/ | ✅ regex 规则 |
 | Agent 引擎 | app/core/agent_engine/ | ✅ ReAct 执行器 |
 | Skill 注册 | app/core/skills/ | ✅ 注册中心 + 基类 |
 | RAG 管道 | app/core/rag/ | ✅ 管道骨架 |
 | 认证服务 | app/services/auth_service.py | ✅ JWT + bcrypt |
 | 错误处理 | app/utils/errors.py | ✅ 统一异常 |
-| 投标文件 API | app/api/bidding.py | ✅ /parse + /generate (旧版) + /parse-structure + /generate-full + /verify + /download + /tasks (Phase 1 新管线) |
+| 投标文件 API | app/api/bidding.py | ✅ /parse-structure + /generate-full + /verify + /download + /tasks, 支持 llm_provider 参数切换 (qwen/local/ollama/vllm) |
+| 公司数据 API | app/api/company.py | ✅ 10 个 CRUD 端点 (profile/team/projects/qualifications) |
 | 招标解析 Skill | app/core/skills/builtin/tender_parsing.py | ✅ python-docx 结构提取 + 中文标题识别 |
 | 需求提取 Skill | app/core/skills/builtin/requirement_extraction.py | ✅ LLM 需求结构化 (单/多轮提取+合并) |
-| 内容生成 Skill | app/core/skills/builtin/content_generation.py | ✅ Phase 2: table/form → 代码模板(13种), narrative → LLM |
-| 模板填充 Skill | app/core/skills/builtin/template_filling.py | ✅ 预设数据 + 模糊匹配 |
+| 内容生成 Skill | app/core/skills/builtin/content_generation.py | ✅ Phase 2: 8种表单+9种表格代码模板, narrative→LLM(增强prompt), 团队详细简历+业绩详表 |
+| 模板填充 Skill | app/core/skills/builtin/template_filling.py | ✅ 动态读取 company_profile.json + 模糊匹配 |
 | 文档组装 Skill | app/core/skills/builtin/docx_assembly.py | ✅ Markdown→Word 转换 + 中文字体 + 红色占位符 |
 | 规则校验 Skill | app/core/skills/builtin/rule_verification.py | ✅ 5维校验 (结构/顺序/缺项/合规/质量) |
 | 模板库 Skill | app/core/skills/builtin/template_store.py | ✅ Phase 2: 模板 CRUD + 向量相似度匹配 |
 | 数据检索 Skill | app/core/skills/builtin/data_retrieval.py | ✅ Phase 2: 律所数据 RAG (JSON 后端) |
+| LocalLLM 适配器 | app/core/llm/local.py | ✅ Ollama (localhost:11434) + vLLM (localhost:8081) 双后端 |
 | Embedding 服务 | app/core/rag/embedding_service.py | ✅ Phase 2: BGE-Small-zh 单例服务 |
 | 章节分类器 | app/core/rag/section_classifier.py | ✅ Phase 2: Zero-Shot 分类 (90.9% 准确率) |
 | RAG 管道 | app/core/rag/pipeline.py | ✅ Phase 2: 真实 BGE Embedding (替换零向量) |
@@ -167,7 +170,7 @@
 | OCR 服务 | app/core/ocr/ | Phase 2 |
 | 投标多模型校验 | app/core/skills/builtin/ | Phase 2 — DeepSeek+GLM-4 交叉审阅 |
 | 向量数据库集成 | app/core/rag/ | Phase 3 — pgvector/ChromaDB |
-| 本地大模型部署 | deploy/ | Phase 3 — vLLM + Qwen2.5-32B/7B on GB10 |
+| 本地大模型部署 | deploy/ | Phase 3 — vLLM + Qwen2.5-32B on GB10 (**代码适配已完成**, 等硬件) |
 | QLoRA 微调 | scripts/train_structure_model.py | Phase 3 — 结构提取专用模型 |
 | 历史标书 RAG | app/core/rag/historical_index.py | Phase 3 — 50份标书向量库 |
 | 定时任务 | app/tasks/scheduler.py | Phase 2 |
@@ -195,3 +198,10 @@
 | 2026-03-16 | **qwen.py 修复**: 适配 DashScope SDK 双响应格式 (output.choices vs output.text) + null-safety + 错误日志; Self-RAG 端到端测试通过 (50 sections → 54页 .docx) | AI |
 | 2026-03-17 | **Phase 3 规划**: 本地模型部署方案确定 — GB10 (128GB) + Qwen2.5-32B(方案生成) + Qwen2.5-7B QLoRA微调(结构提取), 全本地化不调API | AI |
 | 2026-03-17 | **训练数据准备脚本**: scripts/prepare_training_data.py — 批量处理50对文档, 输出 structure_pairs.jsonl + narrative_chunks.jsonl + rag_corpus.jsonl | AI |
+| 2026-03-18 | **产品技术对齐**: 5点共识（全本地/轻量数据层/按日标书量优先排序/暂缓微调/补真实数据）| AI |
+| 2026-03-18 | **P0 律所数据管理**: app/api/company.py (10 CRUD端点) + template_filling.py 改为动态读取 company_profile.json | AI |
+| 2026-03-18 | **Ollama 安装**: v0.18.1 + qwen2.5:3b(1.9GB), Mac CPU 推理验证通过 | AI |
+| 2026-03-18 | **LocalLLM 适配器**: app/core/llm/local.py — Ollama(11434)/vLLM(8081) 双后端, httpx 1200s超时 | AI |
+| 2026-03-18 | **全链路本地验证**: Ollama qwen2.5:3b CPU → 占位符从62%→17%, 总耗时34min | AI |
+| 2026-03-19 | **Qwen API key 更新**: sk-d5e3...476b, Qwen-Max 管线重新验证通过 (32%, 15min) | AI |
+| 2026-03-19 | **P2 准确性优化**: prompt增强(禁止编造+逐项回应), 新增4种表单模板(投标一览表/履约保证金/投标保证金/控股关系表), 团队表增加详细简历, 业绩表增加7列, 扩展关键词匹配 | AI |
