@@ -659,6 +659,116 @@ async def delete_template(template_id: str):
     return {"success": True, "data": result}
 
 
+# ── Historical bid document & materials endpoints (S2/S3) ──
+
+@router.post("/upload-historical")
+async def upload_historical_bid(
+    file: UploadFile = File(...),
+    llm_provider: str = Form("qwen"),
+):
+    """上传历史投标文件 → 自动提取简历/业绩/资质 → 入库
+
+    This is the core S2 endpoint. It:
+    1. Saves the uploaded .docx file
+    2. Parses it with bid_document_parser
+    3. Saves extracted materials to material_store
+    4. Returns extraction results for user review
+    """
+    import time as _time
+
+    # Save uploaded file
+    filename = f"historical_{int(_time.time())}_{file.filename}"
+    file_path = os.path.join("uploads", filename)
+    os.makedirs("uploads", exist_ok=True)
+    with open(file_path, "wb") as f:
+        content = await file.read()
+        f.write(content)
+
+    logger.info(f"Historical bid uploaded: {file_path} ({len(content)} bytes)")
+
+    try:
+        # Parse and extract materials
+        from app.core.skills.builtin.bid_document_parser import BidDocumentParserSkill
+        parser = BidDocumentParserSkill()
+        materials = await parser.execute({
+            "file_path": file_path,
+            "llm_provider": llm_provider,
+        })
+
+        # Save to material store
+        from app.core.skills.builtin.material_store import get_material_store
+        store = get_material_store()
+        save_counts = store.save_materials(materials)
+
+        return {
+            "success": True,
+            "data": {
+                "source_file": filename,
+                "extracted": {
+                    "resumes": len(materials.get("resumes", [])),
+                    "projects": len(materials.get("projects", [])),
+                    "qualifications": len(materials.get("qualifications", [])),
+                    "narrative_chunks": len(materials.get("narrative_chunks", [])),
+                },
+                "saved": save_counts,
+                "materials": {
+                    "resumes": materials.get("resumes", []),
+                    "projects": materials.get("projects", []),
+                    "qualifications": materials.get("qualifications", []),
+                },
+                "total_store": store.get_summary(),
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Historical bid processing failed: {e}")
+        return {"success": False, "message": f"处理失败: {str(e)}"}
+
+
+@router.get("/materials")
+async def get_materials():
+    """获取所有已提取的素材"""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    return {"success": True, "data": store.get_all_materials()}
+
+
+@router.get("/materials/summary")
+async def get_materials_summary():
+    """获取素材库概要统计"""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    return {"success": True, "data": store.get_summary()}
+
+
+@router.get("/materials/search")
+async def search_materials(
+    q: str = "",
+    type: str = "all",
+):
+    """搜索素材库
+
+    Query params:
+        q: 搜索关键词
+        type: resumes | projects | qualifications | narratives | all
+    """
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+
+    results = {}
+    if type in ("all", "resumes"):
+        results["resumes"] = store.search_resumes(query=q)
+    if type in ("all", "projects"):
+        results["projects"] = store.search_projects(query=q)
+    if type in ("all", "qualifications"):
+        results["qualifications"] = store.get_qualifications()
+    if type in ("all", "narratives") and q:
+        results["narratives"] = await store.search_narratives(query=q)
+
+    return {"success": True, "data": results}
+
+
 def _sse(data: dict) -> str:
     """Format data as SSE event."""
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+

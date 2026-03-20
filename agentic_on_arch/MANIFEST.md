@@ -206,3 +206,6 @@
 | 2026-03-19 | **Qwen API key 更新**: sk-d5e3...476b, Qwen-Max 管线重新验证通过 (32%, 15min) | AI |
 | 2026-03-19 | **P2 准确性优化**: prompt增强(禁止编造+逐项回应), 新增4种表单模板(投标一览表/履约保证金/投标保证金/控股关系表), 团队表增加详细简历, 业绩表增加7列, 扩展关键词匹配 | AI |
 | 2026-03-19 | **S1 结构精确对应**: requirement_extraction.py V2改造 — 原文目录提取+LLM批量分类+智能过滤(555→78章节), 占位符率33%→20%, 结构准确率100% | AI |
+| 2026-03-20 | **S2 历史标书提取**: bid_document_parser.py 新建 — 解析历史.docx, LLM提取简历/业绩/资质, 方案段落拆分RAG | AI |
+| 2026-03-20 | **S3 素材入库+RAG**: material_store.py 新建 — JSON存储+去重+CRUD+BGE语义检索, 4个新API端点(upload-historical/materials/summary/search) | AI |
+| 2026-03-20 | **S4 生成匹配素材**: content_generation.py 改造 — 团队/业绩表优先从material_store取数据, narrative生成增加历史标书RAG上下文 | AI |

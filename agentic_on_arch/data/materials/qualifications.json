@@ -1,0 +1,20 @@
+[
+  {
+    "name": "营业执照",
+    "number": "91430100MA4LXXX00X",
+    "issuer": null,
+    "valid_from": null,
+    "valid_until": "长期",
+    "holder": null,
+    "_source_section": "3.2营业执照、组织机构代码证、税务登记证"
+  },
+  {
+    "name": "增值税一般纳税人资格",
+    "number": "430100XXXX",
+    "issuer": null,
+    "valid_from": null,
+    "valid_until": "长期",
+    "holder": null,
+    "_source_section": "3.3增值税一般纳税人证明材料"
+  }
+]

@@ -12,6 +12,15 @@ from app.core.llm import get_llm
 from app.utils.logger import logger
 
 
+def _get_material_store():
+    """Lazy import material store to avoid circular imports."""
+    try:
+        from app.core.skills.builtin.material_store import get_material_store
+        return get_material_store()
+    except Exception:
+        return None
+
+
 # ── LLM Prompts (only used for narrative sections) ──
 
 SECTION_GENERATION_SYSTEM = """你是一位资深的律所投标文件撰写专家，拥有10年以上政府采购和企业招标经验。
@@ -359,14 +368,29 @@ class ContentGenerationSkill(BaseSkill):
 
         skeleton_hint = ""
         if skeleton:
-            skeleton_hint = f"\n【参考骨架（来自历史模板）】\n{skeleton}\n请参考以上骨架结构，结合本次招标要求改写。"
+            skeleton_hint = f"\n【参考骨架（来自历史模板）】\n{skeleton}\n请参考以上骨架结构，结合本次招标要求改写。\n"
+
+        # S4: Add material RAG context from historical bid narratives
+        material_context = ""
+        store = _get_material_store()
+        if store:
+            try:
+                relevant = await store.search_narratives(title, top_k=3)
+                if relevant:
+                    material_context = "\n【来自历史投标文件的参考范文】\n"
+                    for chunk in relevant:
+                        material_context += f"[{chunk.get('title', '')}]\n{chunk.get('content', '')}\n\n"
+                    material_context += "请参考以上范文的写法和结构，结合本次招标要求改写。\n"
+                    logger.info(f"  Material RAG: {len(relevant)} chunks for '{title}'")
+            except Exception as e:
+                logger.debug(f"Material RAG failed for '{title}': {e}")
 
         prompt = NARRATIVE_PROMPT.format(
             section_title=title,
             content_hints=hints or "按照招标要求撰写",
             reference_data=reference,
             company_info=company_info,
-            skeleton_hint=skeleton_hint,
+            skeleton_hint=skeleton_hint + material_context,
         )
         return await llm.generate(prompt, system=SECTION_GENERATION_SYSTEM)
 
@@ -418,7 +442,18 @@ class ContentGenerationSkill(BaseSkill):
 """
 
     def _gen_project_history_table(self, title: str, profile: Dict) -> str:
-        projects = self._data_retrieval.get_similar_projects("", 10).get("projects", [])
+        # S4: Check material store for projects first
+        projects = []
+        store = _get_material_store()
+        if store:
+            mat_projects = store.get_projects()
+            if mat_projects:
+                projects = mat_projects
+                logger.info(f"  → Using {len(projects)} projects from material store")
+
+        if not projects:
+            projects = self._data_retrieval.get_similar_projects("", 10).get("projects", [])
+
         if not projects:
             return f"## {title}\n\n暂无业绩数据，请补充。\n"
 
@@ -428,9 +463,9 @@ class ContentGenerationSkill(BaseSkill):
         for i, p in enumerate(projects, 1):
             name = p.get('project_name', '[待补充]')
             client = p.get('client', '[待补充]')
-            desc = p.get('description', '')[:30]
-            amount = p.get('contract_amount', '[待补充]')
-            period = f"{p.get('start_date', '?')} 至 {p.get('end_date', '?')}"
+            desc = p.get('description', p.get('project_type', ''))[:30]
+            amount = p.get('contract_amount', p.get('amount', '[待补充]'))
+            period = p.get('period', f"{p.get('start_date', '?')} 至 {p.get('end_date', '?')}")
             lead = p.get('lead_lawyer', '[待补充]')
             lines.append(f"| {i} | {name} | {client} | {desc} | {amount} | {period} | {lead} |")
 
@@ -439,8 +474,30 @@ class ContentGenerationSkill(BaseSkill):
         return "\n".join(lines) + "\n"
 
     def _gen_team_table(self, title: str, profile: Dict) -> str:
-        team_result = self._data_retrieval.get_team_for_project("", 10)
-        all_members = team_result.get("recommended_team", [])
+        # S4: Check material store for resumes first
+        all_members = []
+        store = _get_material_store()
+        if store:
+            mat_resumes = store.get_resumes()
+            if mat_resumes:
+                # Convert material store format to team member format
+                all_members = []
+                for r in mat_resumes:
+                    all_members.append({
+                        'name': r.get('name', '[待补充]'),
+                        'title': r.get('title', '[待补充]'),
+                        'license_no': r.get('license_number', '[待补充]'),
+                        'specialties': [r.get('specialty', '')] if r.get('specialty') else [],
+                        'years_experience': r.get('years_of_practice', '[待补充]'),
+                        'education': r.get('education', '[待补充：学历]'),
+                        'representative_cases': r.get('representative_cases', []),
+                    })
+                logger.info(f"  → Using {len(all_members)} resumes from material store")
+
+        if not all_members:
+            team_result = self._data_retrieval.get_team_for_project("", 10)
+            all_members = team_result.get("recommended_team", [])
+
         if not all_members:
             return f"## {title}\n\n暂无团队数据，请补充。\n"
 
@@ -455,7 +512,7 @@ class ContentGenerationSkill(BaseSkill):
             title_str = m.get('title', '[待补充]')
             license_no = m.get('license_no', m.get('bar_number', '[待补充]'))
             specs = '、'.join(m.get('specialties', [])[:3]) if m.get('specialties') else '[待补充]'
-            role = '项目负责人' if i == 1 else ('主办律师' if i <= 3 else '协办律师')
+            role = m.get('role_in_project', '项目负责人' if i == 1 else ('主办律师' if i <= 3 else '协办律师'))
             lines.append(f"| {i} | {name} | {title_str} | {license_no} | {specs} | {role} |")
 
         # Individual resumes
