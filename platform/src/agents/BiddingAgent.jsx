@@ -30,6 +30,7 @@ export default function BiddingAgent() {
     const [step, setStep] = useState(1);
     const [file, setFile] = useState(null);
     const [parsing, setParsing] = useState(false);
+    const [parseLogs, setParseLogs] = useState([]);
 
     // Task state from backend
     const [taskId, setTaskId] = useState(null);
@@ -60,6 +61,7 @@ export default function BiddingAgent() {
 
     const fileInputRef = useRef(null);
     const materialInputRef = useRef(null);
+    const logEndRef = useRef(null);
     const timerRef = useRef(null);
     const abortRef = useRef(null);
 
@@ -91,8 +93,13 @@ export default function BiddingAgent() {
         if (!file) return;
         setStep(2);
         setParsing(true);
+        setParseLogs([]);
         const startTime = Date.now();
         timerRef.current = setInterval(() => setElapsed((Date.now() - startTime) / 1000), 100);
+
+        const addLog = (msg, type = 'log') => {
+            setParseLogs(prev => [...prev, { msg, type, time: ((Date.now() - startTime) / 1000).toFixed(1) }]);
+        };
 
         try {
             const formData = new FormData();
@@ -103,19 +110,46 @@ export default function BiddingAgent() {
                 method: 'POST',
                 body: formData,
             });
-            const result = await res.json();
 
-            if (result.success && result.data) {
-                setTaskId(result.data.task_id);
-                setRequirements(result.data.requirements);
-                setRawSectionsCount(result.data.raw_sections_count);
-                setStep(3);
-            } else {
-                alert('解析失败: ' + (result.message || '未知错误'));
-                setStep(1);
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    try {
+                        const ev = JSON.parse(line.slice(6));
+                        if (ev.type === 'log') {
+                            addLog(ev.message);
+                        } else if (ev.type === 'phase') {
+                            addLog(ev.message, 'phase');
+                        } else if (ev.type === 'section') {
+                            addLog(`   ${ev.icon || '📄'} ${ev.title}  → ${ev.type}`, 'section');
+                        } else if (ev.type === 'complete') {
+                            addLog('🎉 解析全部完成!', 'done');
+                            setTaskId(ev.task_id);
+                            setRequirements(ev.requirements);
+                            setRawSectionsCount(ev.raw_sections_count);
+                            await new Promise(r => setTimeout(r, 800));
+                            setStep(3);
+                        } else if (ev.type === 'error') {
+                            addLog('❌ 错误: ' + ev.message, 'error');
+                            await new Promise(r => setTimeout(r, 2000));
+                            setStep(1);
+                        }
+                    } catch { }
+                }
             }
         } catch (err) {
-            alert('上传失败: ' + err.message);
+            addLog('❌ 上传失败: ' + err.message, 'error');
+            await new Promise(r => setTimeout(r, 2000));
             setStep(1);
         } finally {
             setParsing(false);
@@ -353,6 +387,7 @@ export default function BiddingAgent() {
         setMaterialFiles([]);
         setMaterialResult(null);
         setMaterialUploading(false);
+        setParseLogs([]);
         if (abortRef.current) abortRef.current.abort();
         if (timerRef.current) clearInterval(timerRef.current);
     };
@@ -436,6 +471,9 @@ export default function BiddingAgent() {
                             </p>
                             <input ref={fileInputRef} type="file" accept=".docx" onChange={handleFileSelect} className="hidden" />
                             <div onClick={() => fileInputRef.current?.click()}
+                                onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.add('border-orange-400', 'bg-orange-50/50'); }}
+                                onDragLeave={(e) => { e.preventDefault(); e.currentTarget.classList.remove('border-orange-400', 'bg-orange-50/50'); }}
+                                onDrop={(e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.remove('border-orange-400', 'bg-orange-50/50'); const f = e.dataTransfer.files[0]; if (f && f.name.endsWith('.docx')) setFile(f); else if (f) alert('请上传 .docx 格式文件'); }}
                                 className="border-2 border-dashed border-zinc-300 rounded-sm p-8 cursor-pointer hover:border-orange-400 hover:bg-orange-50/50 transition-all group">
                                 {file ? (
                                     <div className="flex items-center justify-center space-x-3">
@@ -462,19 +500,37 @@ export default function BiddingAgent() {
                 </div>
             )}
 
-            {/* ══════════ Step 2: AI 解析中 ══════════ */}
+            {/* ══════════ Step 2: AI 解析中 (实时日志) ══════════ */}
             {step === 2 && (
-                <div className="bg-white border border-zinc-200 rounded-sm p-8 shadow-sm text-center zoom-in">
-                    <Loader2 size={40} className="mx-auto text-orange-500 animate-spin mb-4" />
-                    <h3 className="text-sm font-bold text-zinc-800 mb-1">正在解析招标文件结构...</h3>
-                    <p className="text-[11px] text-zinc-500">python-docx 结构提取 + Qwen-Max 需求分析（约 1-3 分钟）</p>
-                    <div className="mt-4 flex items-center justify-center space-x-6 text-[10px] text-zinc-400">
-                        <span>📄 {file?.name}</span>
-                        <span>📏 {file ? (file.size / 1024).toFixed(1) + ' KB' : ''}</span>
-                        <span className="font-mono">{elapsed.toFixed(1)}s</span>
-                        <span className="text-emerald-500 flex items-center">
-                            <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full mr-1 animate-pulse"></span>Processing
-                        </span>
+                <div className="bg-zinc-900 border border-zinc-700 rounded-sm shadow-sm zoom-in">
+                    <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-700">
+                        <div className="flex items-center space-x-2">
+                            <Loader2 size={14} className="text-orange-400 animate-spin" />
+                            <span className="text-[11px] font-bold text-zinc-300">正在解析招标文件结构</span>
+                        </div>
+                        <div className="flex items-center space-x-3 text-[10px] text-zinc-500">
+                            <span>📄 {file?.name}</span>
+                            <span className="font-mono text-orange-400">{elapsed.toFixed(1)}s</span>
+                            <span className="text-emerald-400 flex items-center">
+                                <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full mr-1 animate-pulse"></span>Live
+                            </span>
+                        </div>
+                    </div>
+                    <div className="p-4 max-h-[400px] overflow-y-auto font-mono text-[11px] space-y-0.5" ref={el => { if (el) el.scrollTop = el.scrollHeight; }}>
+                        {parseLogs.map((log, i) => (
+                            <div key={i} className={`flex items-start ${log.type === 'phase' ? 'text-orange-400 font-bold mt-2' :
+                                log.type === 'section' ? 'text-zinc-400' :
+                                    log.type === 'done' ? 'text-emerald-400 font-bold mt-2' :
+                                        log.type === 'error' ? 'text-red-400 font-bold' :
+                                            'text-zinc-300'
+                                }`}>
+                                <span className="text-zinc-600 mr-2 select-none shrink-0">{log.time}s</span>
+                                <span className="whitespace-pre-wrap">{log.msg}</span>
+                            </div>
+                        ))}
+                        {parsing && (
+                            <div className="text-zinc-600 animate-pulse mt-1">{'>'} █</div>
+                        )}
                     </div>
                 </div>
             )}

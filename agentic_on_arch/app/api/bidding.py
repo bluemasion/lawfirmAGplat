@@ -288,97 +288,138 @@ class FullBiddingRequest(BaseModel):
 @router.post("/parse-structure")
 async def parse_tender_structure(file: UploadFile = File(...),
                                   llm_provider: str = Form("qwen")):
-    """上传招标文件 → 解析结构 → 提取投标要求 JSON
+    """上传招标文件 → SSE 流式解析 → 实时输出进度
 
-    Returns structured requirements that define the bid document structure.
+    Returns SSE stream with progress events, final event contains the full result.
     """
-    try:
-        file_bytes = await file.read()
-        filename = file.filename or "unknown.docx"
-        logger.info(f"[Full Pipeline] Parse structure: {filename} ({len(file_bytes)} bytes), LLM={llm_provider}")
+    file_bytes = await file.read()
+    filename = file.filename or "unknown.docx"
+    logger.info(f"[Full Pipeline] Parse structure (stream): {filename} ({len(file_bytes)} bytes), LLM={llm_provider}")
 
-        if not filename.endswith('.docx'):
-            return {"success": False, "message": "目前仅支持 .docx 格式招标文件"}
+    if not filename.endswith('.docx'):
+        async def _err():
+            yield f"data: {json.dumps({'type': 'error', 'message': '目前仅支持 .docx 格式招标文件'})}\n\n"
+        return StreamingResponse(_err(), media_type="text/event-stream")
 
-        # Save uploaded file temporarily
-        os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-        temp_path = os.path.join(settings.UPLOAD_DIR, f"tender_{int(time.time())}_{filename}")
-        with open(temp_path, "wb") as f:
-            f.write(file_bytes)
+    async def _stream_parse():
+        import asyncio
 
-        # Step 1: Parse document structure
-        parse_result = await _parser.execute({"file_path": temp_path})
+        def emit(event_type, **kwargs):
+            payload = {"type": event_type, **kwargs}
+            return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
-        # Step 2: Extract requirements using LLM
-        extract_result = await _extractor.execute({
-            "raw_text": parse_result["raw_text"],
-            "sections": parse_result["sections"],
-            "llm_provider": llm_provider,
-        })
-
-        # Store task for later use
-        task_id = f"bid_{int(time.time())}"
-
-        # Build tender vector index for self-RAG
-        tender_index = TenderIndex()
         try:
-            chunk_count = tender_index.build(
-                raw_text=parse_result["raw_text"],
-                sections=parse_result["sections"],
-            )
-            logger.info(f"Tender index built: {chunk_count} chunks")
-        except Exception as e:
-            logger.warning(f"Tender index build failed (will proceed without RAG): {e}")
-            tender_index = None
+            # ── Step 0: Save file ──
+            yield emit("log", message=f"📄 收到文件: {filename} ({len(file_bytes)/1024:.0f}KB)")
+            os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+            temp_path = os.path.join(settings.UPLOAD_DIR, f"tender_{int(time.time())}_{filename}")
+            with open(temp_path, "wb") as f:
+                f.write(file_bytes)
+            yield emit("log", message=f"💾 文件已保存")
 
-        _bidding_tasks[task_id] = {
-            "task_id": task_id,
-            "status": "parsed",
-            "tender_file": temp_path,
-            "parse_result": parse_result,
-            "requirements": extract_result,
-            "tender_index": tender_index,
-            "generated_sections": [],
-            "verification": None,
-            "output_file": None,
-            "created_at": time.time(),
-        }
+            # ── Step 1: Parse document structure ──
+            yield emit("phase", phase="parsing", message="🔍 正在解析文档结构 (python-docx)...")
+            parse_result = await _parser.execute({"file_path": temp_path})
+            total_sections = parse_result.get("total_sections", 0)
+            text_len = len(parse_result.get("raw_text", ""))
+            yield emit("log", message=f"✅ 文档解析完成: {total_sections} 个段落, {text_len} 字符")
 
-        # Structure verification: check for uncovered requirements
-        structure_warnings = []
-        if tender_index and tender_index.is_built:
+            # Show first few section titles
+            raw_sections = parse_result.get("sections", [])
+            sample_titles = [s.get("title", "") for s in raw_sections[:8] if s.get("title")]
+            if sample_titles:
+                yield emit("log", message="📋 发现的章节标题 (前8个):")
+                for i, t in enumerate(sample_titles, 1):
+                    yield emit("log", message=f"   {i}. {t[:60]}")
+
+            # ── Step 2: LLM Classification ──
+            yield emit("phase", phase="classifying", message=f"🤖 正在用 AI 分类 {total_sections} 个章节...")
+            extract_result = await _extractor.execute({
+                "raw_text": parse_result["raw_text"],
+                "sections": parse_result["sections"],
+                "llm_provider": llm_provider,
+            })
+
+            # Show classified structure
+            volumes = extract_result.get("volumes", [])
+            total_secs = sum(len(v.get("sections", [])) for v in volumes)
+            yield emit("log", message=f"✅ AI 分类完成: {len(volumes)} 个分册, {total_secs} 个有效章节")
+
+            for vol in volumes:
+                vol_name = vol.get("name", "?")
+                vol_secs = vol.get("sections", [])
+                yield emit("log", message=f"📁 {vol_name} ({len(vol_secs)} 章节)")
+                for sec in vol_secs[:5]:
+                    sec_type = sec.get("type", "?")
+                    icon = {"narrative": "📝", "table": "📊", "form": "📋", "qualification": "🏅"}.get(sec_type, "📄")
+                    yield emit("section", title=sec.get("title", "?"), type=sec_type, icon=icon)
+                if len(vol_secs) > 5:
+                    yield emit("log", message=f"   ... 还有 {len(vol_secs) - 5} 个章节")
+
+            # ── Step 3: Build vector index ──
+            yield emit("phase", phase="indexing", message="🔗 正在构建检索索引 (BGE)...")
+            tender_index = TenderIndex()
             try:
-                all_titles = []
-                for vol in extract_result.get("volumes", []):
-                    for sec in vol.get("sections", []):
-                        all_titles.append(sec.get("title", ""))
-
-                verification = tender_index.verify_structure(all_titles)
-                uncovered = [v for v in verification if not v["covered"]]
-                if uncovered:
-                    structure_warnings = [
-                        f"招标要求 '{v['requirement']}' 可能未覆盖 (最接近: '{v['best_match']}', 相似度: {v['similarity']})"
-                        for v in uncovered[:5]
-                    ]
-                    logger.warning(f"Structure gaps found: {len(uncovered)} requirements may not be covered")
+                chunk_count = tender_index.build(
+                    raw_text=parse_result["raw_text"],
+                    sections=parse_result["sections"],
+                )
+                yield emit("log", message=f"✅ 检索索引构建完成: {chunk_count} 个文本块")
             except Exception as e:
-                logger.warning(f"Structure verification failed: {e}")
+                logger.warning(f"Tender index build failed: {e}")
+                tender_index = None
+                yield emit("log", message=f"⚠️ 检索索引构建失败 (可继续生成): {str(e)[:50]}")
 
-        return {
-            "success": True,
-            "data": {
+            # ── Store task ──
+            task_id = f"bid_{int(time.time())}"
+
+            # Structure verification
+            structure_warnings = []
+            if tender_index and tender_index.is_built:
+                try:
+                    all_titles = [sec.get("title", "")
+                                  for vol in volumes
+                                  for sec in vol.get("sections", [])]
+                    verification = tender_index.verify_structure(all_titles)
+                    uncovered = [v for v in verification if not v["covered"]]
+                    if uncovered:
+                        structure_warnings = [
+                            f"招标要求 '{v['requirement']}' 可能未覆盖"
+                            for v in uncovered[:5]
+                        ]
+                        yield emit("log", message=f"⚠️ 发现 {len(uncovered)} 项招标要求可能未覆盖")
+                except Exception:
+                    pass
+
+            _bidding_tasks[task_id] = {
                 "task_id": task_id,
+                "status": "parsed",
+                "tender_file": temp_path,
+                "parse_result": parse_result,
                 "requirements": extract_result,
-                "raw_sections_count": parse_result["total_sections"],
-                "text_length": len(parse_result["raw_text"]),
-                "index_chunks": tender_index.chunk_count if tender_index else 0,
-                "structure_warnings": structure_warnings,
+                "tender_index": tender_index,
+                "generated_sections": [],
+                "verification": None,
+                "output_file": None,
+                "created_at": time.time(),
             }
-        }
 
-    except Exception as e:
-        logger.error(f"[Full Pipeline] Parse error: {e}", exc_info=True)
-        return {"success": False, "message": str(e)}
+            yield emit("log", message=f"🎉 解析全部完成! 任务ID: {task_id}")
+
+            # ── Final event: complete with full data ──
+            yield emit("complete",
+                        task_id=task_id,
+                        requirements=extract_result,
+                        raw_sections_count=parse_result["total_sections"],
+                        text_length=text_len,
+                        index_chunks=tender_index.chunk_count if tender_index else 0,
+                        structure_warnings=structure_warnings)
+
+        except Exception as e:
+            logger.error(f"[Full Pipeline] Parse stream error: {e}", exc_info=True)
+            yield emit("error", message=str(e))
+
+    return StreamingResponse(_stream_parse(), media_type="text/event-stream")
 
 
 @router.post("/generate-full/{task_id}")

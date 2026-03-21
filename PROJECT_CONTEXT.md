@@ -349,6 +349,11 @@ uvicorn app.main:app --reload --port 8000
 | 2026-03-20 | **S2 历史标书提取**: bid_document_parser.py + LLM提取简历/业绩/资质 + 方案RAG |
 | 2026-03-20 | **S3 素材入库+RAG**: material_store.py + 4个API端点 + BGE语义检索 |
 | 2026-03-20 | **S4 生成匹配**: content_generation.py 从素材库取数据 + 历史标书RAG上下文 |
+| 2026-03-21 | **S5 前端方案B**: BiddingAgent.jsx 素材上传+天元数据+4步workflow |
+| 2026-03-21 | **E2E全链路测试通过**: 78章节, 76KB输出, 占位符18%, 天元132次, 25min |
+| 2026-03-21 | **SSE解析日志**: parse-structure改为SSE流式，前端实时打印解析过程 |
+| 2026-03-21 | **拖拽上传修复**: 增加onDrop/onDragOver处理器 |
+| 2026-03-21 | **POC模型策略讨论**: 解析分类保持Qwen(准确性),速度优化方向=生成并发 |
 
 ---
 
