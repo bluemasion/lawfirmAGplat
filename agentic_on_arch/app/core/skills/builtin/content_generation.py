@@ -461,12 +461,12 @@ class ContentGenerationSkill(BaseSkill):
         lines.append("| 序号 | 项目名称 | 委托方 | 服务内容 | 合同金额 | 服务期间 | 项目负责人 |")
         lines.append("|------|---------|-------|---------|---------|---------|----------|")
         for i, p in enumerate(projects, 1):
-            name = p.get('project_name', '[待补充]')
-            client = p.get('client', '[待补充]')
-            desc = p.get('description', p.get('project_type', ''))[:30]
-            amount = p.get('contract_amount', p.get('amount', '[待补充]'))
-            period = p.get('period', f"{p.get('start_date', '?')} 至 {p.get('end_date', '?')}")
-            lead = p.get('lead_lawyer', '[待补充]')
+            name = p.get('project_name') or '[待补充]'
+            client = p.get('client') or '[待补充]'
+            desc = (p.get('description') or p.get('project_type') or '')[:30]
+            amount = p.get('contract_amount') or p.get('amount') or '[待补充]'
+            period = p.get('period') or f"{p.get('start_date', '?')} 至 {p.get('end_date', '?')}"
+            lead = p.get('lead_lawyer') or '[待补充]'
             lines.append(f"| {i} | {name} | {client} | {desc} | {amount} | {period} | {lead} |")
 
         lines.append("")

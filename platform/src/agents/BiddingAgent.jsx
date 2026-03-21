@@ -43,6 +43,11 @@ export default function BiddingAgent() {
         partner_count: '', registered_capital: '',
     });
 
+    // Material upload (方案B)
+    const [materialFiles, setMaterialFiles] = useState([]);
+    const [materialUploading, setMaterialUploading] = useState(false);
+    const [materialResult, setMaterialResult] = useState(null);
+
     // Generation progress
     const [genProgress, setGenProgress] = useState({ current: 0, total: 0, sections: [], llmCount: 0, codeCount: 0 });
     const [generating, setGenerating] = useState(false);
@@ -54,6 +59,7 @@ export default function BiddingAgent() {
     const [elapsed, setElapsed] = useState(0);
 
     const fileInputRef = useRef(null);
+    const materialInputRef = useRef(null);
     const timerRef = useRef(null);
     const abortRef = useRef(null);
 
@@ -62,16 +68,16 @@ export default function BiddingAgent() {
     // ── Demo 数据 ──
     const fillDemo = () => {
         setCompanyData({
-            company_name: '湖南天衡律师事务所',
-            legal_rep: '张建明',
-            license_no: '湘司律字第0088号',
-            address: '湖南省长沙市岳麓区潇湘中路328号',
-            phone: '0731-88886666',
-            email: 'contact@tianheng-law.com',
-            established_year: '2003',
-            lawyer_count: '50',
-            partner_count: '12',
-            registered_capital: '500万元',
+            company_name: '北京市天元律师事务所',
+            legal_rep: '朱小辉',
+            license_no: '司发证字〔1993〕177号',
+            address: '北京市朝阳区东三环中路1号环球金融中心',
+            phone: '010-65150088',
+            email: 'info@tylaw.com.cn',
+            established_year: '1993',
+            lawyer_count: '600',
+            partner_count: '170',
+            registered_capital: '',
         });
     };
 
@@ -91,6 +97,7 @@ export default function BiddingAgent() {
         try {
             const formData = new FormData();
             formData.append('file', file);
+            formData.append('llm_provider', 'qwen');
 
             const res = await fetch(`${API_BASE}/api/bidding/parse-structure`, {
                 method: 'POST',
@@ -114,6 +121,48 @@ export default function BiddingAgent() {
             setParsing(false);
             clearInterval(timerRef.current);
         }
+    };
+
+    // ── 方案B: 上传素材包 ──
+    const handleMaterialSelect = (e) => {
+        const files = Array.from(e.target.files);
+        if (files.length > 0) setMaterialFiles(prev => [...prev, ...files]);
+    };
+
+    const handleMaterialUpload = async () => {
+        if (materialFiles.length === 0) return;
+        setMaterialUploading(true);
+        let totalResumes = 0, totalProjects = 0, totalQuals = 0, totalChunks = 0;
+
+        try {
+            for (const mf of materialFiles) {
+                const formData = new FormData();
+                formData.append('file', mf);
+                formData.append('llm_provider', 'qwen');
+
+                const res = await fetch(`${API_BASE}/api/bidding/upload-historical`, {
+                    method: 'POST',
+                    body: formData,
+                });
+                const result = await res.json();
+                if (result.success && result.data) {
+                    const ext = result.data.extracted;
+                    totalResumes += ext.resumes || 0;
+                    totalProjects += ext.projects || 0;
+                    totalQuals += ext.qualifications || 0;
+                    totalChunks += ext.narrative_chunks || 0;
+                }
+            }
+            setMaterialResult({ resumes: totalResumes, projects: totalProjects, qualifications: totalQuals, chunks: totalChunks });
+        } catch (err) {
+            alert('素材上传失败: ' + err.message);
+        } finally {
+            setMaterialUploading(false);
+        }
+    };
+
+    const removeMaterialFile = (idx) => {
+        setMaterialFiles(prev => prev.filter((_, i) => i !== idx));
     };
 
     // ── Step 3 → 4: 开始生成 ──
@@ -301,8 +350,11 @@ export default function BiddingAgent() {
         setOutputFilename('');
         setElapsed(0);
         setMatchedTemplate(null);
+        setMaterialFiles([]);
+        setMaterialResult(null);
+        setMaterialUploading(false);
         if (abortRef.current) abortRef.current.abort();
-        clearInterval(timerRef.current);
+        if (timerRef.current) clearInterval(timerRef.current);
     };
 
     useEffect(() => () => { clearInterval(timerRef.current); if (abortRef.current) abortRef.current.abort(); }, []);
@@ -485,21 +537,74 @@ export default function BiddingAgent() {
                     <div className="flex justify-between items-center">
                         <h3 className="text-xs font-bold text-zinc-700 uppercase tracking-widest">填写律所信息（可选，提高填充率）</h3>
                         <button onClick={fillDemo} className="text-[10px] text-orange-500 hover:text-orange-600 font-bold border border-orange-200 px-2 py-1 rounded-sm hover:bg-orange-50 transition-all">
-                            🎯 填充 Demo 数据
+                            🎯 填充天元数据
                         </button>
                     </div>
 
                     <div className="bg-white border border-zinc-200 rounded-sm p-4 shadow-sm">
                         <div className="grid grid-cols-2 gap-3">
-                            <InputField icon={Building2} label="律所名称" field="company_name" placeholder="湖南天衡律师事务所" />
-                            <InputField icon={User} label="法定代表人" field="legal_rep" placeholder="张建明" />
-                            <InputField icon={FileText} label="执业许可证号" field="license_no" placeholder="湘司律字第0088号" />
-                            <InputField icon={MapPin} label="地址" field="address" placeholder="湖南省长沙市..." />
-                            <InputField icon={Phone} label="联系电话" field="phone" placeholder="0731-88886666" />
-                            <InputField icon={Mail} label="电子邮箱" field="email" placeholder="contact@firm.com" />
-                            <InputField icon={Calendar} label="成立年份" field="established_year" placeholder="2003" />
-                            <InputField icon={DollarSign} label="注册资本" field="registered_capital" placeholder="500万元" />
+                            <InputField icon={Building2} label="律所名称" field="company_name" placeholder="北京市天元律师事务所" />
+                            <InputField icon={User} label="法定代表人" field="legal_rep" placeholder="朱小辉" />
+                            <InputField icon={FileText} label="执业许可证号" field="license_no" placeholder="司发证字〔xxxx〕xxx号" />
+                            <InputField icon={MapPin} label="地址" field="address" placeholder="北京市朝阳区..." />
+                            <InputField icon={Phone} label="联系电话" field="phone" placeholder="010-65150088" />
+                            <InputField icon={Mail} label="电子邮箱" field="email" placeholder="info@firm.com" />
+                            <InputField icon={Calendar} label="成立年份" field="established_year" placeholder="1993" />
+                            <InputField icon={DollarSign} label="注册资本" field="registered_capital" placeholder="" />
                         </div>
+                    </div>
+
+                    {/* 素材包上传（方案B） */}
+                    <div className="bg-white border border-zinc-200 rounded-sm p-4 shadow-sm">
+                        <div className="flex items-center justify-between mb-3">
+                            <div>
+                                <h3 className="text-xs font-bold text-zinc-700">上传律师简历/业绩/资质（可选）</h3>
+                                <p className="text-[10px] text-zinc-400 mt-0.5">上传已调整好的 .docx 文件，AI 将自动提取律师简历、项目业绩、资质证书用于生成</p>
+                            </div>
+                            <input ref={materialInputRef} type="file" accept=".docx" multiple onChange={handleMaterialSelect} className="hidden" />
+                            <button onClick={() => materialInputRef.current?.click()}
+                                className="text-[10px] text-blue-500 hover:text-blue-600 font-bold border border-blue-200 px-2 py-1 rounded-sm hover:bg-blue-50 transition-all flex items-center">
+                                <Upload size={10} className="mr-1" />选择文件
+                            </button>
+                        </div>
+
+                        {materialFiles.length > 0 && (
+                            <div className="space-y-2">
+                                <div className="flex flex-wrap gap-1.5">
+                                    {materialFiles.map((mf, idx) => (
+                                        <div key={idx} className="flex items-center bg-blue-50 border border-blue-200 text-blue-700 text-[10px] px-2 py-1 rounded-sm">
+                                            <FileText size={10} className="mr-1" />
+                                            <span className="truncate max-w-[150px]">{mf.name}</span>
+                                            <button onClick={() => removeMaterialFile(idx)} className="ml-1.5 text-blue-400 hover:text-red-500">×</button>
+                                        </div>
+                                    ))}
+                                </div>
+                                {!materialResult && (
+                                    <button onClick={handleMaterialUpload} disabled={materialUploading}
+                                        className={`w-full py-2 rounded-sm font-bold text-[11px] transition-all flex items-center justify-center space-x-1.5 ${materialUploading ? 'bg-blue-100 text-blue-400 cursor-wait' : 'bg-blue-500 text-white hover:bg-blue-600 shadow'}`}>
+                                        {materialUploading ? (
+                                            <><Loader2 size={12} className="animate-spin" /><span>正在提取素材...</span></>
+                                        ) : (
+                                            <><Sparkles size={12} /><span>提取素材（{materialFiles.length} 个文件）</span></>
+                                        )}
+                                    </button>
+                                )}
+                            </div>
+                        )}
+
+                        {materialResult && (
+                            <div className="mt-2 bg-emerald-50 border border-emerald-200 rounded-sm p-3">
+                                <div className="text-[10px] font-bold text-emerald-700 mb-1.5 flex items-center">
+                                    <CheckCircle size={10} className="mr-1" />素材提取完成
+                                </div>
+                                <div className="flex space-x-3">
+                                    {materialResult.resumes > 0 && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-bold">👤 {materialResult.resumes} 位律师简历</span>}
+                                    {materialResult.projects > 0 && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-bold">💼 {materialResult.projects} 个项目业绩</span>}
+                                    {materialResult.qualifications > 0 && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-bold">🏅 {materialResult.qualifications} 项资质</span>}
+                                    {materialResult.chunks > 0 && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-bold">📄 {materialResult.chunks} 段参考范文</span>}
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     <button onClick={startGeneration}

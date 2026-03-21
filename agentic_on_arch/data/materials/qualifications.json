@@ -16,5 +16,77 @@
     "valid_until": "长期",
     "holder": null,
     "_source_section": "3.3增值税一般纳税人证明材料"
+  },
+  {
+    "name": "司法部首批部级文明律师事务所",
+    "number": null,
+    "issuer": "司法部",
+    "valid_from": null,
+    "valid_until": null,
+    "holder": "天元",
+    "_source_section": "二、卓著行业声誉，权威专业认可"
+  },
+  {
+    "name": "全国优秀律师事务所",
+    "number": null,
+    "issuer": "全国律师协会",
+    "valid_from": null,
+    "valid_until": null,
+    "holder": "天元",
+    "_source_section": "二、卓著行业声誉，权威专业认可"
+  },
+  {
+    "name": "北京市优秀律师事务所",
+    "number": null,
+    "issuer": "北京市司法局、北京市律师协会",
+    "valid_from": null,
+    "valid_until": null,
+    "holder": "天元",
+    "_source_section": "二、卓著行业声誉，权威专业认可"
+  },
+  {
+    "name": "钱伯斯大中华区指南2026",
+    "number": null,
+    "issuer": "钱伯斯",
+    "valid_from": null,
+    "valid_until": null,
+    "holder": "天元",
+    "_source_section": "二、卓著行业声誉，权威专业认可"
+  },
+  {
+    "name": "LEGALBAND中国顶级律所排行榜2025",
+    "number": null,
+    "issuer": "LEGALBAND",
+    "valid_from": null,
+    "valid_until": null,
+    "holder": "天元",
+    "_source_section": "二、卓著行业声誉，权威专业认可"
+  },
+  {
+    "name": "IFLR1000亚太版指南2025",
+    "number": null,
+    "issuer": "IFLR1000",
+    "valid_from": null,
+    "valid_until": null,
+    "holder": "天元",
+    "_source_section": "二、卓著行业声誉，权威专业认可"
+  },
+  {
+    "name": "The Legal 500亚太指南2026",
+    "number": null,
+    "issuer": "The Legal 500",
+    "valid_from": null,
+    "valid_until": null,
+    "holder": "天元",
+    "_source_section": "二、卓著行业声誉，权威专业认可"
+  },
+  {
+    "name": "商法卓越律所大奖2025",
+    "number": null,
+    "issuer": "商法",
+    "valid_from": null,
+    "valid_until": null,
+    "holder": "天元",
+    "_source_section": "二、卓著行业声誉，权威专业认可"
   }
 ]
