@@ -480,77 +480,103 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
             "message": f"开始生成投标文件：{code_count} 个章节用代码模板，{llm_count} 个用LLM",
         })
 
-        # Generate each section
-        for section in all_sections:
-            current += 1
-            title = section.get("title", f"章节{current}")
+        # ── Concurrent generation (5 workers) ──
+        import asyncio
+
+        CONCURRENCY = 5
+        sem = asyncio.Semaphore(CONCURRENCY)
+        event_queue: asyncio.Queue = asyncio.Queue()
+        completed_count = 0
+
+        async def _gen_one(idx: int, section: dict):
+            """Generate a single section with semaphore limiting."""
+            title = section.get("title", f"章节{idx + 1}")
             sec_type = section.get("type", "narrative")
 
-            yield _sse({
+            await event_queue.put(_sse({
                 "type": "progress",
-                "current": current,
+                "current": idx + 1,
                 "total": total_sections,
                 "section_title": title,
                 "section_type": sec_type,
                 "status": "generating",
                 "method": "llm" if sec_type == "narrative" else "template",
-            })
+            }))
 
+            async with sem:
+                try:
+                    skeleton_info = matched_skeletons.get(title, {})
+                    skeleton_text = skeleton_info.get("skeleton") if skeleton_info else None
+
+                    reference_data = "暂无参考资料"
+                    tender_index = task.get("tender_index")
+                    if sec_type == "narrative" and tender_index and tender_index.is_built:
+                        query = f"{title} {section.get('content_hints', '')}"
+                        relevant_chunks = tender_index.search(query, top_k=5)
+                        if relevant_chunks:
+                            reference_data = "\n\n---\n\n".join(relevant_chunks)
+
+                    result = await _generator.execute({
+                        "section": section,
+                        "company_info": company_info,
+                        "reference_data": reference_data,
+                        "llm_provider": llm_provider,
+                        "skeleton": skeleton_text,
+                    })
+
+                    result["order"] = section.get("order", idx + 1)
+                    result["type"] = section.get("type", "narrative")
+                    result["level"] = 2
+
+                    await event_queue.put(_sse({
+                        "type": "section_done",
+                        "current": idx + 1,
+                        "total": total_sections,
+                        "section_title": title,
+                        "status": result.get("status", "generated"),
+                        "content_length": len(result.get("content", "")),
+                        "missing_fields": result.get("missing_fields", []),
+                    }))
+                    return result
+
+                except Exception as e:
+                    logger.error(f"Error generating section '{title}': {e}")
+                    await event_queue.put(_sse({
+                        "type": "section_error",
+                        "current": idx + 1,
+                        "section_title": title,
+                        "error": str(e),
+                    }))
+                    return {
+                        "title": title,
+                        "content": f"[生成失败：{str(e)}]",
+                        "order": section.get("order", idx + 1),
+                        "type": section.get("type", "narrative"),
+                        "level": 2,
+                        "missing_fields": [],
+                        "status": "error",
+                    }
+
+        # Launch all tasks, drain SSE queue while waiting
+        tasks = [asyncio.create_task(_gen_one(i, sec)) for i, sec in enumerate(all_sections)]
+
+        done_count = 0
+        while done_count < len(tasks):
+            # Check for newly queued events
             try:
-                # Get skeleton from matched template (if any)
-                skeleton_info = matched_skeletons.get(title, {})
-                skeleton_text = skeleton_info.get("skeleton") if skeleton_info else None
+                event = await asyncio.wait_for(event_queue.get(), timeout=0.2)
+                yield event
+            except asyncio.TimeoutError:
+                pass
+            # Count finished tasks
+            done_count = sum(1 for t in tasks if t.done())
 
-                # Self-RAG: retrieve relevant tender sections for narrative chapters
-                reference_data = "暂无参考资料"
-                tender_index = task.get("tender_index")
-                if sec_type == "narrative" and tender_index and tender_index.is_built:
-                    query = f"{title} {section.get('content_hints', '')}"
-                    relevant_chunks = tender_index.search(query, top_k=5)
-                    if relevant_chunks:
-                        reference_data = "\n\n---\n\n".join(relevant_chunks)
-                        logger.info(f"Self-RAG: found {len(relevant_chunks)} relevant chunks for '{title}'")
+        # Drain remaining events in queue
+        while not event_queue.empty():
+            yield await event_queue.get()
 
-                result = await _generator.execute({
-                    "section": section,
-                    "company_info": company_info,
-                    "reference_data": reference_data,
-                    "llm_provider": llm_provider,
-                    "skeleton": skeleton_text,
-                })
-
-                result["order"] = section.get("order", current)
-                result["type"] = section.get("type", "narrative")
-                result["level"] = 2  # Default heading level
-                generated_sections.append(result)
-
-                yield _sse({
-                    "type": "section_done",
-                    "current": current,
-                    "total": total_sections,
-                    "section_title": title,
-                    "status": result.get("status", "generated"),
-                    "content_length": len(result.get("content", "")),
-                    "missing_fields": result.get("missing_fields", []),
-                })
-
-            except Exception as e:
-                logger.error(f"Error generating section '{title}': {e}")
-                generated_sections.append({
-                    "title": title,
-                    "content": f"[生成失败：{str(e)}]",
-                    "order": section.get("order", current),
-                    "type": section.get("type", "narrative"),
-                    "level": 2,
-                    "missing_fields": [],
-                    "status": "error",
-                })
-                yield _sse({
-                    "type": "section_error",
-                    "current": current,
-                    "section_title": title,
-                    "error": str(e),
-                })
+        # Collect results in original order
+        generated_sections = [t.result() for t in tasks]
 
         # Assemble document
         yield _sse({"type": "assembling", "message": "正在组装 Word 文档..."})

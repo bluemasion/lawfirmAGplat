@@ -21,7 +21,7 @@ def _get_material_store():
         return None
 
 
-# ── LLM Prompts (only used for narrative sections) ──
+# ── Specialized LLM Prompts for Narrative Sections ──
 
 SECTION_GENERATION_SYSTEM = """你是一位资深的律所投标文件撰写专家，拥有10年以上政府采购和企业招标经验。
 你的任务是根据招标要求和参考资料，为投标文件的指定章节撰写专业、精准的内容。
@@ -41,6 +41,130 @@ SECTION_GENERATION_SYSTEM = """你是一位资深的律所投标文件撰写专�
 - 引用法律法规时精确到条款
 - 方案类内容需有：目标→方法→保障措施→时间安排的完整逻辑"""
 
+
+# ── 3 specialized prompt types + fallback generic ──
+
+PROMPT_FIRM_INTRO = """请为投标文件撰写以下章节：
+
+【章节标题】
+{section_title}
+
+【招标要求】
+{content_hints}
+
+【来自招标文件的原文参考】
+{reference_data}
+
+【我方律所信息（真实数据，直接引用）】
+{company_info}
+
+{skeleton_hint}
+
+# 本章节写作策略：律所综合实力展示
+
+## 结构要求
+1. **律所概况** — 成立时间、规模（律师人数/合伙人数/总人数）、办公面积、分所/总所
+2. **核心业务领域** — 与本次招标相关的执业领域，引用具体数据
+3. **荣誉资质** — 国际榜单排名、司法部/省级荣誉，按权威性排序
+4. **服务优势** — 结合招标要求，说明我方的匹配度和差异化优势
+
+## 写作要求
+- 多使用具体数据（成立年份、律师数量、项目数量）
+- 荣誉排名引用最近3年的
+- 避免空泛表述如"实力雄厚""经验丰富"，用数据证明
+- 800-1500字
+
+## 参考范例
+> 北京市天元律师事务所成立于1993年，是中国最早设立的合伙制律师事务所之一。经过30余年发展，事务所现有执业律师600余名，其中合伙人170余名，全所总人数超过900人。事务所在公司/并购、证券与资本市场、投资基金、争议解决等领域具有深厚积累，连续多年入选钱伯斯大中华区指南、LEGALBAND中国顶级律所排行榜、The Legal 500亚太指南等国际权威榜单。在本次招标涉及的法律顾问服务领域，事务所累计服务央企及大型国企客户超过50家，年度法律服务合同超过200份。"""
+
+PROMPT_SERVICE_PLAN = """请为投标文件撰写以下章节：
+
+【章节标题】
+{section_title}
+
+【招标要求（必须逐项回应）】
+{content_hints}
+
+【来自招标文件的原文参考】
+{reference_data}
+
+【我方律所信息（真实数据，直接引用）】
+{company_info}
+
+{skeleton_hint}
+
+# 本章节写作策略：项目服务方案
+
+## 必须包含的四个部分
+
+### 一、服务目标（200-300字）
+- 说明对本项目的理解
+- 列出 3-5 个可量化的服务目标
+
+### 二、服务方法与内容（500-800字）
+- 按招标要求的服务范围逐项回应
+- 每项服务内容说明：做什么、怎么做、成果物是什么
+- 引用相关法律法规依据
+
+### 三、组织保障与质量控制（300-500字）
+- 项目团队架构（项目负责人→主办律师→协办律师）
+- 质量控制机制（三级审核、合伙人把关）
+- 应急响应机制（紧急事项24小时内响应）
+- 沟通汇报机制（月报/季报/年度总结）
+
+### 四、时间安排（200-300字）
+- 分阶段工作计划
+- 关键节点和交付物
+
+## 写作要求
+- 总字数 1500-2500 字
+- 每个招标要求项都有对应回应
+- 用序号和小标题组织内容
+- 具体措施必须可操作、可验证
+
+## 参考范例
+> **一、服务目标**
+> 
+> 针对本项目法律服务需求，我方将以"风险防控为核心、合规运营为导向"的服务理念，为贵单位提供全面、高效、专业的法律服务。具体服务目标包括：
+> 1. 合同审查及时率达到100%，常规合同3个工作日内完成审查；
+> 2. 法律咨询响应时间不超过4小时，紧急事项2小时内响应；
+> 3. 年度法律风险评估报告不少于2份，全面梳理潜在法律风险。"""
+
+PROMPT_COMPLIANCE = """请为投标文件撰写以下章节：
+
+【章节标题】
+{section_title}
+
+【招标要求】
+{content_hints}
+
+【来自招标文件的原文参考】
+{reference_data}
+
+【我方律所信息（真实数据，直接引用）】
+{company_info}
+
+{skeleton_hint}
+
+# 本章节写作策略：合规/保障/声明类
+
+## 写作要求
+1. 引用具体法律法规条款（如《律师法》《政府采购法》《合同法》）
+2. 使用正式承诺性语言，但不能绝对化（避免"确保""杜绝"，用"最大程度""有效降低"）
+3. 分条列举，每条一个承诺/保障措施
+4. 包含违约责任说明
+5. 300-800字
+
+## 参考范例
+> **保密措施**
+> 
+> 我方严格遵守《中华人民共和国律师法》第三十八条关于律师保密义务的规定，并承诺采取以下保密措施：
+> 1. 签署专项保密协议，明确保密范围、保密期限及违约责任；
+> 2. 项目资料实行专人管理、专柜保存，电子文件加密存储；
+> 3. 团队成员签署个人保密承诺书，离职后保密义务继续有效；
+> 4. 未经贵单位书面同意，我方不得向任何第三方披露项目相关信息。"""
+
+# Generic fallback prompt (same as before)
 NARRATIVE_PROMPT = """请为投标文件撰写以下章节的内容：
 
 【章节标题】
@@ -62,7 +186,55 @@ NARRATIVE_PROMPT = """请为投标文件撰写以下章节的内容：
 2. 使用 Markdown 格式（## 二级标题，### 三级标题，| 表格）
 3. 对招标要求中的每一条核心要求，都要有明确的回应段落
 4. 没有真实数据的字段用 [待补充：字段名] 标注
-5. 内容应具体、有针对性，不得使用空泛的承诺性语句"""
+5. 内容应具体、有针对性，不得使用空泛的承诺性语句
+6. 800-1500字"""
+
+
+# ── Prompt routing by chapter title keywords ──
+
+PROMPT_ROUTING = [
+    {
+        "type": "firm_intro",
+        "keywords": ["律所介绍", "律所概况", "供应商介绍", "投标人介绍", "公司简介",
+                     "企业概况", "单位概况", "基本情况介绍", "投标人概况",
+                     "机构介绍", "事务所介绍", "团队介绍", "人员介绍",
+                     "项目团队", "拟投入人员", "核心团队", "项目组成员",
+                     "律师团队", "服务团队", "业绩介绍", "类似业绩",
+                     "项目经验", "服务案例", "成功案例"],
+        "prompt": PROMPT_FIRM_INTRO,
+    },
+    {
+        "type": "service_plan",
+        "keywords": ["服务方案", "实施方案", "技术方案", "工作方案", "项目方案",
+                     "服务计划", "实施计划", "工作计划", "服务内容",
+                     "服务承诺", "服务保障", "服务模式", "服务流程",
+                     "工作思路", "整体方案", "总体方案", "项目实施",
+                     "工作安排", "时间安排", "进度安排", "应急预案",
+                     "风险防控", "质量管理", "质量控制", "质量保证",
+                     "培训方案", "培训计划", "增值服务"],
+        "prompt": PROMPT_SERVICE_PLAN,
+    },
+    {
+        "type": "compliance",
+        "keywords": ["保密", "廉洁", "合规", "利益冲突", "回避",
+                     "保障措施", "信誉", "诚信", "承诺",
+                     "知识产权", "档案管理", "文件管理", "信息安全",
+                     "售后服务", "投诉处理", "争议解决"],
+        "prompt": PROMPT_COMPLIANCE,
+    },
+]
+
+
+def _route_prompt(title: str) -> str:
+    """Match chapter title to specialized prompt template."""
+    title_lower = title.lower()
+    for route in PROMPT_ROUTING:
+        for kw in route["keywords"]:
+            if kw in title_lower:
+                logger.info(f"  Prompt routing: '{title}' → {route['type']}")
+                return route["prompt"]
+    logger.info(f"  Prompt routing: '{title}' → generic")
+    return NARRATIVE_PROMPT
 
 
 # ── Built-in Form Templates (code, no LLM) ──
@@ -385,7 +557,9 @@ class ContentGenerationSkill(BaseSkill):
             except Exception as e:
                 logger.debug(f"Material RAG failed for '{title}': {e}")
 
-        prompt = NARRATIVE_PROMPT.format(
+        # Route to specialized prompt by chapter title keywords
+        selected_prompt = _route_prompt(title)
+        prompt = selected_prompt.format(
             section_title=title,
             content_hints=hints or "按照招标要求撰写",
             reference_data=reference,
