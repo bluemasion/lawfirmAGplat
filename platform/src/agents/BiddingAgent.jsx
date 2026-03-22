@@ -370,6 +370,12 @@ export default function BiddingAgent() {
                     </button>
                 </div>
 
+                {/* Hidden file inputs — must be outside conditional so refs always exist */}
+                <input ref={fileInputRef} type="file" accept=".docx" className="hidden"
+                    onChange={(e) => { const f = e.target.files[0]; if (f) handleTenderUpload(f); e.target.value = ''; }} />
+                <input ref={materialInputRef} type="file" accept=".docx" multiple className="hidden"
+                    onChange={(e) => { handleMaterialUpload(Array.from(e.target.files)); e.target.value = ''; }} />
+
                 {phase === 'idle' ? (
                     /* ── Upload Landing ── */
                     <div className="flex-1 flex items-center justify-center px-6"
@@ -445,8 +451,6 @@ export default function BiddingAgent() {
                     <div className="shrink-0 border-t border-zinc-800 bg-zinc-900/90 backdrop-blur px-4 py-3">
                         <div className="flex items-center space-x-2">
                             {/* Upload tender file */}
-                            <input ref={fileInputRef} type="file" accept=".docx" className="hidden"
-                                onChange={(e) => { const f = e.target.files[0]; if (f) handleTenderUpload(f); e.target.value = ''; }} />
                             <button onClick={() => fileInputRef.current?.click()}
                                 disabled={processing}
                                 className="flex items-center space-x-1.5 px-3 py-2 rounded-md text-[11px] font-bold bg-zinc-800 border border-zinc-700 text-zinc-300 hover:bg-zinc-700 hover:text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed"
@@ -456,8 +460,6 @@ export default function BiddingAgent() {
                             </button>
 
                             {/* Upload material */}
-                            <input ref={materialInputRef} type="file" accept=".docx" multiple className="hidden"
-                                onChange={(e) => { handleMaterialUpload(Array.from(e.target.files)); e.target.value = ''; }} />
                             <button onClick={() => materialInputRef.current?.click()}
                                 disabled={processing || !taskId}
                                 className="flex items-center space-x-1.5 px-3 py-2 rounded-md text-[11px] font-bold bg-zinc-800 border border-zinc-700 text-zinc-300 hover:bg-zinc-700 hover:text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed"
