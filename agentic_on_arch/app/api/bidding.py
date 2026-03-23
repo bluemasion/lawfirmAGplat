@@ -995,37 +995,74 @@ async def add_material(req: AddMaterialRequest):
 async def get_source_files(name: str):
     """查找某个人/项目/资质对应的原始素材文件
 
-    扫描 client_materials 目录，查找文件名中包含 name 的所有文件。
+    1. 先检查素材数据中的 _source_file/_source_path (精确来源)
+    2. 再扫描 client_materials + uploads 目录做文件名模糊匹配
     """
-    import glob
-
-    client_dir = os.path.join("uploads", "client_materials")
-    if not os.path.isdir(client_dir):
-        return {"success": True, "data": {"files": []}}
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
 
     matches = []
-    for root, dirs, files in os.walk(client_dir):
-        for fname in files:
-            if fname.startswith("."):
+    seen_paths = set()
+
+    # Priority 1: Check _source_path in material data
+    for category_getter in [store.get_resumes, store.get_projects, store.get_qualifications]:
+        for item in category_getter():
+            item_name = item.get("name", "") or item.get("project_name", "") or ""
+            if not item_name:
                 continue
-            # Match if name appears in filename
-            if name in fname:
-                full_path = os.path.join(root, fname)
-                rel_path = os.path.relpath(full_path, client_dir)
-                folder = os.path.basename(root)
-                try:
-                    size = os.path.getsize(full_path)
-                except OSError:
-                    size = 0
-                ext = os.path.splitext(fname)[1].lower()
-                matches.append({
-                    "filename": fname,
-                    "folder": folder,
-                    "relative_path": rel_path,
-                    "size_bytes": size,
-                    "size_display": f"{size / 1024 / 1024:.1f}MB" if size > 1024 * 1024 else f"{size / 1024:.0f}KB",
-                    "file_type": ext.lstrip("."),
-                })
+            if name in item_name or item_name in name:
+                src_path = item.get("_source_path", "")
+                src_file = item.get("_source_file", "")
+                if src_path and os.path.exists(src_path) and src_path not in seen_paths:
+                    seen_paths.add(src_path)
+                    size = os.path.getsize(src_path)
+                    ext = os.path.splitext(src_file)[1].lower()
+                    matches.append({
+                        "filename": src_file,
+                        "folder": "上传素材",
+                        "relative_path": src_path,
+                        "size_bytes": size,
+                        "size_display": f"{size / 1024 / 1024:.1f}MB" if size > 1024 * 1024 else f"{size / 1024:.0f}KB",
+                        "file_type": ext.lstrip("."),
+                        "source": "uploaded",
+                    })
+
+    # Priority 2: Scan client_materials + uploads root for filename match
+    search_dirs = [
+        ("client_materials", os.path.join("uploads", "client_materials")),
+        ("上传历史", "uploads"),
+    ]
+
+    for dir_label, search_dir in search_dirs:
+        if not os.path.isdir(search_dir):
+            continue
+        for root, dirs, files in os.walk(search_dir):
+            # Skip subdirectories already covered
+            if dir_label == "上传历史" and "client_materials" in root:
+                continue
+            for fname in files:
+                if fname.startswith("."):
+                    continue
+                if name in fname:
+                    full_path = os.path.join(root, fname)
+                    if full_path in seen_paths:
+                        continue
+                    seen_paths.add(full_path)
+                    rel_path = os.path.relpath(full_path)
+                    folder = os.path.basename(root)
+                    try:
+                        size = os.path.getsize(full_path)
+                    except OSError:
+                        size = 0
+                    ext = os.path.splitext(fname)[1].lower()
+                    matches.append({
+                        "filename": fname,
+                        "folder": folder if dir_label == "client_materials" else "上传历史",
+                        "relative_path": rel_path,
+                        "size_bytes": size,
+                        "size_display": f"{size / 1024 / 1024:.1f}MB" if size > 1024 * 1024 else f"{size / 1024:.0f}KB",
+                        "file_type": ext.lstrip("."),
+                    })
 
     return {"success": True, "data": {"name": name, "files": matches}}
 
