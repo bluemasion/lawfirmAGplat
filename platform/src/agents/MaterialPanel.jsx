@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Plus, Trash2, Edit3, Users, Briefcase, Award, ArrowLeft, Save, Loader2, ChevronDown, ChevronRight, FileText, File, ExternalLink } from 'lucide-react';
+import { X, Plus, Trash2, Edit3, Users, Briefcase, Award, ArrowLeft, Save, Loader2, ChevronDown, ChevronRight, FileText, File, ExternalLink, Upload, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -99,6 +99,113 @@ export default function MaterialPanel({ onClose }) {
     const [saving, setSaving] = useState(false);
     const [expandedIdx, setExpandedIdx] = useState(null); // which item index is expanded
     const [sourceFiles, setSourceFiles] = useState({}); // { name: { loading, files: [] } }
+
+    // ── Upload + Diff Review state ──
+    const [uploading, setUploading] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState(''); // status text
+    const [diffReview, setDiffReview] = useState(null); // { upload_id, diff, extracted, selected }
+
+    // ── File Upload Handler ──
+    const handleFileUpload = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        e.target.value = ''; // reset input
+
+        setUploading(true);
+        setUploadProgress('📤 上传中...');
+
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            setUploadProgress('🔍 AI 正在提取简历/业绩/资质...');
+            const res = await fetch(`${API_BASE}/api/bidding/upload-historical`, {
+                method: 'POST',
+                body: formData,
+            });
+            const result = await res.json();
+
+            if (!result.success) {
+                alert(`提取失败: ${result.message}`);
+                setUploading(false);
+                setUploadProgress('');
+                return;
+            }
+
+            const { upload_id, diff, extracted } = result.data;
+
+            // Build selection map: new=checked, updated=checked, unchanged=unchecked
+            const selected = {};
+            for (const [category, items] of Object.entries(diff)) {
+                selected[category] = {};
+                for (const item of items) {
+                    const key = item.name || item.project_name || item.title || `item_${Math.random()}`;
+                    selected[category][key] = item.action !== 'unchanged';
+                }
+            }
+
+            setDiffReview({ upload_id, diff, extracted, selected, source_file: file.name });
+        } catch (err) {
+            alert(`上传失败: ${err.message}`);
+        } finally {
+            setUploading(false);
+            setUploadProgress('');
+        }
+    };
+
+    // ── Confirm selected items ──
+    const handleConfirmUpload = async () => {
+        if (!diffReview) return;
+        setUploading(true);
+        setUploadProgress('📥 正在入库...');
+
+        try {
+            // Build selected lists
+            const selectedResumes = Object.entries(diffReview.selected.resumes || {})
+                .filter(([, v]) => v).map(([k]) => k);
+            const selectedProjects = Object.entries(diffReview.selected.projects || {})
+                .filter(([, v]) => v).map(([k]) => k);
+            const selectedQuals = Object.entries(diffReview.selected.qualifications || {})
+                .filter(([, v]) => v).map(([k]) => k);
+
+            const res = await fetch(`${API_BASE}/api/bidding/confirm-materials`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    upload_id: diffReview.upload_id,
+                    selected_resumes: selectedResumes,
+                    selected_projects: selectedProjects,
+                    selected_qualifications: selectedQuals,
+                }),
+            });
+            const result = await res.json();
+            if (result.success) {
+                setDiffReview(null);
+                loadMaterials();
+            } else {
+                alert(`入库失败: ${result.message}`);
+            }
+        } catch (err) {
+            alert(`入库失败: ${err.message}`);
+        } finally {
+            setUploading(false);
+            setUploadProgress('');
+        }
+    };
+
+    // Toggle selection
+    const toggleSelection = (category, key) => {
+        setDiffReview(prev => ({
+            ...prev,
+            selected: {
+                ...prev.selected,
+                [category]: {
+                    ...prev.selected[category],
+                    [key]: !prev.selected[category][key],
+                }
+            }
+        }));
+    };
 
     // ── Load materials ──
     useEffect(() => {
@@ -484,6 +591,147 @@ export default function MaterialPanel({ onClose }) {
         );
     };
 
+    // ── Diff Review Modal ──
+    const renderDiffReview = () => {
+        if (!diffReview) return null;
+        const { diff, selected, source_file } = diffReview;
+        const allCategories = ['resumes', 'projects', 'qualifications'];
+        const categoryLabels = { resumes: '律师简历', projects: '项目业绩', qualifications: '资质证书' };
+        const actionConfig = {
+            new: { emoji: '🆕', label: '新增', color: 'text-green-400', bg: 'bg-green-500/10 border-green-500/30' },
+            updated: { emoji: '🔄', label: '有变化', color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/30' },
+            unchanged: { emoji: '✅', label: '无变化', color: 'text-zinc-500', bg: 'bg-zinc-800/50 border-zinc-700/30' },
+        };
+
+        // Count totals
+        let totalNew = 0, totalUpdated = 0, totalUnchanged = 0, totalSelected = 0;
+        for (const items of Object.values(diff)) {
+            for (const item of items) {
+                if (item.action === 'new') totalNew++;
+                else if (item.action === 'updated') totalUpdated++;
+                else totalUnchanged++;
+            }
+        }
+        for (const cat of Object.values(selected)) {
+            for (const v of Object.values(cat)) { if (v) totalSelected++; }
+        }
+
+        return (
+            <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+                <div className="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+                    {/* Header */}
+                    <div className="px-5 py-4 border-b border-zinc-700 flex items-center justify-between">
+                        <div>
+                            <h3 className="text-[15px] font-bold text-zinc-100">📋 提取结果预览</h3>
+                            <p className="text-[11px] text-zinc-500 mt-0.5">来源: {source_file}</p>
+                        </div>
+                        <div className="flex items-center space-x-3 text-[11px]">
+                            {totalNew > 0 && <span className="text-green-400">🆕 {totalNew} 新增</span>}
+                            {totalUpdated > 0 && <span className="text-amber-400">🔄 {totalUpdated} 有变化</span>}
+                            {totalUnchanged > 0 && <span className="text-zinc-500">✅ {totalUnchanged} 无变化</span>}
+                        </div>
+                    </div>
+
+                    {/* Body */}
+                    <div className="flex-1 overflow-y-auto px-5 py-3 space-y-4">
+                        {allCategories.map(cat => {
+                            const items = diff[cat];
+                            if (!items || items.length === 0) return null;
+                            return (
+                                <div key={cat}>
+                                    <div className="text-[11px] font-bold text-zinc-400 uppercase tracking-wide mb-2">
+                                        {categoryLabels[cat]} ({items.length})
+                                    </div>
+                                    <div className="space-y-2">
+                                        {items.map((item, idx) => {
+                                            const cfg = actionConfig[item.action];
+                                            const key = item.name || item.project_name || item.title || `${cat}_${idx}`;
+                                            const isSelected = selected[cat]?.[key] ?? false;
+                                            return (
+                                                <div key={idx}
+                                                    className={`border rounded-lg p-3 transition-all ${cfg.bg} ${isSelected ? 'ring-1 ring-orange-500/40' : 'opacity-60'}`}>
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex items-center space-x-2">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={isSelected}
+                                                                onChange={() => toggleSelection(cat, key)}
+                                                                className="w-3.5 h-3.5 rounded accent-orange-500"
+                                                            />
+                                                            <span className="text-sm">{cfg.emoji}</span>
+                                                            <span className="text-[13px] font-bold text-zinc-100">{key}</span>
+                                                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${cfg.bg} ${cfg.color}`}>
+                                                                {cfg.label}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                    {/* Field-level diff for updated items */}
+                                                    {item.action === 'updated' && item.changes && (
+                                                        <div className="mt-2 pl-7 space-y-1">
+                                                            {Object.entries(item.changes).map(([field, [oldVal, newVal]]) => (
+                                                                <div key={field} className="flex items-center text-[11px]">
+                                                                    <span className="text-zinc-500 w-20 shrink-0">{field}</span>
+                                                                    {oldVal && (
+                                                                        <>
+                                                                            <span className="text-red-400/70 line-through mr-1">{oldVal}</span>
+                                                                            <span className="text-zinc-600 mr-1">→</span>
+                                                                        </>
+                                                                    )}
+                                                                    <span className="text-green-400">{newVal}</span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                    {/* Preview for new items */}
+                                                    {item.action === 'new' && item.data && (
+                                                        <div className="mt-2 pl-7 text-[11px] text-zinc-400">
+                                                            {Object.entries(item.data)
+                                                                .filter(([k, v]) => v && !k.startsWith('_') && k !== 'representative_cases')
+                                                                .slice(0, 4)
+                                                                .map(([k, v]) => (
+                                                                    <span key={k} className="inline-block mr-3">
+                                                                        <span className="text-zinc-600">{k}: </span>
+                                                                        <span>{typeof v === 'string' ? v.slice(0, 30) : JSON.stringify(v).slice(0, 30)}</span>
+                                                                    </span>
+                                                                ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+
+                    {/* Footer */}
+                    <div className="px-5 py-3 border-t border-zinc-700 flex items-center justify-between">
+                        <span className="text-[11px] text-zinc-500">
+                            已选择 <span className="text-orange-300 font-bold">{totalSelected}</span> 项入库
+                        </span>
+                        <div className="flex items-center space-x-2">
+                            <button
+                                onClick={() => setDiffReview(null)}
+                                className="px-4 py-2 rounded-md text-[11px] font-bold text-zinc-400 hover:text-zinc-200 transition-colors">
+                                取消
+                            </button>
+                            <button
+                                onClick={handleConfirmUpload}
+                                disabled={uploading || totalSelected === 0}
+                                className="flex items-center space-x-1.5 px-4 py-2 rounded-md text-[11px] font-bold bg-green-500/20 border border-green-500/40 text-green-300 hover:bg-green-500/30 transition-all disabled:opacity-40">
+                                {uploading
+                                    ? <><Loader2 size={12} className="animate-spin" /><span>入库中...</span></>
+                                    : <><CheckCircle2 size={12} /><span>确认入库 ({totalSelected})</span></>
+                                }
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
     return (
         <div className="h-full flex flex-col">
             {/* Header */}
@@ -505,11 +753,30 @@ export default function MaterialPanel({ onClose }) {
                         <span>{summary.narrative_chunks}范文</span>
                     </div>
                 </div>
-                <button onClick={() => setEditingItem({ mode: 'add', data: {} })}
-                    className="flex items-center space-x-1.5 px-3 py-1.5 rounded-md text-[11px] font-bold bg-orange-500/20 border border-orange-500/40 text-orange-300 hover:bg-orange-500/30 transition-all">
-                    <Plus size={12} />
-                    <span>新增</span>
-                </button>
+                <div className="flex items-center space-x-2">
+                    {/* Upload button */}
+                    <input
+                        type="file"
+                        id="material-upload-input"
+                        accept=".docx,.doc,.pdf"
+                        className="hidden"
+                        onChange={handleFileUpload}
+                    />
+                    <button
+                        onClick={() => document.getElementById('material-upload-input').click()}
+                        disabled={uploading}
+                        className="flex items-center space-x-1.5 px-3 py-1.5 rounded-md text-[11px] font-bold bg-blue-500/15 border border-blue-500/30 text-blue-300 hover:bg-blue-500/25 transition-all disabled:opacity-40">
+                        {uploading
+                            ? <><Loader2 size={12} className="animate-spin" /><span>{uploadProgress || '处理中...'}</span></>
+                            : <><Upload size={12} /><span>上传素材</span></>
+                        }
+                    </button>
+                    <button onClick={() => setEditingItem({ mode: 'add', data: {} })}
+                        className="flex items-center space-x-1.5 px-3 py-1.5 rounded-md text-[11px] font-bold bg-orange-500/20 border border-orange-500/40 text-orange-300 hover:bg-orange-500/30 transition-all">
+                        <Plus size={12} />
+                        <span>新增</span>
+                    </button>
+                </div>
             </div>
 
             {/* Tabs */}
@@ -539,6 +806,9 @@ export default function MaterialPanel({ onClose }) {
 
             {/* Edit/Add Form Modal */}
             {renderForm()}
+
+            {/* Diff Review Modal */}
+            {renderDiffReview()}
         </div>
     );
 }
