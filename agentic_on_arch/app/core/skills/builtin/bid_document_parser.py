@@ -403,22 +403,82 @@ class BidDocumentParserSkill(BaseSkill):
         return "narrative"
 
     @staticmethod
-    def _detect_type_from_filename(filename: str) -> Optional[str]:
-        """Detect material type from filename keywords."""
-        resume_kw = ["简历", "人员", "律师", "团队", "个人"]
-        project_kw = ["业绩", "案例", "项目"]
-        qual_kw = ["资质", "证书", "执照", "荣誉", "奖项"]
+    def detect_document_type(filename: str, content_preview: str = "") -> dict:
+        """Detect document type using filename + content preview (rule-based).
+
+        Returns:
+            {"doc_type": str, "material_hint": str|None, "confidence": float, "reason": str}
+
+        doc_type values:
+            - "tender"         招标文件
+            - "bid_document"   完整投标文件 (含多类素材)
+            - "material"       单项素材 (简历/业绩/资质)
+            - "unknown"        未知
+
+        material_hint: "resume" | "project" | "qualification" | None
+        """
+        fn = filename.lower()
+        cp = content_preview[:800] if content_preview else ""
+
+        # ── Layer 1: 招标文件 ──
+        tender_fn_kw = ["招标", "磋商", "询价", "采购文件", "竞争性"]
+        tender_content_kw = ["投标人须知", "评标办法", "投标截止", "开标时间",
+                             "招标公告", "采购需求", "供应商资格"]
+        if any(k in fn for k in tender_fn_kw):
+            return {"doc_type": "tender", "material_hint": None,
+                    "confidence": 0.95, "reason": f"文件名含招标关键词"}
+        if any(k in cp for k in tender_content_kw):
+            return {"doc_type": "tender", "material_hint": None,
+                    "confidence": 0.90, "reason": f"内容含招标关键词"}
+
+        # ── Layer 2: 完整投标文件 ──
+        bid_fn_kw = ["投标文件", "投标书", "响应文件", "响应书"]
+        bid_content_kw = ["投标函", "法定代表人授权", "拟投入本项目",
+                          "项目负责人简历", "4.4.1", "4.4.2",
+                          "投标报价", "服务方案"]
+        if any(k in fn for k in bid_fn_kw):
+            return {"doc_type": "bid_document", "material_hint": None,
+                    "confidence": 0.95, "reason": f"文件名含投标关键词"}
+        # 内容中出现3个以上投标关键词 → 大概率是完整投标文件
+        bid_hits = sum(1 for k in bid_content_kw if k in cp)
+        if bid_hits >= 3:
+            return {"doc_type": "bid_document", "material_hint": None,
+                    "confidence": 0.85, "reason": f"内容含{bid_hits}个投标关键词"}
+
+        # ── Layer 3: 单项素材 ──
+        resume_kw = ["简历", "人员", "律师", "团队", "个人", "履历"]
+        project_kw = ["业绩", "案例", "项目经验", "代表项目", "服务案例"]
+        qual_kw = ["资质", "证书", "执照", "荣誉", "奖项", "资格"]
 
         for kw in resume_kw:
-            if kw in filename:
-                return "resume"
+            if kw in fn:
+                return {"doc_type": "material", "material_hint": "resume",
+                        "confidence": 0.90, "reason": f"文件名含'{kw}'"}
         for kw in project_kw:
-            if kw in filename:
-                return "project"
+            if kw in fn:
+                return {"doc_type": "material", "material_hint": "project",
+                        "confidence": 0.90, "reason": f"文件名含'{kw}'"}
         for kw in qual_kw:
-            if kw in filename:
-                return "qualification"
-        return None
+            if kw in fn:
+                return {"doc_type": "material", "material_hint": "qualification",
+                        "confidence": 0.90, "reason": f"文件名含'{kw}'"}
+
+        # Content-based material detection
+        if "工作年限" in cp or "执业年限" in cp or "学历" in cp:
+            return {"doc_type": "material", "material_hint": "resume",
+                    "confidence": 0.75, "reason": "内容含简历字段"}
+        if "项目名称" in cp and "委托人" in cp:
+            return {"doc_type": "material", "material_hint": "project",
+                    "confidence": 0.75, "reason": "内容含项目字段"}
+
+        return {"doc_type": "unknown", "material_hint": None,
+                "confidence": 0.0, "reason": "无法确定文件类型"}
+
+    @staticmethod
+    def _detect_type_from_filename(filename: str) -> Optional[str]:
+        """Backward-compat wrapper for detect_document_type."""
+        result = BidDocumentParserSkill.detect_document_type(filename)
+        return result.get("material_hint")
 
     async def _extract_resumes(self, llm, title: str,
                                 content: str) -> List[Dict]:

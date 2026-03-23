@@ -752,9 +752,39 @@ async def upload_historical_bid(
     logger.info(f"Historical bid uploaded: {file_path} ({len(content)} bytes)")
 
     try:
-        # Parse and extract materials
+        # Detect document type (rule-based)
         from app.core.skills.builtin.bid_document_parser import BidDocumentParserSkill
         parser = BidDocumentParserSkill()
+
+        # Get content preview for detection
+        content_preview = ""
+        try:
+            from docx import Document
+            doc = Document(file_path)
+            preview_parts = [p.text for p in doc.paragraphs[:20] if p.text.strip()]
+            content_preview = "\n".join(preview_parts)
+        except Exception:
+            pass
+
+        doc_type_info = parser.detect_document_type(file.filename, content_preview)
+        logger.info(f"Document type detected: {doc_type_info}")
+
+        # If tender file uploaded to material library, warn the user
+        if doc_type_info["doc_type"] == "tender":
+            return {
+                "success": True,
+                "data": {
+                    "doc_type": doc_type_info,
+                    "upload_id": None,
+                    "source_file": filename,
+                    "extracted": {"resumes": 0, "projects": 0, "qualifications": 0},
+                    "diff": {},
+                    "materials": {},
+                    "message": "检测到这是一份招标文件。建议在主页面使用「上传招标文件」功能进行结构解析。如需提取其中的素材，请继续。",
+                },
+            }
+
+        # Parse and extract materials
         materials = await parser.execute({
             "file_path": file_path,
             "llm_provider": llm_provider,
@@ -781,6 +811,7 @@ async def upload_historical_bid(
             "data": {
                 "upload_id": upload_id,
                 "source_file": filename,
+                "doc_type": doc_type_info,
                 "extracted": {
                     "resumes": len(materials.get("resumes", [])),
                     "projects": len(materials.get("projects", [])),

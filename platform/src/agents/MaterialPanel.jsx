@@ -147,10 +147,23 @@ export default function MaterialPanel({ onClose }) {
             setUploadStep(3);
 
             const { upload_id, extracted } = result.data;
+            const docType = result.data.doc_type || {};
             let diff = result.data.diff || {};
 
+            console.log('[MaterialPanel] doc_type:', JSON.stringify(docType));
             console.log('[MaterialPanel] extracted:', JSON.stringify(extracted));
-            console.log('[MaterialPanel] diff keys:', Object.keys(diff));
+
+            // Handle tender file warning
+            if (docType.doc_type === 'tender') {
+                const proceed = confirm(
+                    `⚠️ ${result.data.message || '检测到招标文件'}\n\n点击"确定"仍然尝试提取素材，点击"取消"返回。`
+                );
+                if (!proceed) {
+                    setUploading(false);
+                    setUploadStep(0);
+                    return;
+                }
+            }
 
             // Fallback: if diff is empty but materials has items, build diff from materials
             const materials = result.data.materials || {};
@@ -201,7 +214,7 @@ export default function MaterialPanel({ onClose }) {
             setUploadStep(4);
             await new Promise(r => setTimeout(r, 500));
 
-            setDiffReview({ upload_id, diff, extracted, selected, source_file: file.name });
+            setDiffReview({ upload_id, diff, extracted, selected, source_file: file.name, doc_type: docType });
         } catch (err) {
             alert(`上传失败: ${err.message}`);
         } finally {
@@ -703,7 +716,9 @@ export default function MaterialPanel({ onClose }) {
     // ── Diff Review Modal ──
     const renderDiffReview = () => {
         if (!diffReview) return null;
-        const { diff, selected, source_file } = diffReview;
+        const { diff, selected, source_file, doc_type } = diffReview;
+        const docTypeLabels = { tender: '📋 招标文件', bid_document: '📑 完整投标文件', material: '📄 素材文件', unknown: '📄 文件' };
+        const docTypeLabel = docTypeLabels[doc_type?.doc_type] || '📄 文件';
         const allCategories = ['resumes', 'projects', 'qualifications'];
         const categoryLabels = { resumes: '律师简历', projects: '项目业绩', qualifications: '资质证书' };
         const actionConfig = {
@@ -733,7 +748,10 @@ export default function MaterialPanel({ onClose }) {
                     <div className="px-5 py-4 border-b border-zinc-700 flex items-center justify-between">
                         <div>
                             <h3 className="text-[15px] font-bold text-zinc-100">📋 提取结果预览</h3>
-                            <p className="text-[11px] text-zinc-500 mt-0.5">来源: {source_file}</p>
+                            <p className="text-[11px] text-zinc-500 mt-0.5">
+                                <span className="inline-block px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-300 mr-1.5">{docTypeLabel}</span>
+                                {source_file}
+                            </p>
                         </div>
                         <div className="flex items-center space-x-3 text-[11px]">
                             {totalNew > 0 && <span className="text-green-400">🆕 {totalNew} 新增</span>}
