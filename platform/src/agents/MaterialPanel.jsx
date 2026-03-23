@@ -102,8 +102,16 @@ export default function MaterialPanel({ onClose }) {
 
     // ── Upload + Diff Review state ──
     const [uploading, setUploading] = useState(false);
-    const [uploadProgress, setUploadProgress] = useState(''); // status text
+    const [uploadStep, setUploadStep] = useState(0); // 0=idle, 1=uploading, 2=extracting, 3=comparing, 4=done
+    const [uploadFileName, setUploadFileName] = useState('');
     const [diffReview, setDiffReview] = useState(null); // { upload_id, diff, extracted, selected }
+
+    const UPLOAD_STEPS = [
+        { label: '上传文件', icon: '📤', desc: '正在上传文件到服务器...' },
+        { label: 'AI 智能提取', icon: '🤖', desc: '大语言模型正在识别简历、业绩、资质...' },
+        { label: '变更对比', icon: '🔍', desc: '与现有素材库逐条对比差异...' },
+        { label: '提取完成', icon: '✅', desc: '提取与对比已完成，请确认入库' },
+    ];
 
     // ── File Upload Handler ──
     const handleFileUpload = async (e) => {
@@ -112,13 +120,16 @@ export default function MaterialPanel({ onClose }) {
         e.target.value = ''; // reset input
 
         setUploading(true);
-        setUploadProgress('📤 上传中...');
+        setUploadFileName(file.name);
+        setUploadStep(1); // uploading
 
         try {
             const formData = new FormData();
             formData.append('file', file);
 
-            setUploadProgress('🔍 AI 正在提取简历/业绩/资质...');
+            // Step 2: AI extraction (happens server-side)
+            setTimeout(() => setUploadStep(2), 800);
+
             const res = await fetch(`${API_BASE}/api/bidding/upload-historical`, {
                 method: 'POST',
                 body: formData,
@@ -128,15 +139,20 @@ export default function MaterialPanel({ onClose }) {
             if (!result.success) {
                 alert(`提取失败: ${result.message}`);
                 setUploading(false);
-                setUploadProgress('');
+                setUploadStep(0);
                 return;
             }
 
-            const { upload_id, diff, extracted } = result.data;
+            // Step 3: Comparing
+            setUploadStep(3);
 
-            // Build selection map: new=checked, updated=checked, unchanged=unchecked
+            const { upload_id, extracted } = result.data;
+            const diff = result.data.diff || {};
+
+            // Build selection map
             const selected = {};
             for (const [category, items] of Object.entries(diff)) {
+                if (!Array.isArray(items)) continue;
                 selected[category] = {};
                 for (const item of items) {
                     const key = item.name || item.project_name || item.title || `item_${Math.random()}`;
@@ -144,12 +160,17 @@ export default function MaterialPanel({ onClose }) {
                 }
             }
 
+            // Step 4: Done
+            await new Promise(r => setTimeout(r, 600));
+            setUploadStep(4);
+            await new Promise(r => setTimeout(r, 500));
+
             setDiffReview({ upload_id, diff, extracted, selected, source_file: file.name });
         } catch (err) {
             alert(`上传失败: ${err.message}`);
         } finally {
             setUploading(false);
-            setUploadProgress('');
+            setUploadStep(0);
         }
     };
 
@@ -157,7 +178,6 @@ export default function MaterialPanel({ onClose }) {
     const handleConfirmUpload = async () => {
         if (!diffReview) return;
         setUploading(true);
-        setUploadProgress('📥 正在入库...');
 
         try {
             // Build selected lists
@@ -189,7 +209,6 @@ export default function MaterialPanel({ onClose }) {
             alert(`入库失败: ${err.message}`);
         } finally {
             setUploading(false);
-            setUploadProgress('');
         }
     };
 
@@ -591,6 +610,60 @@ export default function MaterialPanel({ onClose }) {
         );
     };
 
+    // ── Progress Overlay ──
+    const renderProgressOverlay = () => {
+        if (uploadStep === 0) return null;
+        return (
+            <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+                <div className="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-md p-6">
+                    <h3 className="text-[15px] font-bold text-zinc-100 mb-1">📤 处理素材文件</h3>
+                    <p className="text-[11px] text-zinc-500 mb-5 truncate">{uploadFileName}</p>
+
+                    {/* Progress bar */}
+                    <div className="h-1.5 bg-zinc-800 rounded-full mb-5 overflow-hidden">
+                        <div
+                            className="h-full bg-gradient-to-r from-blue-500 to-orange-500 rounded-full transition-all duration-700 ease-out"
+                            style={{ width: `${(uploadStep / 4) * 100}%` }}
+                        />
+                    </div>
+
+                    {/* Steps */}
+                    <div className="space-y-3">
+                        {UPLOAD_STEPS.map((step, idx) => {
+                            const stepNum = idx + 1;
+                            const isActive = uploadStep === stepNum;
+                            const isDone = uploadStep > stepNum;
+                            const isPending = uploadStep < stepNum;
+                            return (
+                                <div key={idx}
+                                    className={`flex items-center space-x-3 p-2.5 rounded-lg transition-all duration-300 ${isActive ? 'bg-blue-500/10 border border-blue-500/30' :
+                                            isDone ? 'bg-green-500/5 border border-green-500/20' :
+                                                'border border-transparent opacity-40'
+                                        }`}>
+                                    <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-sm">
+                                        {isDone ? '✅' : isActive ? (
+                                            <Loader2 size={16} className="animate-spin text-blue-400" />
+                                        ) : (
+                                            <span className="text-zinc-600">{step.icon}</span>
+                                        )}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <div className={`text-[12px] font-bold ${isActive ? 'text-blue-300' :
+                                                isDone ? 'text-green-400' :
+                                                    'text-zinc-600'
+                                            }`}>{step.label}</div>
+                                        <div className={`text-[10px] ${isActive ? 'text-zinc-400' : 'text-zinc-600'
+                                            }`}>{step.desc}</div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
     // ── Diff Review Modal ──
     const renderDiffReview = () => {
         if (!diffReview) return null;
@@ -767,7 +840,7 @@ export default function MaterialPanel({ onClose }) {
                         disabled={uploading}
                         className="flex items-center space-x-1.5 px-3 py-1.5 rounded-md text-[11px] font-bold bg-blue-500/15 border border-blue-500/30 text-blue-300 hover:bg-blue-500/25 transition-all disabled:opacity-40">
                         {uploading
-                            ? <><Loader2 size={12} className="animate-spin" /><span>{uploadProgress || '处理中...'}</span></>
+                            ? <><Loader2 size={12} className="animate-spin" /><span>处理中...</span></>
                             : <><Upload size={12} /><span>上传素材</span></>
                         }
                     </button>
@@ -806,6 +879,9 @@ export default function MaterialPanel({ onClose }) {
 
             {/* Edit/Add Form Modal */}
             {renderForm()}
+
+            {/* Progress Overlay */}
+            {renderProgressOverlay()}
 
             {/* Diff Review Modal */}
             {renderDiffReview()}
