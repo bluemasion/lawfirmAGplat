@@ -887,6 +887,103 @@ async def search_materials(
     return {"success": True, "data": results}
 
 
+# ── Material CRUD Endpoints ──
+
+class MaterialUpdateRequest(BaseModel):
+    updates: dict
+
+
+@router.put("/materials/resumes/{name}")
+async def update_resume(name: str, req: MaterialUpdateRequest):
+    """更新律师简历"""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    ok = store.update_resume(name, req.updates)
+    if ok:
+        return {"success": True}
+    return {"success": False, "message": f"简历 '{name}' 未找到"}
+
+
+@router.delete("/materials/resumes/{name}")
+async def delete_resume(name: str):
+    """删除律师简历"""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    ok = store.delete_resume(name)
+    if ok:
+        return {"success": True}
+    return {"success": False, "message": f"简历 '{name}' 未找到"}
+
+
+@router.put("/materials/projects/{project_name}")
+async def update_project(project_name: str, req: MaterialUpdateRequest):
+    """更新项目业绩"""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    ok = store.update_project(project_name, req.updates)
+    if ok:
+        return {"success": True}
+    return {"success": False, "message": f"项目 '{project_name}' 未找到"}
+
+
+@router.delete("/materials/projects/{project_name}")
+async def delete_project(project_name: str):
+    """删除项目业绩"""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    projects = store.get_projects()
+    new_projects = [p for p in projects if p.get("project_name") != project_name]
+    if len(new_projects) < len(projects):
+        store._save_json(store.projects_file, new_projects)
+        return {"success": True}
+    return {"success": False, "message": f"项目 '{project_name}' 未找到"}
+
+
+@router.delete("/materials/qualifications/{name}")
+async def delete_qualification(name: str):
+    """删除资质证书"""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    quals = store.get_qualifications()
+    new_quals = [q for q in quals if q.get("name") != name]
+    if len(new_quals) < len(quals):
+        store._save_json(store.qualifications_file, new_quals)
+        return {"success": True}
+    return {"success": False, "message": f"资质 '{name}' 未找到"}
+
+
+class AddMaterialRequest(BaseModel):
+    type: str  # resumes | projects | qualifications
+    data: dict
+
+
+@router.post("/materials/add")
+async def add_material(req: AddMaterialRequest):
+    """手动新增素材"""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+
+    if req.type == "resumes":
+        items = store.get_resumes()
+        items.append(req.data)
+        items = store._dedup_by_field(items, "name")
+        store._save_json(store.resumes_file, items)
+    elif req.type == "projects":
+        items = store.get_projects()
+        items.append(req.data)
+        items = store._dedup_by_field(items, "project_name")
+        store._save_json(store.projects_file, items)
+    elif req.type == "qualifications":
+        items = store.get_qualifications()
+        items.append(req.data)
+        items = store._dedup_by_field(items, "name")
+        store._save_json(store.qualifications_file, items)
+    else:
+        return {"success": False, "message": f"未知类型: {req.type}"}
+
+    return {"success": True, "data": store.get_summary()}
+
+
 def _sse(data: dict) -> str:
     """Format data as SSE event."""
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
-import { FileText, Loader2, CheckCircle, Download, Upload, Sparkles, RotateCcw, Send, AlertTriangle, ChevronDown, Eye, X } from 'lucide-react';
+import { FileText, Loader2, CheckCircle, Download, Upload, Sparkles, RotateCcw, Send, AlertTriangle, ChevronDown, Eye, X, Package } from 'lucide-react';
+import MaterialPanel from './MaterialPanel';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -13,6 +14,7 @@ export default function BiddingAgent() {
     const [processing, setProcessing] = useState(false);  // true when AI is working
     const [phase, setPhase] = useState('idle'); // idle | parsing | ready | generating | done
     const [showStructure, setShowStructure] = useState(false);
+    const [showMaterialPanel, setShowMaterialPanel] = useState(false);
 
     // Company data for generation
     const [companyData, setCompanyData] = useState({
@@ -445,11 +447,11 @@ export default function BiddingAgent() {
                 {/* ── Header ── */}
                 <div className="flex items-center justify-between px-4 py-2.5 border-b border-zinc-800 bg-zinc-900/80 backdrop-blur shrink-0">
                     <div className="flex items-center space-x-2">
-                        <div className="w-7 h-7 bg-orange-500 rounded-md flex items-center justify-center">
+                        <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-orange-500 to-amber-600 flex items-center justify-center shadow-lg shadow-orange-500/20">
                             <FileText size={14} className="text-white" />
                         </div>
                         <div>
-                            <h2 className="text-sm font-bold text-zinc-100">智能投标文件生成</h2>
+                            <h1 className="text-[13px] font-bold text-zinc-100">智能投标文件生成</h1>
                             <p className="text-[9px] text-zinc-500 uppercase tracking-widest">
                                 {phase === 'idle' && '等待上传'}
                                 {phase === 'parsing' && '解析中...'}
@@ -459,9 +461,20 @@ export default function BiddingAgent() {
                             </p>
                         </div>
                     </div>
-                    <button onClick={reset} className="text-zinc-500 hover:text-zinc-300 transition-colors p-1.5 rounded hover:bg-zinc-800" title="重新开始">
-                        <RotateCcw size={14} />
-                    </button>
+                    <div className="flex items-center space-x-1">
+                        <button onClick={() => setShowMaterialPanel(!showMaterialPanel)}
+                            className={`flex items-center space-x-1 text-[11px] px-2.5 py-1.5 rounded-md font-bold transition-all ${showMaterialPanel
+                                    ? 'bg-orange-500/20 border border-orange-500/40 text-orange-300'
+                                    : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
+                                }`}
+                            title="素材库管理">
+                            <Package size={13} />
+                            <span>素材库</span>
+                        </button>
+                        <button onClick={reset} className="text-zinc-500 hover:text-zinc-300 transition-colors p-1.5 rounded hover:bg-zinc-800" title="重新开始">
+                            <RotateCcw size={14} />
+                        </button>
+                    </div>
                 </div>
 
                 {/* Hidden file inputs — must be outside conditional so refs always exist */}
@@ -470,7 +483,10 @@ export default function BiddingAgent() {
                 <input ref={materialInputRef} type="file" accept=".docx" multiple className="hidden"
                     onChange={(e) => { handleMaterialUpload(Array.from(e.target.files)); e.target.value = ''; }} />
 
-                {phase === 'idle' ? (
+                {/* ── Material Panel (replaces main content when active) ── */}
+                {showMaterialPanel ? (
+                    <MaterialPanel onClose={() => setShowMaterialPanel(false)} />
+                ) : phase === 'idle' ? (
                     /* ── Upload Landing ── */
                     <div className="flex-1 flex items-center justify-center px-6"
                         onDragOver={(e) => { e.preventDefault(); e.currentTarget.querySelector('.drop-zone')?.classList.add('border-orange-400', 'bg-orange-500/5'); }}
