@@ -207,14 +207,14 @@ export default function BiddingAgent() {
                     diffMsg += `\n**📄 参考范文 ${diff.narrative_chunks.length} 段**\n`;
                 }
 
-                if (!diff.resumes?.length && !diff.projects?.length && !diff.qualifications?.length) {
-                    diffMsg += '\n⚠️ 未能从文件中提取到结构化数据';
+                if (!diff.resumes?.length && !diff.projects?.length && !diff.qualifications?.length && !diff.narrative_chunks?.length) {
+                    diffMsg += '\n⚠️ 未能从文件中提取到任何数据';
                 }
 
                 addMsg('ai', diffMsg.trim());
 
-                // Add action button for confirmation
-                if (diff.resumes?.length || diff.projects?.length || diff.qualifications?.length) {
+                // Add action button for confirmation (any extracted data)
+                if (diff.resumes?.length || diff.projects?.length || diff.qualifications?.length || diff.narrative_chunks?.length) {
                     setMessages(prev => [...prev, {
                         role: 'ai', type: 'action',
                         content: '确认以上提取结果无误？',
