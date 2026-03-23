@@ -637,8 +637,8 @@ export default function MaterialPanel({ onClose }) {
                             return (
                                 <div key={idx}
                                     className={`flex items-center space-x-3 p-2.5 rounded-lg transition-all duration-300 ${isActive ? 'bg-blue-500/10 border border-blue-500/30' :
-                                            isDone ? 'bg-green-500/5 border border-green-500/20' :
-                                                'border border-transparent opacity-40'
+                                        isDone ? 'bg-green-500/5 border border-green-500/20' :
+                                            'border border-transparent opacity-40'
                                         }`}>
                                     <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-sm">
                                         {isDone ? '✅' : isActive ? (
@@ -649,8 +649,8 @@ export default function MaterialPanel({ onClose }) {
                                     </div>
                                     <div className="flex-1 min-w-0">
                                         <div className={`text-[12px] font-bold ${isActive ? 'text-blue-300' :
-                                                isDone ? 'text-green-400' :
-                                                    'text-zinc-600'
+                                            isDone ? 'text-green-400' :
+                                                'text-zinc-600'
                                             }`}>{step.label}</div>
                                         <div className={`text-[10px] ${isActive ? 'text-zinc-400' : 'text-zinc-600'
                                             }`}>{step.desc}</div>
@@ -678,15 +678,16 @@ export default function MaterialPanel({ onClose }) {
 
         // Count totals
         let totalNew = 0, totalUpdated = 0, totalUnchanged = 0, totalSelected = 0;
-        for (const items of Object.values(diff)) {
+        for (const items of Object.values(diff || {})) {
+            if (!Array.isArray(items)) continue;
             for (const item of items) {
                 if (item.action === 'new') totalNew++;
                 else if (item.action === 'updated') totalUpdated++;
                 else totalUnchanged++;
             }
         }
-        for (const cat of Object.values(selected)) {
-            for (const v of Object.values(cat)) { if (v) totalSelected++; }
+        for (const cat of Object.values(selected || {})) {
+            for (const v of Object.values(cat || {})) { if (v) totalSelected++; }
         }
 
         return (
@@ -717,7 +718,7 @@ export default function MaterialPanel({ onClose }) {
                                     </div>
                                     <div className="space-y-2">
                                         {items.map((item, idx) => {
-                                            const cfg = actionConfig[item.action];
+                                            const cfg = actionConfig[item.action] || actionConfig.unchanged;
                                             const key = item.name || item.project_name || item.title || `${cat}_${idx}`;
                                             const isSelected = selected[cat]?.[key] ?? false;
                                             return (
@@ -738,27 +739,30 @@ export default function MaterialPanel({ onClose }) {
                                                             </span>
                                                         </div>
                                                     </div>
-                                                    {/* Field-level diff for updated items */}
                                                     {item.action === 'updated' && item.changes && (
                                                         <div className="mt-2 pl-7 space-y-1">
-                                                            {Object.entries(item.changes).map(([field, [oldVal, newVal]]) => (
-                                                                <div key={field} className="flex items-center text-[11px]">
-                                                                    <span className="text-zinc-500 w-20 shrink-0">{field}</span>
-                                                                    {oldVal && (
-                                                                        <>
-                                                                            <span className="text-red-400/70 line-through mr-1">{oldVal}</span>
-                                                                            <span className="text-zinc-600 mr-1">→</span>
-                                                                        </>
-                                                                    )}
-                                                                    <span className="text-green-400">{newVal}</span>
-                                                                </div>
-                                                            ))}
+                                                            {Object.entries(item.changes || {}).map(([field, vals]) => {
+                                                                const oldVal = Array.isArray(vals) ? vals[0] : null;
+                                                                const newVal = Array.isArray(vals) ? vals[1] : String(vals);
+                                                                return (
+                                                                    <div key={field} className="flex items-center text-[11px]">
+                                                                        <span className="text-zinc-500 w-20 shrink-0">{field}</span>
+                                                                        {oldVal && (
+                                                                            <>
+                                                                                <span className="text-red-400/70 line-through mr-1">{oldVal}</span>
+                                                                                <span className="text-zinc-600 mr-1">→</span>
+                                                                            </>
+                                                                        )}
+                                                                        <span className="text-green-400">{newVal}</span>
+                                                                    </div>
+                                                                );
+                                                            })}
                                                         </div>
                                                     )}
                                                     {/* Preview for new items */}
                                                     {item.action === 'new' && item.data && (
                                                         <div className="mt-2 pl-7 text-[11px] text-zinc-400">
-                                                            {Object.entries(item.data)
+                                                            {Object.entries(item.data || {})
                                                                 .filter(([k, v]) => v && !k.startsWith('_') && k !== 'representative_cases')
                                                                 .slice(0, 4)
                                                                 .map(([k, v]) => (
