@@ -138,32 +138,126 @@ export default function BiddingAgent() {
         addMsg('user', `📎 上传素材: ${names}`);
         setProcessing(true);
 
-        let totalR = 0, totalP = 0, totalQ = 0, totalN = 0;
         try {
             for (const mf of files) {
                 const formData = new FormData();
                 formData.append('file', mf);
                 formData.append('llm_provider', 'qwen');
+
+                addMsg('ai', `🔍 正在解析 ${mf.name}...`, 'text');
+
                 const res = await fetch(`${API_BASE}/api/bidding/upload-historical`, {
                     method: 'POST', body: formData,
                 });
                 const result = await res.json();
-                if (result.success && result.data) {
-                    const ext = result.data.extracted;
-                    totalR += ext.resumes || 0;
-                    totalP += ext.projects || 0;
-                    totalQ += ext.qualifications || 0;
-                    totalN += ext.narrative_chunks || 0;
+
+                if (!result.success) {
+                    addMsg('ai', `❌ 解析失败: ${result.message}`);
+                    continue;
+                }
+
+                const { upload_id, extracted, diff, materials } = result.data;
+
+                // Build diff display message
+                let diffMsg = `📋 **${mf.name}** 提取完成:\n`;
+
+                // Resumes
+                if (diff.resumes?.length) {
+                    diffMsg += `\n**👤 律师简历 (${diff.resumes.length}人)**\n`;
+                    for (const r of diff.resumes) {
+                        const name = r.name || r.data?.name || '未知';
+                        const spec = r.data?.specialty || '';
+                        if (r.action === 'new') {
+                            diffMsg += `  🆕 ${name}${spec ? ' — ' + spec : ''}\n`;
+                        } else if (r.action === 'updated') {
+                            diffMsg += `  🔄 ${name} (有更新)\n`;
+                            for (const [field, [oldV, newV]] of Object.entries(r.changes || {})) {
+                                diffMsg += `      ${field}: ${oldV || '无'} → ${newV}\n`;
+                            }
+                        } else {
+                            diffMsg += `  ✅ ${name} (已存在，无变化)\n`;
+                        }
+                    }
+                }
+
+                // Projects
+                if (diff.projects?.length) {
+                    diffMsg += `\n**💼 项目业绩 (${diff.projects.length}个)**\n`;
+                    for (const p of diff.projects) {
+                        const name = p.project_name || p.data?.project_name || '未知项目';
+                        if (p.action === 'new') diffMsg += `  🆕 ${name}\n`;
+                        else if (p.action === 'updated') diffMsg += `  🔄 ${name} (有更新)\n`;
+                        else diffMsg += `  ✅ ${name} (无变化)\n`;
+                    }
+                }
+
+                // Qualifications
+                if (diff.qualifications?.length) {
+                    diffMsg += `\n**🏅 资质证书 (${diff.qualifications.length}项)**\n`;
+                    for (const q of diff.qualifications) {
+                        const name = q.name || q.data?.name || '未知';
+                        if (q.action === 'new') diffMsg += `  🆕 ${name}\n`;
+                        else if (q.action === 'updated') diffMsg += `  🔄 ${name} (有更新)\n`;
+                        else diffMsg += `  ✅ ${name} (无变化)\n`;
+                    }
+                }
+
+                // Narrative chunks
+                if (diff.narrative_chunks?.length) {
+                    diffMsg += `\n**📄 参考范文 ${diff.narrative_chunks.length} 段**\n`;
+                }
+
+                if (!diff.resumes?.length && !diff.projects?.length && !diff.qualifications?.length) {
+                    diffMsg += '\n⚠️ 未能从文件中提取到结构化数据';
+                }
+
+                addMsg('ai', diffMsg.trim());
+
+                // Add action button for confirmation
+                if (diff.resumes?.length || diff.projects?.length || diff.qualifications?.length) {
+                    setMessages(prev => [...prev, {
+                        role: 'ai', type: 'action',
+                        content: '确认以上提取结果无误？',
+                        actions: [
+                            { label: '✅ 确认入库', action: 'confirm_materials', uploadId: upload_id },
+                            { label: '⏭️ 跳过', action: 'skip_materials' },
+                        ],
+                        time: new Date(),
+                    }]);
                 }
             }
-            let msg = '✅ 素材提取完成:';
-            if (totalR) msg += `\n• 👤 ${totalR} 位律师简历`;
-            if (totalP) msg += `\n• 💼 ${totalP} 个项目业绩`;
-            if (totalQ) msg += `\n• 🏅 ${totalQ} 项资质`;
-            if (totalN) msg += `\n• 📄 ${totalN} 段参考范文`;
-            addMsg('ai', msg);
         } catch (err) {
             addMsg('ai', '❌ 素材上传失败: ' + err.message);
+        } finally {
+            setProcessing(false);
+        }
+    };
+
+    // ── Confirm materials after user review ──
+    const confirmMaterials = async (uploadId) => {
+        setProcessing(true);
+        try {
+            const res = await fetch(`${API_BASE}/api/bidding/confirm-materials`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ upload_id: uploadId }),
+            });
+            const result = await res.json();
+            if (result.success) {
+                const saved = result.data.saved;
+                const total = result.data.total_store;
+                let msg = '✅ 素材已入库！';
+                if (saved.resumes) msg += `\n• 👤 ${saved.resumes} 位律师简历`;
+                if (saved.projects) msg += `\n• 💼 ${saved.projects} 个项目业绩`;
+                if (saved.qualifications) msg += `\n• 🏅 ${saved.qualifications} 项资质`;
+                if (saved.narrative_chunks) msg += `\n• 📄 ${saved.narrative_chunks} 段范文`;
+                msg += `\n\n📊 素材库总量: ${total.resumes}简历 / ${total.projects}项目 / ${total.qualifications}资质 / ${total.narrative_chunks}范文`;
+                addMsg('ai', msg);
+            } else {
+                addMsg('ai', '❌ 入库失败: ' + result.message);
+            }
+        } catch (err) {
+            addMsg('ai', '❌ 入库失败: ' + err.message);
         } finally {
             setProcessing(false);
         }
@@ -424,11 +518,28 @@ export default function BiddingAgent() {
                                     ) : msg.role === 'ai' && msg.type === 'action' ? (
                                         <div className="text-[12px] text-zinc-200 space-y-2">
                                             <p>{msg.content}</p>
-                                            <button onClick={() => setShowStructure(true)}
-                                                className="flex items-center space-x-1.5 px-4 py-2 rounded-md text-[11px] font-bold bg-orange-500/20 border border-orange-500/40 text-orange-300 hover:bg-orange-500/30 transition-all">
-                                                <Eye size={12} />
-                                                <span>📋 查看文件结构</span>
-                                            </button>
+                                            {msg.actions ? (
+                                                <div className="flex items-center space-x-2">
+                                                    {msg.actions.map((act, ai) => (
+                                                        <button key={ai}
+                                                            onClick={() => {
+                                                                if (act.action === 'confirm_materials') confirmMaterials(act.uploadId);
+                                                                else if (act.action === 'skip_materials') addMsg('ai', '⏭️ 已跳过，素材未入库');
+                                                                else if (act.action === 'show_structure') setShowStructure(true);
+                                                            }}
+                                                            disabled={processing}
+                                                            className="flex items-center space-x-1.5 px-4 py-2 rounded-md text-[11px] font-bold bg-orange-500/20 border border-orange-500/40 text-orange-300 hover:bg-orange-500/30 transition-all disabled:opacity-40">
+                                                            <span>{act.label}</span>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <button onClick={() => setShowStructure(true)}
+                                                    className="flex items-center space-x-1.5 px-4 py-2 rounded-md text-[11px] font-bold bg-orange-500/20 border border-orange-500/40 text-orange-300 hover:bg-orange-500/30 transition-all">
+                                                    <Eye size={12} />
+                                                    <span>📋 查看文件结构</span>
+                                                </button>
+                                            )}
                                         </div>
                                     ) : (
                                         <div className="text-[12px] leading-relaxed whitespace-pre-wrap">

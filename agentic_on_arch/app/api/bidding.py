@@ -733,13 +733,11 @@ async def upload_historical_bid(
     file: UploadFile = File(...),
     llm_provider: str = Form("qwen"),
 ):
-    """上传历史投标文件 → 自动提取简历/业绩/资质 → 入库
+    """上传历史投标/素材文件 → 提取 → 返回变更对比 (不自动入库)
 
-    This is the core S2 endpoint. It:
-    1. Saves the uploaded .docx file
-    2. Parses it with bid_document_parser
-    3. Saves extracted materials to material_store
-    4. Returns extraction results for user review
+    Step 1 of 2-step flow:
+    1. upload-historical → extract + diff (this endpoint)
+    2. confirm-materials → save to store (user confirms)
     """
     import time as _time
 
@@ -762,14 +760,19 @@ async def upload_historical_bid(
             "llm_provider": llm_provider,
         })
 
-        # Save to material store
+        # Diff against existing store (don't save yet)
         from app.core.skills.builtin.material_store import get_material_store
         store = get_material_store()
-        save_counts = store.save_materials(materials)
+        diff = store.diff_materials(materials)
+
+        # Store pending materials in memory for confirmation
+        upload_id = f"upload_{int(_time.time())}"
+        _pending_uploads[upload_id] = materials
 
         return {
             "success": True,
             "data": {
+                "upload_id": upload_id,
                 "source_file": filename,
                 "extracted": {
                     "resumes": len(materials.get("resumes", [])),
@@ -777,19 +780,68 @@ async def upload_historical_bid(
                     "qualifications": len(materials.get("qualifications", [])),
                     "narrative_chunks": len(materials.get("narrative_chunks", [])),
                 },
-                "saved": save_counts,
+                "diff": diff,
                 "materials": {
                     "resumes": materials.get("resumes", []),
                     "projects": materials.get("projects", []),
                     "qualifications": materials.get("qualifications", []),
                 },
-                "total_store": store.get_summary(),
             }
         }
 
     except Exception as e:
         logger.error(f"Historical bid processing failed: {e}")
         return {"success": False, "message": f"处理失败: {str(e)}"}
+
+
+# In-memory pending uploads (awaiting user confirmation)
+_pending_uploads = {}  # type: Dict[str, Any]
+
+
+class ConfirmMaterialsRequest(BaseModel):
+    upload_id: str
+    # Optional: subset of items to save (if user deselects some)
+    # If empty, save all extracted materials
+    selected_resumes: Optional[list] = None
+    selected_projects: Optional[list] = None
+    selected_qualifications: Optional[list] = None
+
+
+@router.post("/confirm-materials")
+async def confirm_materials(req: ConfirmMaterialsRequest):
+    """用户确认后，将提取的素材入库
+
+    Step 2 of 2-step flow. Called after user reviews diff from upload-historical.
+    """
+    materials = _pending_uploads.pop(req.upload_id, None)
+    if not materials:
+        return {"success": False, "message": f"上传 {req.upload_id} 不存在或已过期"}
+
+    # If user selected specific items, filter
+    if req.selected_resumes is not None:
+        names = set(req.selected_resumes)
+        materials["resumes"] = [r for r in materials.get("resumes", [])
+                                if r.get("name") in names]
+    if req.selected_projects is not None:
+        names = set(req.selected_projects)
+        materials["projects"] = [p for p in materials.get("projects", [])
+                                 if p.get("project_name") in names]
+    if req.selected_qualifications is not None:
+        names = set(req.selected_qualifications)
+        materials["qualifications"] = [q for q in materials.get("qualifications", [])
+                                       if q.get("name") in names]
+
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    save_counts = store.save_materials(materials)
+
+    return {
+        "success": True,
+        "data": {
+            "saved": save_counts,
+            "total_store": store.get_summary(),
+        }
+    }
 
 
 @router.get("/materials")

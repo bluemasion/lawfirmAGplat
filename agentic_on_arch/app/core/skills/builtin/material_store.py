@@ -290,6 +290,89 @@ class MaterialStore:
                 seen[id(item)] = item
         return list(seen.values())
 
+    # ── Change Detection ──
+
+    def diff_materials(self, new_materials: Dict[str, Any]) -> Dict[str, List[Dict]]:
+        """Compare new materials against existing store, return per-item diff.
+
+        Returns dict like:
+        {
+          "resumes": [
+            {"name": "王大明", "action": "new", "data": {...}},
+            {"name": "李文华", "action": "updated", "changes": {"years": [15, 17]}, "data": {...}},
+            {"name": "陈强", "action": "unchanged", "data": {...}},
+          ],
+          "projects": [...],
+          "qualifications": [...]
+        }
+        """
+        diff = {}
+
+        # Diff resumes
+        new_resumes = new_materials.get("resumes", [])
+        if new_resumes:
+            existing = {r.get("name", ""): r for r in self.get_resumes() if r.get("name")}
+            diff["resumes"] = self._diff_items(new_resumes, existing, "name")
+
+        # Diff projects
+        new_projects = new_materials.get("projects", [])
+        if new_projects:
+            existing = {p.get("project_name", ""): p for p in self.get_projects() if p.get("project_name")}
+            diff["projects"] = self._diff_items(new_projects, existing, "project_name")
+
+        # Diff qualifications
+        new_quals = new_materials.get("qualifications", [])
+        if new_quals:
+            existing = {q.get("name", ""): q for q in self.get_qualifications() if q.get("name")}
+            diff["qualifications"] = self._diff_items(new_quals, existing, "name")
+
+        # Narrative chunks: always "new" (no dedup for text chunks)
+        new_narratives = new_materials.get("narrative_chunks", [])
+        if new_narratives:
+            diff["narrative_chunks"] = [
+                {"title": c.get("title", ""), "action": "new",
+                 "preview": c.get("content", "")[:100]}
+                for c in new_narratives
+            ]
+
+        return diff
+
+    def _diff_items(self, new_items: List[Dict], existing_map: Dict[str, Dict],
+                    key_field: str) -> List[Dict]:
+        """Compare new items against existing by key field."""
+        results = []
+        for item in new_items:
+            key = item.get(key_field, "")
+            if not key:
+                results.append({"action": "new", "data": item})
+                continue
+
+            if key not in existing_map:
+                results.append({"action": "new", key_field: key, "data": item})
+            else:
+                old = existing_map[key]
+                changes = {}
+                for field, new_val in item.items():
+                    if field in ("_source", "_extracted_at"):
+                        continue
+                    old_val = old.get(field)
+                    if old_val != new_val and new_val:
+                        if old_val:
+                            changes[field] = [str(old_val)[:80], str(new_val)[:80]]
+                        else:
+                            changes[field] = [None, str(new_val)[:80]]
+
+                if changes:
+                    results.append({
+                        "action": "updated", key_field: key,
+                        "changes": changes, "data": item,
+                    })
+                else:
+                    results.append({
+                        "action": "unchanged", key_field: key, "data": item,
+                    })
+        return results
+
 
 # Singleton instance
 _store = None  # type: Optional[MaterialStore]
