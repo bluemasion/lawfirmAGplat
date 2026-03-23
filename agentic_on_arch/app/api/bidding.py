@@ -1027,19 +1027,10 @@ async def get_source_files(name: str):
                         "source": "uploaded",
                     })
 
-    # Priority 2: Scan client_materials + uploads root for filename match
-    search_dirs = [
-        ("client_materials", os.path.join("uploads", "client_materials")),
-        ("上传历史", "uploads"),
-    ]
-
-    for dir_label, search_dir in search_dirs:
-        if not os.path.isdir(search_dir):
-            continue
-        for root, dirs, files in os.walk(search_dir):
-            # Skip subdirectories already covered
-            if dir_label == "上传历史" and "client_materials" in root:
-                continue
+    # Priority 2: Scan client_materials ONLY for original source file
+    client_dir = os.path.join("uploads", "client_materials")
+    if os.path.isdir(client_dir):
+        for root, dirs, files in os.walk(client_dir):
             for fname in files:
                 if fname.startswith("."):
                     continue
@@ -1057,7 +1048,7 @@ async def get_source_files(name: str):
                     ext = os.path.splitext(fname)[1].lower()
                     matches.append({
                         "filename": fname,
-                        "folder": folder if dir_label == "client_materials" else "上传历史",
+                        "folder": folder,
                         "relative_path": rel_path,
                         "size_bytes": size,
                         "size_display": f"{size / 1024 / 1024:.1f}MB" if size > 1024 * 1024 else f"{size / 1024:.0f}KB",
@@ -1153,15 +1144,22 @@ async def preview_material_file(path: str):
     path 参数是相对于 uploads/client_materials 的路径。
     """
     import os
-    client_dir = os.path.join("uploads", "client_materials")
-    full_path = os.path.normpath(os.path.join(client_dir, path))
 
-    # Security: prevent path traversal
-    if not full_path.startswith(os.path.normpath(client_dir)):
+    # Handle two path formats:
+    # 1. Old: relative to client_materials (e.g. "kindofpdfword/团队人员资料/file.docx")
+    # 2. New: relative to CWD (e.g. "uploads/historical_123_file.docx")
+    if path.startswith("uploads/") or path.startswith("uploads\\"):
+        full_path = os.path.normpath(path)
+    else:
+        client_dir = os.path.join("uploads", "client_materials")
+        full_path = os.path.normpath(os.path.join(client_dir, path))
+
+    # Security: prevent path traversal (must stay under uploads/)
+    if not full_path.startswith("uploads"):
         return HTMLResponse("<h1>403 Forbidden</h1>", status_code=403)
 
     if not os.path.isfile(full_path):
-        return HTMLResponse("<h1>404 文件不存在</h1>", status_code=404)
+        return HTMLResponse(f"<h1>404 文件不存在</h1><p>{path}</p>", status_code=404)
 
     ext = os.path.splitext(full_path)[1].lower()
     filename = os.path.basename(full_path)
