@@ -147,7 +147,43 @@ export default function MaterialPanel({ onClose }) {
             setUploadStep(3);
 
             const { upload_id, extracted } = result.data;
-            const diff = result.data.diff || {};
+            let diff = result.data.diff || {};
+
+            console.log('[MaterialPanel] extracted:', JSON.stringify(extracted));
+            console.log('[MaterialPanel] diff keys:', Object.keys(diff));
+
+            // Fallback: if diff is empty but materials has items, build diff from materials
+            const materials = result.data.materials || {};
+            const hasDiffItems = Object.values(diff).some(arr => Array.isArray(arr) && arr.length > 0);
+            const hasMaterials = ['resumes', 'projects', 'qualifications'].some(
+                cat => Array.isArray(materials[cat]) && materials[cat].length > 0
+            );
+
+            if (!hasDiffItems && hasMaterials) {
+                console.log('[MaterialPanel] diff empty but materials found, building synthetic diff');
+                diff = {};
+                for (const cat of ['resumes', 'projects', 'qualifications']) {
+                    const items = materials[cat];
+                    if (Array.isArray(items) && items.length > 0) {
+                        diff[cat] = items.map(item => ({
+                            action: 'new',
+                            name: item.name || item.project_name || item.title || '未知',
+                            data: item,
+                        }));
+                    }
+                }
+            }
+
+            // Check if we have anything to show
+            const totalItems = Object.values(diff).reduce(
+                (sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0), 0
+            );
+            if (totalItems === 0) {
+                alert('⚠️ 未从文件中提取到可入库的素材（简历/业绩/资质）。\n可能原因：文件格式不支持、内容无法识别、或 AI 服务暂时不可用。');
+                setUploading(false);
+                setUploadStep(0);
+                return;
+            }
 
             // Build selection map
             const selected = {};
