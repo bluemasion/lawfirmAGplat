@@ -339,7 +339,32 @@ class MaterialStore:
 
     def _diff_items(self, new_items: List[Dict], existing_map: Dict[str, Dict],
                     key_field: str) -> List[Dict]:
-        """Compare new items against existing by key field."""
+        """Compare new items against existing by key field (with fuzzy matching)."""
+        from difflib import SequenceMatcher
+
+        # Internal fields to skip in diff comparison
+        _SKIP_FIELDS = {"_source", "_extracted_at", "_source_file", "_source_path",
+                        "_source_section"}
+
+        def _find_best_match(name: str, candidates: Dict[str, Dict]) -> Optional[str]:
+            """Find best fuzzy match for a name in candidates (threshold 0.7)."""
+            if not name:
+                return None
+            # Exact match first
+            if name in candidates:
+                return name
+            # Fuzzy match
+            best_ratio, best_key = 0, None
+            for candidate_key in candidates:
+                ratio = SequenceMatcher(None, name, candidate_key).ratio()
+                if ratio > best_ratio:
+                    best_ratio = ratio
+                    best_key = candidate_key
+            if best_ratio >= 0.7:
+                logger.info(f"Fuzzy match: '{name}' → '{best_key}' (similarity={best_ratio:.2f})")
+                return best_key
+            return None
+
         results = []
         for item in new_items:
             key = item.get(key_field, "")
@@ -347,13 +372,15 @@ class MaterialStore:
                 results.append({"action": "new", "data": item})
                 continue
 
-            if key not in existing_map:
+            matched_key = _find_best_match(key, existing_map)
+
+            if matched_key is None:
                 results.append({"action": "new", key_field: key, "data": item})
             else:
-                old = existing_map[key]
+                old = existing_map[matched_key]
                 changes = {}
                 for field, new_val in item.items():
-                    if field in ("_source", "_extracted_at"):
+                    if field in _SKIP_FIELDS:
                         continue
                     old_val = old.get(field)
                     if old_val != new_val and new_val:
