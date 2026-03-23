@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Plus, Trash2, Edit3, Users, Briefcase, Award, ArrowLeft, Save, Loader2 } from 'lucide-react';
+import { X, Plus, Trash2, Edit3, Users, Briefcase, Award, ArrowLeft, Save, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -16,6 +16,7 @@ const RESUME_FIELDS = [
     { key: 'specialty', label: '专业方向' },
     { key: 'license_number', label: '执业证号' },
     { key: 'education', label: '学历' },
+    { key: 'representative_cases', label: '代表案例', array: true },
     { key: 'brief_bio', label: '简介', multiline: true },
 ];
 
@@ -55,6 +56,7 @@ export default function MaterialPanel({ onClose }) {
     const [loading, setLoading] = useState(true);
     const [editingItem, setEditingItem] = useState(null); // { mode: 'edit'|'add', data: {} }
     const [saving, setSaving] = useState(false);
+    const [expandedIdx, setExpandedIdx] = useState(null); // which item index is expanded
 
     // ── Load materials ──
     useEffect(() => {
@@ -166,56 +168,119 @@ export default function MaterialPanel({ onClose }) {
 
         return (
             <div className="divide-y divide-zinc-800">
-                {items.map((item, idx) => (
-                    <div key={idx}
-                        className="flex items-center justify-between px-4 py-3 hover:bg-zinc-800/50 transition-colors group">
-                        <div className="flex-1 min-w-0">
-                            <div className="flex items-center space-x-2">
-                                <span className="text-[13px] font-semibold text-zinc-100">
-                                    {item[keyField] || '未命名'}
-                                </span>
-                                {activeTab === 'resumes' && item.title && (
-                                    <span className="text-[11px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                                        {item.title}
+                {items.map((item, idx) => {
+                    const isExpanded = expandedIdx === idx;
+                    return (
+                        <div key={idx}>
+                            <div
+                                onClick={() => setExpandedIdx(isExpanded ? null : idx)}
+                                className={`flex items-center justify-between px-4 py-3 cursor-pointer transition-colors group ${isExpanded ? 'bg-zinc-800/70' : 'hover:bg-zinc-800/50'
+                                    }`}>
+                                <div className="flex items-center space-x-2 flex-1 min-w-0">
+                                    {isExpanded
+                                        ? <ChevronDown size={14} className="text-orange-400 shrink-0" />
+                                        : <ChevronRight size={14} className="text-zinc-600 shrink-0" />
+                                    }
+                                    <span className="text-[13px] font-semibold text-zinc-100">
+                                        {item[keyField] || '未命名'}
                                     </span>
-                                )}
-                                {activeTab === 'resumes' && item.specialty && (
-                                    <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                                        {item.specialty}
-                                    </span>
-                                )}
-                                {activeTab === 'projects' && item.project_type && (
-                                    <span className="text-[11px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                                        {item.project_type}
-                                    </span>
-                                )}
+                                    {activeTab === 'resumes' && item.title && (
+                                        <span className="text-[11px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                                            {item.title}
+                                        </span>
+                                    )}
+                                    {activeTab === 'resumes' && item.specialty && (
+                                        <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                                            {item.specialty}
+                                        </span>
+                                    )}
+                                    {activeTab === 'projects' && item.project_type && (
+                                        <span className="text-[11px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                                            {item.project_type}
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="flex items-center space-x-1">
+                                    <div className="text-[11px] text-zinc-500 mr-2 hidden sm:block">
+                                        {activeTab === 'resumes' && (
+                                            <>执业{item.years_of_practice || '?'}年{item.education ? ` · ${item.education}` : ''}</>
+                                        )}
+                                        {activeTab === 'projects' && (
+                                            <>{item.client || ''}{item.contract_amount ? ` · ${item.contract_amount}` : ''}</>
+                                        )}
+                                        {activeTab === 'qualifications' && (
+                                            <>{item.issuer || ''}{item.valid_until ? ` · 至${item.valid_until}` : ''}</>
+                                        )}
+                                    </div>
+                                    <button onClick={(e) => { e.stopPropagation(); setEditingItem({ mode: 'edit', data: { ...item }, originalName: item[keyField] }); }}
+                                        className="p-1.5 rounded hover:bg-zinc-700 text-zinc-400 hover:text-blue-300 transition-colors opacity-0 group-hover:opacity-100"
+                                        title="编辑">
+                                        <Edit3 size={13} />
+                                    </button>
+                                    <button onClick={(e) => { e.stopPropagation(); handleDelete(activeTab, item); }}
+                                        className="p-1.5 rounded hover:bg-zinc-700 text-zinc-400 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                                        title="删除">
+                                        <Trash2 size={13} />
+                                    </button>
+                                </div>
                             </div>
-                            <div className="text-[11px] text-zinc-500 mt-0.5 truncate">
-                                {activeTab === 'resumes' && (
-                                    <>执业{item.years_of_practice || '?'}年{item.education ? ` · ${item.education}` : ''}{item.license_number ? ` · ${item.license_number}` : ''}</>
-                                )}
-                                {activeTab === 'projects' && (
-                                    <>{item.client || ''}{item.contract_amount ? ` · ${item.contract_amount}` : ''}{item.period ? ` · ${item.period}` : ''}</>
-                                )}
-                                {activeTab === 'qualifications' && (
-                                    <>{item.issuer || ''}{item.number ? ` · ${item.number}` : ''}{item.valid_until ? ` · 至 ${item.valid_until}` : ''}</>
-                                )}
-                            </div>
+                            {/* ── Expanded detail panel ── */}
+                            {isExpanded && (
+                                <div className="bg-zinc-850 border-l-2 border-orange-500/40 mx-4 mb-2 rounded-md bg-zinc-900/80 px-4 py-3">
+                                    <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                                        {fields.map(f => {
+                                            const val = item[f.key];
+                                            if (val === undefined || val === null || val === '') return null;
+                                            return (
+                                                <div key={f.key} className={f.multiline || f.array ? 'col-span-2' : ''}>
+                                                    <span className="text-[10px] text-zinc-500 uppercase tracking-wide">{f.label}</span>
+                                                    {f.array && Array.isArray(val) ? (
+                                                        <div className="mt-0.5">
+                                                            {val.map((v, vi) => (
+                                                                <div key={vi} className="text-[12px] text-zinc-300 flex items-start">
+                                                                    <span className="text-orange-400 mr-1.5 mt-0.5">•</span>
+                                                                    <span>{typeof v === 'string' ? v : JSON.stringify(v)}</span>
+                                                                </div>
+                                                            ))}
+                                                            {!val.length && <span className="text-[12px] text-zinc-600">—</span>}
+                                                        </div>
+                                                    ) : (
+                                                        <div className="text-[12px] text-zinc-200 mt-0.5">
+                                                            {typeof val === 'object' ? JSON.stringify(val) : String(val)}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                        {/* Show any extra fields not in FIELD_MAP */}
+                                        {Object.entries(item).filter(([k]) => !fields.some(f => f.key === k) && k !== '_source').map(([k, v]) => {
+                                            if (v === undefined || v === null || v === '') return null;
+                                            return (
+                                                <div key={k} className={Array.isArray(v) ? 'col-span-2' : ''}>
+                                                    <span className="text-[10px] text-zinc-500 uppercase tracking-wide">{k}</span>
+                                                    {Array.isArray(v) ? (
+                                                        <div className="mt-0.5">
+                                                            {v.map((vi, i) => (
+                                                                <div key={i} className="text-[12px] text-zinc-300 flex items-start">
+                                                                    <span className="text-orange-400 mr-1.5 mt-0.5">•</span>
+                                                                    <span>{typeof vi === 'string' ? vi : JSON.stringify(vi)}</span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    ) : (
+                                                        <div className="text-[12px] text-zinc-200 mt-0.5">
+                                                            {typeof v === 'object' ? JSON.stringify(v) : String(v)}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
                         </div>
-                        <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button onClick={() => setEditingItem({ mode: 'edit', data: { ...item }, originalName: item[keyField] })}
-                                className="p-1.5 rounded hover:bg-zinc-700 text-zinc-400 hover:text-blue-300 transition-colors"
-                                title="编辑">
-                                <Edit3 size={13} />
-                            </button>
-                            <button onClick={() => handleDelete(activeTab, item)}
-                                className="p-1.5 rounded hover:bg-zinc-700 text-zinc-400 hover:text-red-400 transition-colors"
-                                title="删除">
-                                <Trash2 size={13} />
-                            </button>
-                        </div>
-                    </div>
-                ))}
+                    );
+                })}
             </div>
         );
     };
@@ -316,8 +381,8 @@ export default function MaterialPanel({ onClose }) {
                         <button key={tab.key}
                             onClick={() => setActiveTab(tab.key)}
                             className={`flex items-center space-x-1.5 px-4 py-2.5 text-[12px] font-medium border-b-2 transition-all ${activeTab === tab.key
-                                    ? 'border-orange-500 text-orange-300'
-                                    : 'border-transparent text-zinc-500 hover:text-zinc-300'
+                                ? 'border-orange-500 text-orange-300'
+                                : 'border-transparent text-zinc-500 hover:text-zinc-300'
                                 }`}>
                             <span>{tab.emoji}</span>
                             <span>{tab.label}</span>
