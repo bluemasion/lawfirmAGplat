@@ -224,58 +224,129 @@ export default function MaterialPanel({ onClose }) {
                                     </button>
                                 </div>
                             </div>
-                            {/* ── Expanded detail panel ── */}
+                            {/* ── Expanded detail card ── */}
                             {isExpanded && (
-                                <div className="bg-zinc-850 border-l-2 border-orange-500/40 mx-4 mb-2 rounded-md bg-zinc-900/80 px-4 py-3">
-                                    <div className="grid grid-cols-2 gap-x-6 gap-y-2">
-                                        {fields.map(f => {
-                                            const val = item[f.key];
-                                            if (val === undefined || val === null || val === '') return null;
-                                            return (
-                                                <div key={f.key} className={f.multiline || f.array ? 'col-span-2' : ''}>
-                                                    <span className="text-[10px] text-zinc-500 uppercase tracking-wide">{f.label}</span>
-                                                    {f.array && Array.isArray(val) ? (
-                                                        <div className="mt-0.5">
-                                                            {val.map((v, vi) => (
-                                                                <div key={vi} className="text-[12px] text-zinc-300 flex items-start">
-                                                                    <span className="text-orange-400 mr-1.5 mt-0.5">•</span>
-                                                                    <span>{typeof v === 'string' ? v : JSON.stringify(v)}</span>
-                                                                </div>
-                                                            ))}
-                                                            {!val.length && <span className="text-[12px] text-zinc-600">—</span>}
-                                                        </div>
-                                                    ) : (
-                                                        <div className="text-[12px] text-zinc-200 mt-0.5">
-                                                            {typeof val === 'object' ? JSON.stringify(val) : String(val)}
-                                                        </div>
-                                                    )}
+                                <div className="mx-4 mb-3 rounded-lg border border-zinc-700/80 bg-gradient-to-b from-zinc-800/90 to-zinc-900/90 overflow-hidden shadow-lg">
+
+                                    {/* ━━ Resume Card ━━ */}
+                                    {activeTab === 'resumes' && (
+                                        <div>
+                                            {/* Profile header */}
+                                            <div className="flex items-start px-5 py-4 border-b border-zinc-700/50">
+                                                <div className="w-14 h-14 rounded-full bg-gradient-to-br from-orange-500 to-amber-600 flex items-center justify-center text-white text-lg font-bold shrink-0 shadow-lg shadow-orange-500/20">
+                                                    {(item.name || '?')[0]}
                                                 </div>
-                                            );
-                                        })}
-                                        {/* Show any extra fields not in FIELD_MAP */}
-                                        {Object.entries(item).filter(([k]) => !fields.some(f => f.key === k) && k !== '_source').map(([k, v]) => {
-                                            if (v === undefined || v === null || v === '') return null;
-                                            return (
-                                                <div key={k} className={Array.isArray(v) ? 'col-span-2' : ''}>
-                                                    <span className="text-[10px] text-zinc-500 uppercase tracking-wide">{k}</span>
-                                                    {Array.isArray(v) ? (
-                                                        <div className="mt-0.5">
-                                                            {v.map((vi, i) => (
-                                                                <div key={i} className="text-[12px] text-zinc-300 flex items-start">
-                                                                    <span className="text-orange-400 mr-1.5 mt-0.5">•</span>
-                                                                    <span>{typeof vi === 'string' ? vi : JSON.stringify(vi)}</span>
-                                                                </div>
-                                                            ))}
-                                                        </div>
-                                                    ) : (
-                                                        <div className="text-[12px] text-zinc-200 mt-0.5">
-                                                            {typeof v === 'object' ? JSON.stringify(v) : String(v)}
-                                                        </div>
-                                                    )}
+                                                <div className="ml-4 flex-1 min-w-0">
+                                                    <h3 className="text-[15px] font-bold text-zinc-100">{item.name || '未知'}</h3>
+                                                    <div className="flex items-center flex-wrap gap-1.5 mt-1">
+                                                        {item.title && <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30">{item.title}</span>}
+                                                        {item.specialty && <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">{item.specialty}</span>}
+                                                        {item.years_of_practice && <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-700 text-zinc-300">执业{item.years_of_practice}年</span>}
+                                                    </div>
                                                 </div>
-                                            );
-                                        })}
-                                    </div>
+                                            </div>
+                                            {/* Info table */}
+                                            <table className="w-full text-[12px]">
+                                                <tbody>
+                                                    {[
+                                                        ['执业证号', item.license_number],
+                                                        ['学历', item.education],
+                                                        ['专业方向', item.specialty],
+                                                        ['执业年限', item.years_of_practice ? `${item.years_of_practice}年` : null],
+                                                    ].filter(([, v]) => v).map(([label, val], i) => (
+                                                        <tr key={i} className={i % 2 === 0 ? 'bg-zinc-800/30' : ''}>
+                                                            <td className="px-5 py-2 text-zinc-500 w-28 whitespace-nowrap">{label}</td>
+                                                            <td className="px-3 py-2 text-zinc-200">{val}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                            {/* Brief bio */}
+                                            {item.brief_bio && (
+                                                <div className="px-5 py-3 border-t border-zinc-700/50">
+                                                    <div className="text-[10px] text-zinc-500 uppercase tracking-wide mb-1">简介</div>
+                                                    <p className="text-[12px] text-zinc-300 leading-relaxed">{item.brief_bio}</p>
+                                                </div>
+                                            )}
+                                            {/* Representative cases */}
+                                            {item.representative_cases?.length > 0 && (
+                                                <div className="px-5 py-3 border-t border-zinc-700/50">
+                                                    <div className="text-[10px] text-zinc-500 uppercase tracking-wide mb-1.5">代表案例</div>
+                                                    <div className="space-y-1">
+                                                        {item.representative_cases.map((c, ci) => (
+                                                            <div key={ci} className="flex items-start text-[12px]">
+                                                                <span className="text-orange-400 mr-2 mt-0.5 shrink-0">▸</span>
+                                                                <span className="text-zinc-300">{typeof c === 'string' ? c : JSON.stringify(c)}</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* ━━ Project Card ━━ */}
+                                    {activeTab === 'projects' && (
+                                        <div>
+                                            <div className="px-5 py-3 border-b border-zinc-700/50 flex items-center space-x-2">
+                                                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center text-white text-sm shrink-0">💼</div>
+                                                <h3 className="text-[14px] font-bold text-zinc-100">{item.project_name || '未知项目'}</h3>
+                                                {item.project_type && <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">{item.project_type}</span>}
+                                            </div>
+                                            <table className="w-full text-[12px]">
+                                                <tbody>
+                                                    {[
+                                                        ['委托方', item.client],
+                                                        ['项目类型', item.project_type],
+                                                        ['合同金额', item.contract_amount],
+                                                        ['服务期间', item.period],
+                                                        ['项目负责人', item.lead_lawyer],
+                                                    ].filter(([, v]) => v).map(([label, val], i) => (
+                                                        <tr key={i} className={i % 2 === 0 ? 'bg-zinc-800/30' : ''}>
+                                                            <td className="px-5 py-2 text-zinc-500 w-28 whitespace-nowrap">{label}</td>
+                                                            <td className="px-3 py-2 text-zinc-200">{val}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                            {item.description && (
+                                                <div className="px-5 py-3 border-t border-zinc-700/50">
+                                                    <div className="text-[10px] text-zinc-500 uppercase tracking-wide mb-1">项目描述</div>
+                                                    <p className="text-[12px] text-zinc-300 leading-relaxed">{item.description}</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* ━━ Qualification Card ━━ */}
+                                    {activeTab === 'qualifications' && (
+                                        <div>
+                                            <div className="px-5 py-3 border-b border-zinc-700/50 flex items-center space-x-2">
+                                                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500 to-yellow-600 flex items-center justify-center text-white text-sm shrink-0">🏅</div>
+                                                <h3 className="text-[14px] font-bold text-zinc-100">{item.name || '未知资质'}</h3>
+                                                {item.valid_until && (
+                                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-500/15 text-green-400 border border-green-500/30">
+                                                        有效至 {item.valid_until}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <table className="w-full text-[12px]">
+                                                <tbody>
+                                                    {[
+                                                        ['资质编号', item.number],
+                                                        ['颁发机构', item.issuer],
+                                                        ['有效期至', item.valid_until],
+                                                        ['来源章节', item._source_section],
+                                                    ].filter(([, v]) => v).map(([label, val], i) => (
+                                                        <tr key={i} className={i % 2 === 0 ? 'bg-zinc-800/30' : ''}>
+                                                            <td className="px-5 py-2 text-zinc-500 w-28 whitespace-nowrap">{label}</td>
+                                                            <td className="px-3 py-2 text-zinc-200">{val}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>
