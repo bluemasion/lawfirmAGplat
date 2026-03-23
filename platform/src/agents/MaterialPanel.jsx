@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Plus, Trash2, Edit3, Users, Briefcase, Award, ArrowLeft, Save, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
+import { X, Plus, Trash2, Edit3, Users, Briefcase, Award, ArrowLeft, Save, Loader2, ChevronDown, ChevronRight, FileText, File } from 'lucide-react';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -49,6 +49,36 @@ const KEY_FIELD = {
     qualifications: 'name',
 };
 
+/* ── Source Files Block (shared across all card types) ── */
+function SourceFilesBlock({ data }) {
+    if (!data || (!data.loading && data.files.length === 0)) return null;
+
+    const fileIcon = (type) => {
+        const icons = { docx: '📄', doc: '📄', pdf: '📕', xlsx: '📊', xls: '📊', pptx: '📊', png: '🖼️', jpg: '🖼️', jpeg: '🖼️' };
+        return icons[type] || '📎';
+    };
+
+    return (
+        <div className="px-5 py-3 border-t border-zinc-700/50 bg-zinc-900/50">
+            <div className="text-[10px] text-zinc-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                <FileText size={10} />
+                <span>关联原始文件</span>
+                {data.loading && <Loader2 size={10} className="animate-spin text-orange-400" />}
+            </div>
+            <div className="space-y-1.5">
+                {data.files.map((f, fi) => (
+                    <div key={fi} className="flex items-center text-[12px] group/file">
+                        <span className="mr-2 text-sm">{fileIcon(f.file_type)}</span>
+                        <span className="text-zinc-200 truncate flex-1">{f.filename}</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-700/60 text-zinc-400 ml-2 shrink-0">{f.folder}</span>
+                        <span className="text-[10px] text-zinc-500 ml-2 shrink-0">{f.size_display}</span>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
 export default function MaterialPanel({ onClose }) {
     const [activeTab, setActiveTab] = useState('resumes');
     const [materials, setMaterials] = useState({ resumes: [], projects: [], qualifications: [] });
@@ -57,6 +87,7 @@ export default function MaterialPanel({ onClose }) {
     const [editingItem, setEditingItem] = useState(null); // { mode: 'edit'|'add', data: {} }
     const [saving, setSaving] = useState(false);
     const [expandedIdx, setExpandedIdx] = useState(null); // which item index is expanded
+    const [sourceFiles, setSourceFiles] = useState({}); // { name: { loading, files: [] } }
 
     // ── Load materials ──
     useEffect(() => {
@@ -170,12 +201,32 @@ export default function MaterialPanel({ onClose }) {
             <div className="divide-y divide-zinc-800">
                 {items.map((item, idx) => {
                     const isExpanded = expandedIdx === idx;
+                    // Fetch source files when expanding
+                    const lookupName = activeTab === 'resumes' ? item.name : activeTab === 'projects' ? item.project_name : item.name;
+                    const handleExpand = () => {
+                        if (isExpanded) { setExpandedIdx(null); return; }
+                        setExpandedIdx(idx);
+                        if (lookupName && !sourceFiles[lookupName]) {
+                            setSourceFiles(prev => ({ ...prev, [lookupName]: { loading: true, files: [] } }));
+                            fetch(`${API_BASE}/api/bidding/materials/source-files/${encodeURIComponent(lookupName)}`)
+                                .then(r => r.json())
+                                .then(d => {
+                                    if (d.success) {
+                                        setSourceFiles(prev => ({ ...prev, [lookupName]: { loading: false, files: d.data.files } }));
+                                    }
+                                })
+                                .catch(() => setSourceFiles(prev => ({ ...prev, [lookupName]: { loading: false, files: [] } })));
+                        }
+                    };
+                    const currentSourceFiles = sourceFiles[lookupName] || { loading: false, files: [] };
                     return (
-                        <div key={idx}>
+                        <div key={idx} className="border-b border-zinc-800/50">
+                            {/* Clickable item row */}
                             <div
-                                onClick={() => setExpandedIdx(isExpanded ? null : idx)}
                                 className={`flex items-center justify-between px-4 py-3 cursor-pointer transition-colors group ${isExpanded ? 'bg-zinc-800/70' : 'hover:bg-zinc-800/50'
-                                    }`}>
+                                    }`}
+                                onClick={handleExpand}
+                            >
                                 <div className="flex items-center space-x-2 flex-1 min-w-0">
                                     {isExpanded
                                         ? <ChevronDown size={14} className="text-orange-400 shrink-0" />
@@ -282,6 +333,8 @@ export default function MaterialPanel({ onClose }) {
                                                     </div>
                                                 </div>
                                             )}
+                                            {/* Source files */}
+                                            <SourceFilesBlock data={currentSourceFiles} />
                                         </div>
                                     )}
 
@@ -315,6 +368,8 @@ export default function MaterialPanel({ onClose }) {
                                                     <p className="text-[12px] text-zinc-300 leading-relaxed">{item.description}</p>
                                                 </div>
                                             )}
+                                            {/* Source files */}
+                                            <SourceFilesBlock data={currentSourceFiles} />
                                         </div>
                                     )}
 
@@ -345,6 +400,8 @@ export default function MaterialPanel({ onClose }) {
                                                     ))}
                                                 </tbody>
                                             </table>
+                                            {/* Source files */}
+                                            <SourceFilesBlock data={currentSourceFiles} />
                                         </div>
                                     )}
                                 </div>

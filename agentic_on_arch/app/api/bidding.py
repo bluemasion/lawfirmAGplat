@@ -760,6 +760,13 @@ async def upload_historical_bid(
             "llm_provider": llm_provider,
         })
 
+        # Inject source file info into every extracted item
+        original_filename = file.filename  # user's original filename
+        for category in ("resumes", "projects", "qualifications", "narrative_chunks"):
+            for item in materials.get(category, []):
+                item["_source_file"] = original_filename
+                item["_source_path"] = file_path
+
         # Diff against existing store (don't save yet)
         from app.core.skills.builtin.material_store import get_material_store
         store = get_material_store()
@@ -982,6 +989,123 @@ async def add_material(req: AddMaterialRequest):
         return {"success": False, "message": f"未知类型: {req.type}"}
 
     return {"success": True, "data": store.get_summary()}
+
+
+@router.get("/materials/source-files/{name}")
+async def get_source_files(name: str):
+    """查找某个人/项目/资质对应的原始素材文件
+
+    扫描 client_materials 目录，查找文件名中包含 name 的所有文件。
+    """
+    import glob
+
+    client_dir = os.path.join("uploads", "client_materials")
+    if not os.path.isdir(client_dir):
+        return {"success": True, "data": {"files": []}}
+
+    matches = []
+    for root, dirs, files in os.walk(client_dir):
+        for fname in files:
+            if fname.startswith("."):
+                continue
+            # Match if name appears in filename
+            if name in fname:
+                full_path = os.path.join(root, fname)
+                rel_path = os.path.relpath(full_path, client_dir)
+                folder = os.path.basename(root)
+                try:
+                    size = os.path.getsize(full_path)
+                except OSError:
+                    size = 0
+                ext = os.path.splitext(fname)[1].lower()
+                matches.append({
+                    "filename": fname,
+                    "folder": folder,
+                    "relative_path": rel_path,
+                    "size_bytes": size,
+                    "size_display": f"{size / 1024 / 1024:.1f}MB" if size > 1024 * 1024 else f"{size / 1024:.0f}KB",
+                    "file_type": ext.lstrip("."),
+                })
+
+    return {"success": True, "data": {"name": name, "files": matches}}
+
+
+@router.post("/materials/backfill-sources")
+async def backfill_sources():
+    """回填已有素材的 _source_file 字段
+
+    扫描 client_materials 目录，根据素材名称匹配文件名，
+    自动为没有 _source_file 的素材补充来源信息。
+    """
+    client_dir = os.path.join("uploads", "client_materials")
+    if not os.path.isdir(client_dir):
+        return {"success": False, "message": "client_materials 目录不存在"}
+
+    # Collect all files
+    all_files = []
+    for root, dirs, files in os.walk(client_dir):
+        for fname in files:
+            if fname.startswith("."):
+                continue
+            full_path = os.path.join(root, fname)
+            folder = os.path.basename(root)
+            all_files.append({
+                "filename": fname,
+                "folder": folder,
+                "full_path": full_path,
+            })
+
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    updated = {"resumes": 0, "projects": 0, "qualifications": 0}
+
+    # Backfill resumes
+    resumes = store.get_resumes()
+    for r in resumes:
+        if r.get("_source_file"):
+            continue
+        name = r.get("name", "")
+        if not name:
+            continue
+        matching = [f for f in all_files if name in f["filename"]]
+        if matching:
+            r["_source_file"] = matching[0]["filename"]
+            r["_source_path"] = matching[0]["full_path"]
+            r["_source_files"] = [f["filename"] for f in matching]
+            updated["resumes"] += 1
+    store._save_json(store.resumes_file, resumes)
+
+    # Backfill projects
+    projects = store.get_projects()
+    for p in projects:
+        if p.get("_source_file"):
+            continue
+        pname = p.get("project_name", "")
+        client = p.get("client", "")
+        matching = [f for f in all_files
+                    if (pname and pname in f["filename"]) or (client and client in f["filename"])]
+        if matching:
+            p["_source_file"] = matching[0]["filename"]
+            p["_source_path"] = matching[0]["full_path"]
+            updated["projects"] += 1
+    store._save_json(store.projects_file, projects)
+
+    # Backfill qualifications
+    quals = store.get_qualifications()
+    for q in quals:
+        if q.get("_source_file"):
+            continue
+        qname = q.get("name", "")
+        if not qname:
+            continue
+        matching = [f for f in all_files if qname in f["filename"]]
+        if matching:
+            q["_source_file"] = matching[0]["filename"]
+            q["_source_path"] = matching[0]["full_path"]
+            updated["qualifications"] += 1
+    store._save_json(store.qualifications_file, quals)
+
+    return {"success": True, "data": {"updated": updated}}
 
 
 def _sse(data: dict) -> str:
