@@ -186,6 +186,21 @@ class BidDocumentParserSkill(BaseSkill):
         llm = get_llm(llm_provider)
         classified = await self._classify_sections(llm, sections)
 
+        # Step 2.5: Filename-based heuristic override
+        # If file name strongly hints at a type but LLM missed it, force-classify
+        import os
+        filename = os.path.basename(file_path)
+        filename_type = self._detect_type_from_filename(filename)
+        if filename_type:
+            typed_sections = [s for s in classified
+                             if s.get("material_type") == filename_type]
+            if not typed_sections:
+                logger.info(f"Filename '{filename}' suggests type '{filename_type}' "
+                            f"but LLM found 0 such sections. Forcing classification.")
+                for sec in classified:
+                    if sec.get("material_type") in ("narrative", "other"):
+                        sec["material_type"] = filename_type
+
         # Step 3: Extract materials by type
         resumes = []      # type: List[Dict]
         projects = []     # type: List[Dict]
@@ -369,6 +384,24 @@ class BidDocumentParserSkill(BaseSkill):
             if kw in title:
                 return "form"
         return "narrative"
+
+    @staticmethod
+    def _detect_type_from_filename(filename: str) -> Optional[str]:
+        """Detect material type from filename keywords."""
+        resume_kw = ["简历", "人员", "律师", "团队", "个人"]
+        project_kw = ["业绩", "案例", "项目"]
+        qual_kw = ["资质", "证书", "执照", "荣誉", "奖项"]
+
+        for kw in resume_kw:
+            if kw in filename:
+                return "resume"
+        for kw in project_kw:
+            if kw in filename:
+                return "project"
+        for kw in qual_kw:
+            if kw in filename:
+                return "qualification"
+        return None
 
     async def _extract_resumes(self, llm, title: str,
                                 content: str) -> List[Dict]:
