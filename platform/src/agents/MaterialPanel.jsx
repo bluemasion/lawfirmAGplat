@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Plus, Trash2, Edit3, Users, Briefcase, Award, ArrowLeft, Save, Loader2, ChevronDown, ChevronRight, FileText, File } from 'lucide-react';
+import { X, Plus, Trash2, Edit3, Users, Briefcase, Award, ArrowLeft, Save, Loader2, ChevronDown, ChevronRight, FileText, File, ExternalLink } from 'lucide-react';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -65,15 +65,26 @@ function SourceFilesBlock({ data }) {
                 <span>关联原始文件</span>
                 {data.loading && <Loader2 size={10} className="animate-spin text-orange-400" />}
             </div>
-            <div className="space-y-1.5">
-                {data.files.map((f, fi) => (
-                    <div key={fi} className="flex items-center text-[12px] group/file">
-                        <span className="mr-2 text-sm">{fileIcon(f.file_type)}</span>
-                        <span className="text-zinc-200 truncate flex-1">{f.filename}</span>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-700/60 text-zinc-400 ml-2 shrink-0">{f.folder}</span>
-                        <span className="text-[10px] text-zinc-500 ml-2 shrink-0">{f.size_display}</span>
-                    </div>
-                ))}
+            <div className="space-y-1">
+                {data.files.map((f, fi) => {
+                    const previewUrl = `${API_BASE}/api/bidding/materials/preview?path=${encodeURIComponent(f.relative_path)}`;
+                    return (
+                        <a
+                            key={fi}
+                            href={previewUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center text-[12px] px-2 py-1.5 -mx-2 rounded-md hover:bg-zinc-700/40 cursor-pointer transition-colors group/file"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <span className="mr-2 text-sm">{fileIcon(f.file_type)}</span>
+                            <span className="text-zinc-200 truncate flex-1 group-hover/file:text-orange-300 transition-colors">{f.filename}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-700/60 text-zinc-400 ml-2 shrink-0">{f.folder}</span>
+                            <span className="text-[10px] text-zinc-500 ml-2 shrink-0">{f.size_display}</span>
+                            <ExternalLink size={11} className="ml-2 text-zinc-600 group-hover/file:text-orange-400 transition-colors shrink-0" />
+                        </a>
+                    );
+                })}
             </div>
         </div>
     );

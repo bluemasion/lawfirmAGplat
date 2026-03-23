@@ -1,7 +1,7 @@
 """投标文件生成 API — 上传解析 + Qwen 生成标书框架，全链路打通。"""
 
 from fastapi import APIRouter, UploadFile, File, Form
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse
 from pydantic import BaseModel
 from typing import Optional
 import json, zipfile, io, re
@@ -1106,6 +1106,155 @@ async def backfill_sources():
     store._save_json(store.qualifications_file, quals)
 
     return {"success": True, "data": {"updated": updated}}
+
+
+@router.get("/materials/preview")
+async def preview_material_file(path: str):
+    """在线预览素材文件
+
+    支持 docx (转 HTML), pdf, 图片 (直接返回)。
+    path 参数是相对于 uploads/client_materials 的路径。
+    """
+    import os
+    client_dir = os.path.join("uploads", "client_materials")
+    full_path = os.path.normpath(os.path.join(client_dir, path))
+
+    # Security: prevent path traversal
+    if not full_path.startswith(os.path.normpath(client_dir)):
+        return HTMLResponse("<h1>403 Forbidden</h1>", status_code=403)
+
+    if not os.path.isfile(full_path):
+        return HTMLResponse("<h1>404 文件不存在</h1>", status_code=404)
+
+    ext = os.path.splitext(full_path)[1].lower()
+    filename = os.path.basename(full_path)
+
+    # ── DOCX → styled HTML ──
+    if ext in (".docx", ".doc"):
+        try:
+            from docx import Document
+            doc = Document(full_path)
+
+            # Extract images from docx to base64
+            import base64
+            image_map = {}
+            for rel in doc.part.rels.values():
+                if "image" in rel.reltype:
+                    img_data = rel.target_part.blob
+                    content_type = rel.target_part.content_type or "image/png"
+                    b64 = base64.b64encode(img_data).decode()
+                    image_map[rel.rId] = f"data:{content_type};base64,{b64}"
+
+            # Build HTML
+            html_parts = []
+            for para in doc.paragraphs:
+                text = para.text.strip()
+                if not text:
+                    html_parts.append("<br/>")
+                    continue
+                style = para.style.name if para.style else ""
+                if "Heading 1" in style:
+                    html_parts.append(f"<h1>{text}</h1>")
+                elif "Heading 2" in style:
+                    html_parts.append(f"<h2>{text}</h2>")
+                elif "Heading 3" in style:
+                    html_parts.append(f"<h3>{text}</h3>")
+                else:
+                    # Check for bold/emphasis
+                    if para.runs and all(r.bold for r in para.runs if r.text.strip()):
+                        html_parts.append(f"<p><strong>{text}</strong></p>")
+                    else:
+                        html_parts.append(f"<p>{text}</p>")
+
+            # Extract tables
+            for table in doc.tables:
+                html_parts.append('<table>')
+                for ri, row in enumerate(table.rows):
+                    html_parts.append('<tr>')
+                    tag = 'th' if ri == 0 else 'td'
+                    for cell in row.cells:
+                        html_parts.append(f'<{tag}>{cell.text}</{tag}>')
+                    html_parts.append('</tr>')
+                html_parts.append('</table>')
+
+            # Render images
+            for rid, data_url in image_map.items():
+                html_parts.append(f'<img src="{data_url}" style="max-width:100%;margin:12px 0;border-radius:4px" />')
+
+            body = "\n".join(html_parts)
+
+            page = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>{filename}</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #1a1a2e; color: #e0e0e0;
+    padding: 40px; max-width: 960px; margin: 0 auto;
+    line-height: 1.8;
+  }}
+  h1 {{ font-size: 22px; color: #f97316; border-bottom: 2px solid #f97316; padding-bottom: 8px; margin: 24px 0 12px; }}
+  h2 {{ font-size: 18px; color: #fb923c; margin: 20px 0 10px; }}
+  h3 {{ font-size: 15px; color: #fbbf24; margin: 16px 0 8px; }}
+  p {{ margin: 6px 0; font-size: 14px; }}
+  strong {{ color: #fbbf24; }}
+  table {{
+    width: 100%; border-collapse: collapse; margin: 16px 0;
+    font-size: 13px;
+  }}
+  th, td {{
+    border: 1px solid #444; padding: 8px 12px; text-align: left;
+  }}
+  th {{ background: #2a2a4a; color: #f97316; font-weight: 600; }}
+  tr:nth-child(even) td {{ background: #1e1e3a; }}
+  .header {{
+    background: linear-gradient(135deg, #1e1e3a 0%, #2a1a3e 100%);
+    padding: 20px 24px; border-radius: 12px;
+    margin-bottom: 24px; border: 1px solid #333;
+  }}
+  .header h1 {{ border: none; margin: 0; padding: 0; }}
+  .header .meta {{ font-size: 12px; color: #888; margin-top: 4px; }}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>📄 {filename}</h1>
+  <div class="meta">在线预览 · 来源: uploads/client_materials/{path}</div>
+</div>
+{body}
+</body>
+</html>"""
+            return HTMLResponse(page)
+
+        except Exception as e:
+            logger.error(f"DOCX preview failed: {e}")
+            return HTMLResponse(f"<h1>DOCX 预览失败</h1><p>{str(e)}</p>", status_code=500)
+
+    # ── PDF → serve inline ──
+    elif ext == ".pdf":
+        return FileResponse(
+            full_path,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"inline; filename*=UTF-8''{filename}"},
+        )
+
+    # ── Images → serve inline ──
+    elif ext in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+        media_types = {
+            ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".gif": "image/gif", ".webp": "image/webp",
+        }
+        return FileResponse(full_path, media_type=media_types.get(ext, "image/png"))
+
+    else:
+        # Unsupported: offer download
+        return FileResponse(
+            full_path,
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+        )
 
 
 def _sse(data: dict) -> str:
