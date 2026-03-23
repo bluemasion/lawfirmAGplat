@@ -315,9 +315,26 @@ class BidDocumentParserSkill(BaseSkill):
         _flush()
 
         # If no sections found, treat whole document as one section
+        # Include BOTH paragraph text AND table content
         if not sections:
-            full_text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-            sections.append({"title": "投标文件正文", "content": full_text})
+            parts = []
+            for p in doc.paragraphs:
+                if p.text.strip():
+                    parts.append(p.text.strip())
+            for table in doc.tables:
+                rows_text = []
+                for row in table.rows:
+                    cells = [cell.text.strip() for cell in row.cells]
+                    rows_text.append(" | ".join(cells))
+                parts.append("\n".join(rows_text))
+            full_text = "\n".join(parts)
+            title = "投标文件正文"
+            # Use first non-empty paragraph or table row as title if available
+            if parts:
+                first_line = parts[0].split("\n")[0][:60]
+                if first_line:
+                    title = first_line
+            sections.append({"title": title, "content": full_text})
 
         return sections
 
