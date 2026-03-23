@@ -557,6 +557,71 @@ class ContentGenerationSkill(BaseSkill):
             except Exception as e:
                 logger.debug(f"Material RAG failed for '{title}': {e}")
 
+        # S7-P1B: Inject structured materials for specific chapter types
+        structured_context = ""
+        if store:
+            title_lower = title.lower()
+            try:
+                # Team/resume chapters → inject real lawyer bios
+                team_kws = ["团队介绍", "人员介绍", "律师团队", "拟投入人员",
+                            "项目团队", "核心团队", "服务团队", "人员配置"]
+                if any(kw in title_lower for kw in team_kws):
+                    resumes = store.get_resumes()
+                    if resumes:
+                        structured_context = "\n【素材库：律师简历数据】\n"
+                        for r in resumes[:8]:
+                            structured_context += (
+                                f"- {r.get('name', '?')}, "
+                                f"{r.get('title', '律师')}, "
+                                f"执业{r.get('years_of_practice', '?')}年, "
+                                f"擅长{r.get('specialty', '?')}"
+                            )
+                            cases = r.get('representative_cases', [])
+                            if cases:
+                                structured_context += f", 代表案例: {'; '.join(str(c) for c in cases[:3])}"
+                            structured_context += "\n"
+                        structured_context += "请使用以上真实律师信息撰写，不要编造姓名或经历。\n"
+                        logger.info(f"  Structured inject: {len(resumes)} resumes for '{title}'")
+
+                # Project/performance chapters → inject real project data
+                proj_kws = ["业绩介绍", "类似业绩", "项目经验", "服务案例",
+                            "成功案例", "代表业绩", "项目业绩"]
+                if any(kw in title_lower for kw in proj_kws):
+                    projects = store.get_projects()
+                    if projects:
+                        structured_context = "\n【素材库：项目业绩数据】\n"
+                        for p in projects[:6]:
+                            structured_context += (
+                                f"- {p.get('project_name', '?')}, "
+                                f"委托方: {p.get('client', '?')}, "
+                                f"金额: {p.get('contract_amount', p.get('amount', '?'))}, "
+                                f"类型: {p.get('project_type', '?')}"
+                            )
+                            desc = p.get('description', '')
+                            if desc:
+                                structured_context += f", {desc[:60]}"
+                            structured_context += "\n"
+                        structured_context += "请使用以上真实项目信息撰写，不要编造项目名称或金额。\n"
+                        logger.info(f"  Structured inject: {len(projects)} projects for '{title}'")
+
+                # Qualification chapters → inject real cert data
+                qual_kws = ["资质", "资格", "荣誉", "证书"]
+                if any(kw in title_lower for kw in qual_kws):
+                    quals = store.get_qualifications()
+                    if quals:
+                        structured_context = "\n【素材库：资质证书数据】\n"
+                        for q in quals[:10]:
+                            structured_context += (
+                                f"- {q.get('name', '?')}, "
+                                f"编号: {q.get('number', '?')}, "
+                                f"颁发: {q.get('issuer', '?')}, "
+                                f"有效期至: {q.get('valid_until', '?')}\n"
+                            )
+                        structured_context += "请使用以上真实资质信息。\n"
+                        logger.info(f"  Structured inject: {len(quals)} qualifications for '{title}'")
+            except Exception as e:
+                logger.debug(f"Structured material inject failed for '{title}': {e}")
+
         # Route to specialized prompt by chapter title keywords
         selected_prompt = _route_prompt(title)
         prompt = selected_prompt.format(
@@ -564,7 +629,7 @@ class ContentGenerationSkill(BaseSkill):
             content_hints=hints or "按照招标要求撰写",
             reference_data=reference,
             company_info=company_info,
-            skeleton_hint=skeleton_hint + material_context,
+            skeleton_hint=skeleton_hint + material_context + structured_context,
         )
         return await llm.generate(prompt, system=SECTION_GENERATION_SYSTEM)
 
