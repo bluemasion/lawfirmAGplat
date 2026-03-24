@@ -12,9 +12,11 @@ export default function BiddingAgent() {
     const [requirements, setRequirements] = useState(null);
     const [outputFilename, setOutputFilename] = useState('');
     const [processing, setProcessing] = useState(false);  // true when AI is working
-    const [phase, setPhase] = useState('idle'); // idle | parsing | ready | generating | done
+    const [phase, setPhase] = useState('idle'); // idle | parsing | confirming | generating | done
     const [showStructure, setShowStructure] = useState(false);
     const [showMaterialPanel, setShowMaterialPanel] = useState(false);
+    const [sectionChecked, setSectionChecked] = useState({}); // { "vi-si": true/false }
+    const [genProgress, setGenProgress] = useState({ total: 0, done: 0, current: '', sections: {} }); // per-section status
 
     // Company data for generation
     const [companyData, setCompanyData] = useState({
@@ -112,12 +114,21 @@ export default function BiddingAgent() {
                         } else if (ev.type === 'complete') {
                             setTaskId(ev.task_id);
                             setRequirements(ev.requirements);
-                            setPhase('ready');
+
+                            // Initialize all sections as checked
+                            const checks = {};
+                            (ev.requirements?.volumes || []).forEach((v, vi) => {
+                                (v.sections || []).forEach((_, si) => {
+                                    checks[`${vi}-${si}`] = true;
+                                });
+                            });
+                            setSectionChecked(checks);
+                            setPhase('confirming');
 
                             const vols = ev.requirements?.volumes || [];
                             const totalSecs = vols.reduce((s, v) => s + (v.sections?.length || 0), 0);
                             updateLastAiMsg(`\n✅ 解析完成! 共 ${totalSecs} 个章节`);
-                            addMsg('ai', `招标文件解析完成，请查看文件结构并确认。`, 'action');
+                            addMsg('ai', `招标文件解析完成，请确认结构后开始生成。`, 'action');
                         } else if (ev.type === 'error') {
                             updateLastAiMsg('❌ 错误: ' + ev.message);
                             setPhase('idle');
@@ -267,18 +278,24 @@ export default function BiddingAgent() {
 
     // ── Start generation → SSE stream ──
     const startGeneration = async () => {
-        if (!taskId) {
-            addMsg('ai', '⚠️ 请先上传招标文件并完成解析。');
-            return;
-        }
+        if (!taskId) return;
 
-        const totalSections = requirements?.volumes?.reduce((s, v) => s + (v.sections?.length || 0), 0) || 0;
-        addMsg('user', `▶️ 开始生成投标文件 (${totalSections} 章节)`);
+        // Count selected sections
+        const checkedCount = Object.values(sectionChecked).filter(Boolean).length;
+        addMsg('user', `▶️ 开始生成投标文件 (${checkedCount} 章节)`);
         setProcessing(true);
         setPhase('generating');
 
-        // Start streaming AI log
-        setMessages(prev => [...prev, { role: 'ai', content: `🚀 开始生成 ${totalSections} 个章节...`, type: 'stream', time: new Date() }]);
+        // Initialize progress tracking
+        const initSections = {};
+        (requirements?.volumes || []).forEach((v, vi) => {
+            (v.sections || []).forEach((sec, si) => {
+                if (sectionChecked[`${vi}-${si}`]) {
+                    initSections[sec.title] = { status: 'pending', chars: 0 };
+                }
+            });
+        });
+        setGenProgress({ total: checkedCount, done: 0, current: '', sections: initSections });
 
         try {
             const res = await fetch(`${API_BASE}/api/bidding/generate-full/${taskId}`, {
@@ -308,46 +325,40 @@ export default function BiddingAgent() {
                     try {
                         const ev = JSON.parse(ds);
                         if (ev.type === 'start') {
-                            updateLastAiMsg(`📋 总计 ${ev.total_sections} 章节: ${ev.code_sections} 个模板填充 + ${ev.llm_sections} 个 AI 生成`);
-                        } else if (ev.type === 'template_matched') {
-                            updateLastAiMsg(`📎 匹配到模板: ${ev.template_name} (相似度 ${(ev.score * 100).toFixed(0)}%)`);
+                            setGenProgress(p => ({ ...p, total: ev.total_sections }));
                         } else if (ev.type === 'progress') {
-                            const method = ev.method === 'llm' ? '🤖 AI' : '⚡ 模板';
-                            updateLastAiMsg(`[${ev.current}/${ev.total}] ${ev.section_title} → ${method} 生成中...`);
+                            setGenProgress(p => ({
+                                ...p, current: ev.section_title,
+                                sections: { ...p.sections, [ev.section_title]: { status: 'generating', chars: 0 } },
+                            }));
                         } else if (ev.type === 'section_done') {
                             doneCount++;
-                            const icon = ev.status === 'generated' ? '✅' : ev.status === 'error' ? '❌' : '⚡';
-                            updateLastAiMsg(`[${doneCount}/${totalSections}] ${ev.section_title} → ${icon} ${ev.content_length || 0}字`);
+                            setGenProgress(p => ({
+                                ...p, done: doneCount,
+                                sections: {
+                                    ...p.sections,
+                                    [ev.section_title]: { status: ev.status === 'error' ? 'error' : 'done', chars: ev.content_length || 0 },
+                                },
+                            }));
                         } else if (ev.type === 'section_error') {
                             doneCount++;
-                            updateLastAiMsg(`[${doneCount}/${totalSections}] ${ev.section_title} → ❌ ${ev.error}`);
+                            setGenProgress(p => ({
+                                ...p, done: doneCount,
+                                sections: { ...p.sections, [ev.section_title]: { status: 'error', chars: 0, error: ev.error } },
+                            }));
                         } else if (ev.type === 'assembling') {
-                            updateLastAiMsg(`\n📦 ${ev.message}`);
-                        } else if (ev.type === 'verifying') {
-                            updateLastAiMsg(`🔍 ${ev.message}`);
+                            setGenProgress(p => ({ ...p, current: '📦 组装文件...' }));
                         } else if (ev.type === 'complete') {
                             setOutputFilename(ev.file_path);
+                            setGenProgress(p => ({ ...p, current: '✅ 完成', verification: ev.verification }));
                             setPhase('done');
-
-                            let summary = '\n\n🎉 投标文件生成完成!';
-                            if (ev.section_count) summary += `\n• ${ev.section_count} 个章节`;
-                            if (ev.page_estimate) summary += `\n• 约 ${ev.page_estimate} 页`;
-                            if (ev.verification) {
-                                const v = ev.verification;
-                                summary += `\n\n📊 校验报告:`;
-                                summary += `\n• 总章节: ${v.total_sections || totalSections}`;
-                                summary += `\n• 占位符率: ${v.placeholder_rate || 'N/A'}`;
-                                if (v.company_mentions) summary += `\n• 律所名称: 出现 ${v.company_mentions} 次`;
-                            }
-                            summary += `\n\n📥 点击下方按钮下载文件`;
-                            updateLastAiMsg(summary);
                         }
                     } catch { }
                 }
             }
         } catch (err) {
             addMsg('ai', '❌ 生成失败: ' + err.message);
-            setPhase('ready');
+            setPhase('confirming');
         } finally {
             setProcessing(false);
         }
@@ -377,6 +388,8 @@ export default function BiddingAgent() {
         setOutputFilename('');
         setProcessing(false);
         setPhase('idle');
+        setSectionChecked({});
+        setGenProgress({ total: 0, done: 0, current: '', sections: {} });
         setCompanyData({
             company_name: '', legal_rep: '', license_no: '', address: '',
             phone: '', email: '', established_year: '', lawyer_count: '',
@@ -455,8 +468,8 @@ export default function BiddingAgent() {
                             <p className="text-[9px] text-zinc-500 uppercase tracking-widest">
                                 {phase === 'idle' && '等待上传'}
                                 {phase === 'parsing' && '解析中...'}
-                                {phase === 'ready' && `就绪 · ${requirements?.volumes?.reduce((s, v) => s + (v.sections?.length || 0), 0) || 0} 章节`}
-                                {phase === 'generating' && '生成中...'}
+                                {phase === 'confirming' && `确认结构 · ${requirements?.volumes?.reduce((s, v) => s + (v.sections?.length || 0), 0) || 0} 章节`}
+                                {phase === 'generating' && `生成中 ${genProgress.done}/${genProgress.total}`}
                                 {phase === 'done' && '✅ 完成'}
                             </p>
                         </div>
@@ -464,8 +477,8 @@ export default function BiddingAgent() {
                     <div className="flex items-center space-x-1">
                         <button onClick={() => setShowMaterialPanel(!showMaterialPanel)}
                             className={`flex items-center space-x-1 text-[11px] px-2.5 py-1.5 rounded-md font-bold transition-all ${showMaterialPanel
-                                    ? 'bg-orange-500/20 border border-orange-500/40 text-orange-300'
-                                    : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
+                                ? 'bg-orange-500/20 border border-orange-500/40 text-orange-300'
+                                : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
                                 }`}
                             title="素材库管理">
                             <Package size={13} />
@@ -515,130 +528,289 @@ export default function BiddingAgent() {
                             </div>
                         </div>
                     </div>
-                ) : (
-                    /* ── Chat Messages ── */
-                    <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-                        {messages.map((msg, i) => (
-                            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                                <div className={`max-w-[85%] rounded-lg px-3.5 py-2.5 ${msg.role === 'user'
-                                    ? 'bg-orange-500/20 border border-orange-500/30 text-orange-200'
-                                    : 'bg-zinc-800/80 border border-zinc-700/50'
-                                    }`}>
-                                    {msg.role === 'ai' && msg.type === 'stream' ? (
-                                        <div className="font-mono text-[11px] leading-relaxed space-y-0.5">
-                                            {renderContent(msg)}
-                                            {processing && (
-                                                <div className="text-zinc-600 animate-pulse mt-1">{'>'} █</div>
-                                            )}
-                                        </div>
-                                    ) : msg.role === 'ai' && msg.type === 'action' ? (
-                                        <div className="text-[12px] text-zinc-200 space-y-2">
-                                            <p>{msg.content}</p>
-                                            {msg.actions ? (
-                                                <div className="flex items-center space-x-2">
-                                                    {msg.actions.map((act, ai) => (
-                                                        <button key={ai}
-                                                            onClick={() => {
-                                                                if (act.action === 'confirm_materials') confirmMaterials(act.uploadId);
-                                                                else if (act.action === 'skip_materials') addMsg('ai', '⏭️ 已跳过，素材未入库');
-                                                                else if (act.action === 'show_structure') setShowStructure(true);
-                                                            }}
-                                                            disabled={processing}
-                                                            className="flex items-center space-x-1.5 px-4 py-2 rounded-md text-[11px] font-bold bg-orange-500/20 border border-orange-500/40 text-orange-300 hover:bg-orange-500/30 transition-all disabled:opacity-40">
-                                                            <span>{act.label}</span>
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            ) : (
-                                                <button onClick={() => setShowStructure(true)}
-                                                    className="flex items-center space-x-1.5 px-4 py-2 rounded-md text-[11px] font-bold bg-orange-500/20 border border-orange-500/40 text-orange-300 hover:bg-orange-500/30 transition-all">
-                                                    <Eye size={12} />
-                                                    <span>📋 查看文件结构</span>
-                                                </button>
-                                            )}
-                                        </div>
-                                    ) : (
-                                        <div className="text-[12px] leading-relaxed whitespace-pre-wrap">
-                                            {msg.role === 'ai' ? (
-                                                <div className="text-zinc-200">{renderContent(msg)}</div>
-                                            ) : (
-                                                <span>{msg.content}</span>
-                                            )}
-                                        </div>
-                                    )}
+                ) : phase === 'confirming' && requirements ? (
+                    /* ══════════════════════════════════════════════════════════ */
+                    /* ── STEP 2: Structure Confirmation Page ────────────────── */
+                    /* ══════════════════════════════════════════════════════════ */
+                    <div className="flex-1 flex flex-col overflow-hidden">
+                        {/* Confirmation header */}
+                        <div className="px-6 py-4 border-b border-zinc-800 bg-zinc-900/50">
+                            <h2 className="text-base font-bold text-zinc-100 flex items-center space-x-2">
+                                <Eye size={16} className="text-orange-400" />
+                                <span>投标结构确认</span>
+                            </h2>
+                            <p className="text-[11px] text-zinc-500 mt-1">
+                                勾选需要生成的章节，取消勾选的章节将跳过。确认后点击「开始生成」
+                            </p>
+                        </div>
+
+                        {/* Section list with checkboxes */}
+                        <div className="flex-1 overflow-y-auto px-6 py-3">
+                            {/* Select all toggle */}
+                            <div className="flex items-center justify-between mb-3 pb-2 border-b border-zinc-800">
+                                <label className="flex items-center space-x-2 cursor-pointer">
+                                    <input type="checkbox"
+                                        checked={Object.values(sectionChecked).every(Boolean)}
+                                        onChange={(e) => {
+                                            const newChecks = {};
+                                            Object.keys(sectionChecked).forEach(k => { newChecks[k] = e.target.checked; });
+                                            setSectionChecked(newChecks);
+                                        }}
+                                        className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-orange-500 focus:ring-orange-500 accent-orange-500"
+                                    />
+                                    <span className="text-[11px] text-zinc-400 font-bold">全选 / 全不选</span>
+                                </label>
+                                <span className="text-[10px] text-zinc-600">
+                                    已选 {Object.values(sectionChecked).filter(Boolean).length} / {Object.keys(sectionChecked).length} 章节
+                                </span>
+                            </div>
+
+                            {requirements?.volumes?.map((vol, vi) => (
+                                <div key={vi}>
+                                    {(vol.sections || []).map((sec, si) => {
+                                        const key = `${vi}-${si}`;
+                                        const checked = sectionChecked[key] !== false;
+                                        const typeLabel = { narrative: '叙述', table: '表格', form: '表单', qualification: '资质' };
+                                        const typeColor = {
+                                            narrative: 'bg-blue-500/10 text-blue-400 border-blue-500/30',
+                                            table: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
+                                            form: 'bg-amber-500/10 text-amber-400 border-amber-500/30',
+                                            qualification: 'bg-purple-500/10 text-purple-400 border-purple-500/30',
+                                        };
+                                        // Check if this section will use material store
+                                        const titleLower = sec.title.toLowerCase();
+                                        const usesResumes = ['团队', '人员', '律师', '简历', '拟投入', '拟委派'].some(k => titleLower.includes(k));
+                                        const usesProjects = ['业绩', '案例', '项目经验'].some(k => titleLower.includes(k));
+                                        const usesMaterials = usesResumes || usesProjects;
+
+                                        return (
+                                            <label key={si}
+                                                className={`flex items-center py-2.5 px-3 rounded-lg mb-1 cursor-pointer transition-all ${checked
+                                                    ? 'bg-zinc-800/50 hover:bg-zinc-800'
+                                                    : 'bg-zinc-900/30 opacity-50 hover:opacity-70'
+                                                    }`}>
+                                                <input type="checkbox"
+                                                    checked={checked}
+                                                    onChange={() => setSectionChecked(prev => ({ ...prev, [key]: !prev[key] }))}
+                                                    className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-orange-500 focus:ring-orange-500 accent-orange-500 shrink-0"
+                                                />
+                                                <span className="text-zinc-500 text-[11px] w-8 text-right mx-2 shrink-0">{sec.order || si + 1}</span>
+                                                <span className={`flex-1 text-[13px] leading-snug ${checked ? 'text-zinc-200' : 'text-zinc-500 line-through'}`}>
+                                                    {sec.title}
+                                                </span>
+                                                {usesMaterials && checked && (
+                                                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20 mr-2 shrink-0">
+                                                        {usesResumes ? '📋 素材库简历' : '📁 素材库业绩'}
+                                                    </span>
+                                                )}
+                                                <span className={`text-[9px] px-1.5 py-0.5 rounded border shrink-0 ${typeColor[sec.type] || 'bg-zinc-800 text-zinc-500 border-zinc-700'}`}>
+                                                    {typeLabel[sec.type] || sec.type}
+                                                </span>
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                            ))}
+                        </div>
+
+                        {/* Confirmation footer */}
+                        <div className="px-6 py-3 border-t border-zinc-800 bg-zinc-900/90 backdrop-blur flex items-center justify-between">
+                            <div className="flex items-center space-x-3">
+                                <div className="flex space-x-3 text-[10px] text-zinc-500">
+                                    <span>📝 叙述 {requirements?.volumes?.reduce((s, v) => s + (v.sections || []).filter(x => x.type === 'narrative').length, 0)}</span>
+                                    <span>📊 表格 {requirements?.volumes?.reduce((s, v) => s + (v.sections || []).filter(x => x.type === 'table').length, 0)}</span>
+                                    <span>📋 表单 {requirements?.volumes?.reduce((s, v) => s + (v.sections || []).filter(x => x.type === 'form').length, 0)}</span>
+                                    <span>🏅 资质 {requirements?.volumes?.reduce((s, v) => s + (v.sections || []).filter(x => x.type === 'qualification').length, 0)}</span>
                                 </div>
                             </div>
-                        ))}
-                        <div ref={chatEndRef} />
-                    </div>
-                )}
-
-                {/* ── Bottom Action Bar (only in chat mode) ── */}
-                {phase !== 'idle' && (
-                    <div className="shrink-0 border-t border-zinc-800 bg-zinc-900/90 backdrop-blur px-4 py-3">
-                        <div className="flex items-center space-x-2">
-                            {/* Upload tender file */}
-                            <button onClick={() => fileInputRef.current?.click()}
-                                disabled={processing}
-                                className="flex items-center space-x-1.5 px-3 py-2 rounded-md text-[11px] font-bold bg-zinc-800 border border-zinc-700 text-zinc-300 hover:bg-zinc-700 hover:text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                                title="上传招标文件">
-                                <Upload size={12} />
-                                <span>上传招标</span>
-                            </button>
-
-                            {/* Upload material */}
-                            <button onClick={() => materialInputRef.current?.click()}
-                                disabled={processing || !taskId}
-                                className="flex items-center space-x-1.5 px-3 py-2 rounded-md text-[11px] font-bold bg-zinc-800 border border-zinc-700 text-zinc-300 hover:bg-zinc-700 hover:text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                                title="上传素材">
-                                <FileText size={12} />
-                                <span>上传素材</span>
-                            </button>
-
-                            {/* Fill demo */}
-                            <button onClick={fillDemo}
-                                disabled={processing}
-                                className="flex items-center space-x-1.5 px-3 py-2 rounded-md text-[11px] font-bold bg-zinc-800 border border-zinc-700 text-orange-400 hover:bg-orange-500/10 hover:border-orange-500/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                                title="填充天元律所数据">
-                                <Sparkles size={12} />
-                                <span>天元数据</span>
-                            </button>
-
-                            {/* View Structure */}
-                            {requirements && (
+                            <div className="flex items-center space-x-2">
                                 <button onClick={() => setShowStructure(true)}
-                                    className="flex items-center space-x-1.5 px-3 py-2 rounded-md text-[11px] font-bold bg-zinc-800 border border-zinc-700 text-zinc-300 hover:bg-zinc-700 hover:text-white transition-all">
+                                    className="flex items-center space-x-1.5 px-3 py-2 rounded-md text-[11px] font-bold bg-zinc-800 border border-zinc-700 text-zinc-300 hover:bg-zinc-700 transition-all">
                                     <Eye size={12} />
-                                    <span>查看结构</span>
+                                    <span>预览大纲</span>
                                 </button>
-                            )}
-
-                            {/* Spacer */}
-                            <div className="flex-1" />
-
-                            {/* Generate */}
-                            {phase === 'ready' && (
                                 <button onClick={startGeneration}
-                                    disabled={processing}
-                                    className="flex items-center space-x-1.5 px-5 py-2 rounded-md text-[11px] font-bold bg-orange-500 text-white hover:bg-orange-600 shadow-lg shadow-orange-500/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed">
-                                    <Sparkles size={12} />
-                                    <span>开始生成</span>
+                                    disabled={processing || Object.values(sectionChecked).filter(Boolean).length === 0}
+                                    className="flex items-center space-x-1.5 px-6 py-2.5 rounded-md text-[12px] font-bold bg-orange-500 text-white hover:bg-orange-600 shadow-lg shadow-orange-500/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed">
+                                    <Sparkles size={14} />
+                                    <span>确认结构，开始生成</span>
                                 </button>
-                            )}
-
-                            {/* Download */}
-                            {phase === 'done' && (
-                                <button onClick={handleDownload}
-                                    className="flex items-center space-x-1.5 px-5 py-2 rounded-md text-[11px] font-bold bg-emerald-500 text-white hover:bg-emerald-600 shadow-lg shadow-emerald-500/20 transition-all">
-                                    <Download size={12} />
-                                    <span>下载 .docx</span>
-                                </button>
-                            )}
+                            </div>
                         </div>
-                        <p className="text-[9px] text-zinc-600 mt-1.5 text-center">
-                            拖拽 .docx 文件到对话区域即可上传 · Powered by Qwen-Max + BGE
-                        </p>
                     </div>
+                ) : phase === 'generating' ? (
+                    /* ══════════════════════════════════════════════════════════ */
+                    /* ── STEP 3: Generation Progress Page ──────────────────── */
+                    /* ══════════════════════════════════════════════════════════ */
+                    <div className="flex-1 flex flex-col overflow-hidden">
+                        {/* Progress header */}
+                        <div className="px-6 py-4 border-b border-zinc-800 bg-zinc-900/50">
+                            <h2 className="text-base font-bold text-zinc-100 flex items-center space-x-2">
+                                <Loader2 size={16} className="text-orange-400 animate-spin" />
+                                <span>正在生成投标文件</span>
+                            </h2>
+                            {/* Overall progress bar */}
+                            <div className="mt-3 flex items-center space-x-3">
+                                <div className="flex-1 h-2 bg-zinc-800 rounded-full overflow-hidden">
+                                    <div className="h-full bg-gradient-to-r from-orange-500 to-amber-500 rounded-full transition-all duration-500"
+                                        style={{ width: `${genProgress.total ? (genProgress.done / genProgress.total * 100) : 0}%` }} />
+                                </div>
+                                <span className="text-[12px] font-bold text-orange-400 shrink-0">
+                                    {genProgress.done} / {genProgress.total}
+                                </span>
+                            </div>
+                            <p className="text-[11px] text-zinc-500 mt-2">
+                                {genProgress.current || '准备中...'}
+                            </p>
+                        </div>
+
+                        {/* Per-section progress list */}
+                        <div className="flex-1 overflow-y-auto px-6 py-3">
+                            {Object.entries(genProgress.sections).map(([title, info], i) => (
+                                <div key={title} className={`flex items-center py-2 px-3 rounded-lg mb-1 ${info.status === 'generating' ? 'bg-orange-500/5 border border-orange-500/20' : 'bg-zinc-800/30'
+                                    }`}>
+                                    <span className="w-6 text-center shrink-0">
+                                        {info.status === 'pending' && <span className="text-zinc-600">○</span>}
+                                        {info.status === 'generating' && <Loader2 size={14} className="text-orange-400 animate-spin" />}
+                                        {info.status === 'done' && <CheckCircle size={14} className="text-emerald-400" />}
+                                        {info.status === 'error' && <AlertTriangle size={14} className="text-red-400" />}
+                                    </span>
+                                    <span className={`flex-1 text-[12px] ml-2 ${info.status === 'generating' ? 'text-orange-200 font-bold' :
+                                        info.status === 'done' ? 'text-zinc-300' :
+                                            info.status === 'error' ? 'text-red-300' : 'text-zinc-500'
+                                        }`}>
+                                        {title}
+                                    </span>
+                                    {info.chars > 0 && (
+                                        <span className="text-[10px] text-zinc-500 shrink-0">{info.chars} 字</span>
+                                    )}
+                                    {info.error && (
+                                        <span className="text-[10px] text-red-400 ml-2 shrink-0">{info.error}</span>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                ) : phase === 'done' ? (
+                    /* ══════════════════════════════════════════════════════════ */
+                    /* ── STEP 4: Completion Page ───────────────────────────── */
+                    /* ══════════════════════════════════════════════════════════ */
+                    <div className="flex-1 flex items-center justify-center px-6">
+                        <div className="w-full max-w-lg text-center space-y-6">
+                            <div className="w-20 h-20 bg-emerald-500/10 rounded-2xl flex items-center justify-center mx-auto">
+                                <CheckCircle size={36} className="text-emerald-400" />
+                            </div>
+                            <div>
+                                <h3 className="text-xl font-bold text-zinc-100">🎉 投标文件生成完成</h3>
+                                <p className="text-[12px] text-zinc-400 mt-2">
+                                    共生成 {genProgress.done} 个章节
+                                    {genProgress.verification?.page_estimate && ` · 约 ${genProgress.verification.page_estimate} 页`}
+                                </p>
+                            </div>
+
+                            {/* Stats */}
+                            <div className="flex items-center justify-center space-x-6 text-[11px]">
+                                <div className="text-center">
+                                    <div className="text-2xl font-bold text-emerald-400">
+                                        {Object.values(genProgress.sections).filter(s => s.status === 'done').length}
+                                    </div>
+                                    <div className="text-zinc-500">成功</div>
+                                </div>
+                                {Object.values(genProgress.sections).some(s => s.status === 'error') && (
+                                    <div className="text-center">
+                                        <div className="text-2xl font-bold text-red-400">
+                                            {Object.values(genProgress.sections).filter(s => s.status === 'error').length}
+                                        </div>
+                                        <div className="text-zinc-500">失败</div>
+                                    </div>
+                                )}
+                                <div className="text-center">
+                                    <div className="text-2xl font-bold text-zinc-300">
+                                        {Object.values(genProgress.sections).reduce((s, x) => s + (x.chars || 0), 0).toLocaleString()}
+                                    </div>
+                                    <div className="text-zinc-500">总字数</div>
+                                </div>
+                            </div>
+
+                            {/* Download button */}
+                            <button onClick={handleDownload}
+                                className="flex items-center space-x-2 px-8 py-3 rounded-lg text-[14px] font-bold bg-emerald-500 text-white hover:bg-emerald-600 shadow-lg shadow-emerald-500/20 transition-all mx-auto">
+                                <Download size={18} />
+                                <span>下载投标文件 .docx</span>
+                            </button>
+
+                            {/* Secondary actions */}
+                            <div className="flex items-center justify-center space-x-3">
+                                <button onClick={() => setShowStructure(true)}
+                                    className="text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors">
+                                    📋 查看大纲
+                                </button>
+                                <span className="text-zinc-700">|</span>
+                                <button onClick={reset}
+                                    className="text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors">
+                                    🔄 制作新的投标文件
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                ) : (
+                    /* ── Chat / Parsing Messages ── */
+                    <>
+                        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+                            {messages.map((msg, i) => (
+                                <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                    <div className={`max-w-[85%] rounded-lg px-3.5 py-2.5 ${msg.role === 'user'
+                                        ? 'bg-orange-500/20 border border-orange-500/30 text-orange-200'
+                                        : 'bg-zinc-800/80 border border-zinc-700/50'
+                                        }`}>
+                                        {msg.role === 'ai' && msg.type === 'stream' ? (
+                                            <div className="font-mono text-[11px] leading-relaxed space-y-0.5">
+                                                {renderContent(msg)}
+                                                {processing && (
+                                                    <div className="text-zinc-600 animate-pulse mt-1">{'>'} █</div>
+                                                )}
+                                            </div>
+                                        ) : msg.role === 'ai' && msg.type === 'action' ? (
+                                            <div className="text-[12px] text-zinc-200 space-y-2">
+                                                <p>{msg.content}</p>
+                                                {msg.actions ? (
+                                                    <div className="flex items-center space-x-2">
+                                                        {msg.actions.map((act, ai) => (
+                                                            <button key={ai}
+                                                                onClick={() => {
+                                                                    if (act.action === 'confirm_materials') confirmMaterials(act.uploadId);
+                                                                    else if (act.action === 'skip_materials') addMsg('ai', '⏭️ 已跳过，素材未入库');
+                                                                    else if (act.action === 'show_structure') setShowStructure(true);
+                                                                }}
+                                                                disabled={processing}
+                                                                className="flex items-center space-x-1.5 px-4 py-2 rounded-md text-[11px] font-bold bg-orange-500/20 border border-orange-500/40 text-orange-300 hover:bg-orange-500/30 transition-all disabled:opacity-40">
+                                                                <span>{act.label}</span>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                ) : null}
+                                            </div>
+                                        ) : (
+                                            <div className="text-[12px] leading-relaxed whitespace-pre-wrap">
+                                                {msg.role === 'ai' ? (
+                                                    <div className="text-zinc-200">{renderContent(msg)}</div>
+                                                ) : (
+                                                    <span>{msg.content}</span>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                            <div ref={chatEndRef} />
+                        </div>
+                        {/* Bottom hint during parsing */}
+                        <div className="shrink-0 border-t border-zinc-800 bg-zinc-900/90 backdrop-blur px-4 py-3">
+                            <p className="text-[10px] text-zinc-600 text-center">
+                                AI 正在解析招标文件结构... 完成后将自动进入确认页面
+                            </p>
+                        </div>
+                    </>
                 )}
             </div>
 
