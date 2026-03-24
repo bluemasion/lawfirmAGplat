@@ -239,6 +239,24 @@ class BidDocumentParserSkill(BaseSkill):
                      f"{len(projects)} projects, {len(qualifications)} qualifications, "
                      f"{len(narrative_chunks)} narrative chunks")
 
+        # Deduplicate within extraction results (e.g. project in summary + detail)
+        def _dedup(items, key_field):
+            seen = {}
+            for item in items:
+                k = item.get(key_field, "")
+                if k:
+                    seen[k] = item  # last wins (detail section usually has more info)
+                else:
+                    seen[id(item)] = item
+            return list(seen.values())
+
+        resumes = _dedup(resumes, "name")
+        projects = _dedup(projects, "project_name")
+        qualifications = _dedup(qualifications, "name")
+
+        logger.info(f"After dedup: {len(resumes)} resumes, "
+                     f"{len(projects)} projects, {len(qualifications)} qualifications")
+
         return {
             "resumes": resumes,
             "projects": projects,
