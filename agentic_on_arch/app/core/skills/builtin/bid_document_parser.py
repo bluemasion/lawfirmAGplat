@@ -432,16 +432,16 @@ class BidDocumentParserSkill(BaseSkill):
                     "confidence": 0.90, "reason": f"内容含招标关键词"}
 
         # ── Layer 2: 完整投标文件 ──
-        bid_fn_kw = ["投标文件", "投标书", "响应文件", "响应书"]
+        bid_fn_kw = ["投标文件", "投标书", "投标函", "响应文件", "响应书"]
         bid_content_kw = ["投标函", "法定代表人授权", "拟投入本项目",
                           "项目负责人简历", "4.4.1", "4.4.2",
-                          "投标报价", "服务方案"]
+                          "投标报价", "服务方案", "投标人基本情况"]
         if any(k in fn for k in bid_fn_kw):
             return {"doc_type": "bid_document", "material_hint": None,
                     "confidence": 0.95, "reason": f"文件名含投标关键词"}
-        # 内容中出现3个以上投标关键词 → 大概率是完整投标文件
+        # 内容中出现2个以上投标关键词 → 大概率是完整投标文件
         bid_hits = sum(1 for k in bid_content_kw if k in cp)
-        if bid_hits >= 3:
+        if bid_hits >= 2:
             return {"doc_type": "bid_document", "material_hint": None,
                     "confidence": 0.85, "reason": f"内容含{bid_hits}个投标关键词"}
 
