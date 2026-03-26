@@ -1,4 +1,9 @@
-"""Requirement extraction skill — use LLM to structure tender requirements."""
+"""Requirement extraction skill — analyze tender → derive bid document structure.
+
+V3: Multi-pass LLM analysis.
+  Pass 1: Understand the tender, extract key requirements & rejection conditions
+  Pass 2: Generate bid document structure from the analysis
+"""
 
 import json
 from typing import Any, Dict, List
@@ -8,97 +13,160 @@ from app.core.llm import get_llm
 from app.utils.logger import logger
 
 
-# System prompt for requirement extraction
-EXTRACTION_SYSTEM_PROMPT = """你是招标文件分析专家。你的任务是从招标文件中精确提取投标要求的结构化信息。
+# ── Pass 1: Analyze tender document ──
 
+ANALYSIS_SYSTEM = """你是资深招投标专家，精通政府采购和企业招标流程。
+你的任务是深度分析招标文件，提取对编制投标文件至关重要的结构化信息。
 你必须输出严格的 JSON 格式，不要包含任何其他内容。"""
 
-# User prompt template for extracting structure from tender text
-EXTRACTION_PROMPT_TEMPLATE = """请分析以下招标文件内容，提取投标文件需要包含的所有章节和要求。
+ANALYSIS_PROMPT = """请深度分析以下招标文件内容，提取编制投标文件所需的关键信息。
 
 【招标文件内容】
 {tender_text}
 
-请输出以下 JSON 结构：
+请按以下维度提取信息，输出 JSON：
 {{
-  "bid_title": "投标文件的标题",
+  "project_info": {{
+    "project_name": "项目名称",
+    "project_type": "项目类型（如法律服务、IT采购、工程等）",
+    "tender_org": "招标方名称",
+    "budget": "预算/最高限价（如有）"
+  }},
+
+  "bid_composition": {{
+    "has_explicit_format": true,
+    "description": "招标文件是否有明确的投标文件格式要求章节（如第六章投标文件格式）",
+    "required_documents": [
+      {{
+        "name": "文档名称（如：投标函、授权委托书、营业执照副本等）",
+        "category": "form|table|qualification|narrative",
+        "is_mandatory": true,
+        "source": "引用自招标文件的哪一条/哪一章"
+      }}
+    ]
+  }},
+
+  "rejection_conditions": [
+    {{
+      "condition": "废标/否决条件的具体描述",
+      "related_document": "需要提供什么文件/满足什么条件来避免废标",
+      "source": "来源引用"
+    }}
+  ],
+
+  "evaluation_criteria": [
+    {{
+      "item": "评分项名称",
+      "max_score": 0,
+      "description": "评分要点",
+      "bid_section_needed": "投标文件中需要哪个章节来回应这个评分项"
+    }}
+  ],
+
+  "qualification_requirements": [
+    "资质要求1（如：具有有效的律师事务所执业许可证）",
+    "资质要求2"
+  ],
+
+  "format_requirements": {{
+    "font": "字体要求",
+    "paper_size": "纸张大小",
+    "binding": "装订要求",
+    "copies": "份数（正本/副本）",
+    "other": "其他格式要求"
+  }},
+
+  "deadline_info": {{
+    "submission_deadline": "投标截止时间",
+    "opening_time": "开标时间",
+    "validity_period": "投标有效期"
+  }},
+
+  "special_requirements": [
+    "其他特殊要求(如落实政策要求、节能环保、中小企业扶持等)"
+  ]
+}}
+
+【分析要点】
+1. 重点关注「投标人须知」「投标人须知前附表」中的强制要求和废标条件
+2. 如果有「投标文件格式」章节，从中提取投标文件的完整组成清单
+3. 如果没有明确的格式章节，从评标办法、资格条件、技术要求中推导出投标文件应包含的部分
+4. 废标条件（rejection_conditions）是最重要的——任何漏项都会导致投标无效
+5. 评标办法中的评分项目直接决定了投标文件的核心章节
+6. 所有字段尽量填写，实在找不到的写 null
+
+请严格输出 JSON，不要有任何额外说明文字。"""
+
+
+# ── Pass 2: Generate bid document structure ──
+
+STRUCTURE_SYSTEM = """你是资深投标文件编制专家。
+你的任务是根据招标文件分析结果，生成一份完整的投标文件目录结构。
+这份目录将直接用于指导 AI 逐章节生成投标文件内容。
+你必须输出严格的 JSON 格式，不要包含任何其他内容。"""
+
+STRUCTURE_PROMPT = """根据以下招标文件分析结果，生成完整的投标文件目录结构。
+
+【招标分析结果】
+{analysis_json}
+
+【招标文件原文参考（用于补充上下文）】
+{tender_context}
+
+请生成投标文件的完整目录结构，输出 JSON：
+{{
+  "bid_title": "XX项目投标文件",
   "volumes": [
     {{
-      "name": "分册名称（如：报价分册、商务分册、技术分册）",
+      "name": "分册名称（如只有一个分册，用"投标文件"）",
       "sections": [
         {{
           "order": 1,
           "title": "章节标题",
           "type": "narrative|table|form|qualification",
           "required": true,
-          "content_hints": "该章节应包含的内容摘要",
-          "data_fields": ["需要填写的数据字段名"],
-          "source_reference": "对应招标文件的哪一条要求"
+          "rejection_risk": false,
+          "score_weight": 0,
+          "content_hints": "该章节应包含的具体内容描述",
+          "data_fields": ["需要填写的数据字段（如有）"],
+          "source_reference": "对应招标文件的要求来源"
         }}
       ]
     }}
   ],
-  "qualification_requirements": [
-    "资质要求1",
-    "资质要求2"
-  ],
-  "format_requirements": {{
-    "font_body": "正文字体要求",
-    "font_title": "标题字体要求",
-    "font_size": "字号要求",
-    "paper_size": "纸张大小",
-    "binding": "装订要求",
-    "copies": "份数要求",
-    "other": "其他格式要求"
-  }},
-  "evaluation_criteria": [
+  "rejection_items": [
     {{
-      "item": "评分项名称",
-      "max_score": 0,
-      "description": "简要说明"
+      "description": "废标条件描述",
+      "related_sections": ["关联的投标文件章节标题"],
+      "severity": "critical"
     }}
-  ],
-  "deadline_info": {{
-    "submission_deadline": "投标截止时间",
-    "opening_time": "开标时间",
-    "validity_period": "投标有效期"
-  }}
+  ]
 }}
 
-注意：
-1. sections 中的 order 必须严格按照招标文件要求的顺序
-2. 如果招标文件没有明确分册，就放在一个默认分册里
-3. type 只能是 narrative/table/form/qualification 四选一
-4. required 字段：招标文件明确要求的设为 true
-5. 所有字段都要尽量填写，实在找不到的写 null
+【投标文件编制规则】
+1. 章节类型说明：
+   - form: 固定格式的函件（投标函、授权委托书、声明函等）
+   - table: 需要表格呈现的内容（报价表、业绩表、人员表等）
+   - qualification: 需要提供的资质证明文件（营业执照、执业许可证等）
+   - narrative: 需要撰写的叙述性方案内容（服务方案、技术方案等）
+
+2. 标准投标文件结构通常包含（具体以招标文件要求为准）：
+   - 第一部分：商务文件（投标函、声明函、授权委托书等）
+   - 第二部分：资格证明文件（营业执照、资质证书等）
+   - 第三部分：报价文件（报价表、费用明细等）
+   - 第四部分：技术/服务方案（服务方案、实施计划等）
+   - 第五部分：业绩与团队（类似业绩、团队介绍等）
+   - 第六部分：其他补充文件
+
+3. rejection_risk = true 的章节是：招标文件中明确要求必须提供的，缺失会导致废标
+4. score_weight: 如果该章节对应某个评分项，填写该评分项的最高分值
+5. 确保招标文件中所有废标条件对应的文件都有对应章节
+6. 确保评标办法中所有评分维度都有对应的投标章节
 
 请严格输出 JSON，不要有任何额外说明文字。"""
 
 
-# For long documents, we split and extract per-section
-SECTION_EXTRACTION_PROMPT = """请分析以下招标文件的某个章节，提取该章节中对投标文件的具体要求。
-
-【章节标题】
-{section_title}
-
-【章节内容】
-{section_content}
-
-请提取该章节中提到的所有投标要求，输出 JSON 列表：
-[
-  {{
-    "title": "投标文件中对应的章节标题",
-    "type": "narrative|table|form|qualification",
-    "required": true,
-    "content_hints": "应包含的内容",
-    "data_fields": ["需要填写的字段"]
-  }}
-]
-
-只输出 JSON，不要额外文字。"""
-
-
-# ── V2: Batch classify prompt (LLM only classifies, doesn't generate structure) ──
+# ── Legacy prompts (kept for fallback) ──
 
 BATCH_CLASSIFY_SYSTEM = """你是招标文件分析专家。你的任务是对招标文件的章节标题进行分类标注。
 你必须输出严格的 JSON 格式，不要包含任何其他内容。"""
@@ -135,14 +203,14 @@ BATCH_CLASSIFY_PROMPT = """以下是从招标文件中提取的原始章节标�
 - 只输出 JSON 数组，不要额外文字"""
 
 
-def _safe_parse_json(text: str) -> Any:
+def _safe_parse_json(text):
+    # type: (str) -> Any
     """Try to parse JSON from LLM output, handling common issues."""
     text = text.strip()
 
     # Remove markdown code fences if present
     if text.startswith("```"):
         lines = text.split("\n")
-        # Remove first and last lines (``` markers)
         if lines[0].startswith("```"):
             lines = lines[1:]
         if lines and lines[-1].strip() == "```":
@@ -152,9 +220,7 @@ def _safe_parse_json(text: str) -> Any:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # Try to find JSON object or array in the text
         import re
-        # Look for outermost { } or [ ]
         for pattern in [r'\{[\s\S]*\}', r'\[[\s\S]*\]']:
             match = re.search(pattern, text)
             if match:
@@ -167,29 +233,34 @@ def _safe_parse_json(text: str) -> Any:
 
 
 class RequirementExtractionSkill(BaseSkill):
-    """Extract structured requirements from tender document using LLM."""
+    """Analyze tender document and derive bid document structure.
+
+    V3 approach (default):
+      Pass 1: Deep analysis of tender — extract requirements, rejection
+              conditions, evaluation criteria, composition rules
+      Pass 2: Generate bid document structure from the analysis
+
+    Falls back to V2 (heading classification) if V3 fails.
+    """
 
     name = "requirement_extraction"
-    description = "使用LLM从招标文件中提取结构化的投标要求（章节、资质、格式等）"
+    description = "分析招标文件，提取废标项和评分标准，智能生成投标文件目录结构"
 
-    # Max characters to send in a single LLM call
-    MAX_CHUNK_SIZE = 12000
+    MAX_CHUNK_SIZE = 28000  # Qwen-Max supports ~32K tokens
 
-    async def execute(self, params: Dict[str, Any]) -> Any:
+    async def execute(self, params):
+        # type: (Dict[str, Any]) -> Any
         """
         Params:
             raw_text (str): Full text of the tender document
             sections (List[Dict]): Parsed sections from tender_parsing
-            llm_provider (str, optional): Which LLM to use (default: "qwen")
-            mode (str): 'structure' (V2, default) or 'legacy' (V1)
-
-        Returns:
-            Dict: Structured tender requirements JSON
+            llm_provider (str): Which LLM to use (default: "qwen")
+            mode (str): 'analyze' (V3, default) or 'structure' (V2) or 'legacy' (V1)
         """
         raw_text = params.get("raw_text", "")
         sections = params.get("sections", [])
         llm_provider = params.get("llm_provider", "qwen")
-        mode = params.get("mode", "structure")
+        mode = params.get("mode", "analyze")
 
         if not raw_text and not sections:
             raise ValueError("Either raw_text or sections must be provided")
@@ -197,22 +268,20 @@ class RequirementExtractionSkill(BaseSkill):
         llm = get_llm(llm_provider)
         logger.info(f"Extracting requirements using {llm.get_model_name()}, mode={mode}")
 
-        if mode == "structure" and sections:
-            # ── V2: Use original section titles from tender_parsing ──
-            # LLM only classifies types + extracts content_hints
+        if mode == "analyze":
+            # ── V3: Multi-pass tender analysis ──
+            result = await self._analyze_and_build(llm, raw_text, sections)
+        elif mode == "structure" and sections:
+            # ── V2: Classify parsed section titles ──
             result = await self._structure_from_sections(llm, sections, raw_text)
         else:
-            # ── V1 Legacy: LLM generates the entire structure ──
-            text_length = len(raw_text)
-            if text_length <= self.MAX_CHUNK_SIZE:
-                result = await self._extract_full(llm, raw_text)
-            else:
-                result = await self._extract_by_sections(llm, sections, raw_text)
+            # ── V1 Legacy ──
+            result = await self._extract_full(llm, raw_text)
 
         if result is None:
             result = self._fallback_from_sections(sections)
 
-        # Post-LLM: refine section types using local classifier (90.9% accuracy)
+        # Post-LLM: refine section types using local classifier
         result = self._refine_section_types(result)
 
         total_sections = sum(len(v.get('sections', [])) for v in result.get('volumes', []))
@@ -220,84 +289,352 @@ class RequirementExtractionSkill(BaseSkill):
                      f"{total_sections} sections (mode={mode})")
         return result
 
-    def _filter_bid_sections(self, sections: List[Dict]) -> List[Dict]:
-        """Filter tender_parsing sections to keep only bid-relevant headings.
+    # ── V3: Multi-pass analysis ──
 
-        tender_parsing extracts ALL headings, including instructional text from
-        the tender document itself (e.g. "投标人应当按照招标文件的要求编制投标文件").
-        We only want actual bid document section titles.
+    async def _analyze_and_build(self, llm, raw_text, sections):
+        # type: (Any, str, List[Dict]) -> Dict
+        """V3: Analyze tender → derive bid structure in two passes."""
 
-        Filters:
-        1. Title length <= 60 chars (longer = paragraph text, not heading)
-        2. No duplicate titles
-        3. Skip tender instruction patterns
+        # Prepare text: use full raw_text, truncate if too long
+        text_for_analysis = raw_text
+        if len(text_for_analysis) > self.MAX_CHUNK_SIZE:
+            # Prioritize: keep beginning (project info, 投标人须知)
+            # and end (投标文件格式, 评标办法 are often at the end)
+            half = self.MAX_CHUNK_SIZE // 2
+            text_for_analysis = (
+                raw_text[:half] +
+                "\n\n... (中间部分省略) ...\n\n" +
+                raw_text[-half:]
+            )
+            logger.info(f"Tender text truncated: {len(raw_text)} → {len(text_for_analysis)} chars")
+
+        # ── Pass 1: Deep analysis ──
+        logger.info("Pass 1: Analyzing tender document...")
+        analysis = None
+        try:
+            prompt1 = ANALYSIS_PROMPT.format(tender_text=text_for_analysis)
+            response1 = await llm.generate(prompt1, system=ANALYSIS_SYSTEM)
+            analysis = _safe_parse_json(response1)
+            if analysis:
+                # Log key findings
+                rej_count = len(analysis.get("rejection_conditions", []))
+                eval_count = len(analysis.get("evaluation_criteria", []))
+                doc_count = len(analysis.get("bid_composition", {}).get("required_documents", []))
+                has_format = analysis.get("bid_composition", {}).get("has_explicit_format", False)
+                logger.info(
+                    f"Pass 1 results: {doc_count} required docs, "
+                    f"{rej_count} rejection conditions, "
+                    f"{eval_count} evaluation criteria, "
+                    f"explicit_format={'yes' if has_format else 'no'}"
+                )
+        except Exception as e:
+            logger.error(f"Pass 1 analysis failed: {e}")
+
+        if not analysis:
+            logger.warning("Pass 1 failed, falling back to V2 section classification")
+            if sections:
+                return await self._structure_from_sections(llm, sections, raw_text)
+            return None
+
+        # ── Pass 2: Generate bid structure ──
+        logger.info("Pass 2: Generating bid document structure...")
+        try:
+            analysis_json = json.dumps(analysis, ensure_ascii=False, indent=2)
+            # Provide extra tender context for Pass 2
+            tender_context = raw_text[:6000] if raw_text else "暂无原文"
+
+            prompt2 = STRUCTURE_PROMPT.format(
+                analysis_json=analysis_json,
+                tender_context=tender_context,
+            )
+            response2 = await llm.generate(prompt2, system=STRUCTURE_SYSTEM)
+            structure = _safe_parse_json(response2)
+
+            if structure and structure.get("volumes"):
+                # Attach analysis results to the structure for frontend use
+                structure["tender_analysis"] = {
+                    "project_info": analysis.get("project_info", {}),
+                    "rejection_conditions": analysis.get("rejection_conditions", []),
+                    "evaluation_criteria": analysis.get("evaluation_criteria", []),
+                    "qualification_requirements": analysis.get("qualification_requirements", []),
+                    "format_requirements": analysis.get("format_requirements", {}),
+                    "deadline_info": analysis.get("deadline_info", {}),
+                }
+                # Ensure all required fields exist
+                if "rejection_items" not in structure:
+                    structure["rejection_items"] = []
+                if "qualification_requirements" not in structure:
+                    structure["qualification_requirements"] = analysis.get("qualification_requirements", [])
+                if "format_requirements" not in structure:
+                    structure["format_requirements"] = analysis.get("format_requirements", {})
+                if "evaluation_criteria" not in structure:
+                    structure["evaluation_criteria"] = analysis.get("evaluation_criteria", [])
+                if "deadline_info" not in structure:
+                    structure["deadline_info"] = analysis.get("deadline_info", {})
+
+                # Count rejection risk sections
+                total_secs = 0
+                rej_secs = 0
+                for vol in structure.get("volumes", []):
+                    for sec in vol.get("sections", []):
+                        total_secs += 1
+                        if sec.get("rejection_risk"):
+                            rej_secs += 1
+                logger.info(f"Pass 2 results: {total_secs} sections, "
+                             f"{rej_secs} with rejection risk")
+
+                # ── Pass 3: Deterministic verification ──
+                verification = self._verify_structure(analysis, structure)
+                structure["verification"] = verification
+                logger.info(
+                    f"Pass 3 verification: "
+                    f"rejection {verification['rejection_check']['covered']}/{verification['rejection_check']['total']}, "
+                    f"evaluation {verification['evaluation_check']['covered']}/{verification['evaluation_check']['total']}, "
+                    f"documents {verification['document_check']['covered']}/{verification['document_check']['total']}"
+                )
+
+                return structure
+
+        except Exception as e:
+            logger.error(f"Pass 2 structure generation failed: {e}")
+
+        # Fallback: build structure from Pass 1 analysis manually
+        logger.warning("Pass 2 failed, building structure from Pass 1 analysis")
+        return self._build_from_analysis(analysis)
+
+    def _verify_structure(self, analysis, structure):
+        # type: (Dict, Dict) -> Dict
+        """Pass 3: Deterministic cross-reference verification.
+
+        Compare Pass 1 analysis results against Pass 2 structure to check
+        if all rejection conditions, evaluation criteria, and required
+        documents are covered by the bid document structure.
         """
-        import re
+        # Collect all section titles for matching
+        all_titles = []
+        for vol in structure.get("volumes", []):
+            for sec in vol.get("sections", []):
+                all_titles.append(sec.get("title", ""))
+        titles_text = " ".join(all_titles)
 
-        # Patterns that indicate tender instructions (not bid sections)
-        SKIP_PATTERNS = [
-            r'投标人应当',
-            r'投标人递交',
-            r'投标人没有',
-            r'招标人有权',
-            r'招标人不予',
-            r'投标文件应当使用不褪色',
-            r'应当按照招标文件',
-            r'应当认真阅读',
-            r'并加盖单位公章',
-        ]
-        skip_regex = re.compile('|'.join(SKIP_PATTERNS))
+        def _find_matching_section(keywords):
+            """Find a section title that matches any of the keywords."""
+            if isinstance(keywords, str):
+                keywords = [keywords]
+            for kw in keywords:
+                if not kw:
+                    continue
+                kw_lower = kw.lower().strip()
+                for title in all_titles:
+                    if kw_lower in title.lower():
+                        return title
+                # Fuzzy: check if key terms from kw appear in any title
+                key_terms = [t for t in kw_lower.replace("（", " ").replace("）", " ").split() if len(t) >= 2]
+                for title in all_titles:
+                    title_lower = title.lower()
+                    if any(term in title_lower for term in key_terms if len(term) >= 2):
+                        return title
+            return None
 
-        MAX_TITLE_LEN = 60
-        seen_titles = set()  # type: set
-        filtered = []
+        # Collect rejection_risk sections
+        rej_risk_titles = []
+        for vol in structure.get("volumes", []):
+            for sec in vol.get("sections", []):
+                if sec.get("rejection_risk"):
+                    rej_risk_titles.append(sec.get("title", ""))
 
-        for sec in sections:
-            title = sec.get("title", "").strip()
-            if not title:
-                continue
+        # Common keyword mapping: abstract condition → keywords to search in titles
+        _CONDITION_KEYWORD_MAP = {
+            "资格": ["资格", "资质", "证明", "营业执照", "执业"],
+            "装订": ["装订", "格式", "投标文件"],
+            "密封": ["密封", "投标文件"],
+            "保证金": ["保证金", "担保"],
+            "签署": ["签署", "签字", "公章", "投标函", "授权"],
+            "完整": ["投标函", "开标", "报价"],
+            "失信": ["信用", "失信", "声明"],
+            "有效期": ["有效期", "投标函"],
+            "报价": ["报价", "开标一览表", "价格"],
+        }
 
-            # Skip titles that are too long (paragraph text, not headings)
-            if len(title) > MAX_TITLE_LEN:
-                continue
+        def _match_condition(condition_text, related_doc):
+            """Try to match a rejection condition to a section via multiple strategies."""
+            # Strategy 1: Direct match on related_document
+            if related_doc:
+                m = _find_matching_section([related_doc])
+                if m:
+                    return m
 
-            # Skip tender instruction patterns
-            if skip_regex.search(title):
-                continue
+            # Strategy 2: Keyword map
+            for trigger, search_terms in _CONDITION_KEYWORD_MAP.items():
+                if trigger in condition_text:
+                    for term in search_terms:
+                        for title in all_titles:
+                            if term in title:
+                                return title
 
-            # Skip duplicates
-            if title in seen_titles:
-                continue
-            seen_titles.add(title)
+            # Strategy 3: Check if any rejection_risk section relates
+            cond_lower = condition_text.lower()
+            for title in rej_risk_titles:
+                title_lower = title.lower()
+                # If condition and title share meaningful Chinese chars
+                shared = sum(1 for c in title_lower if c in cond_lower and len(c.encode('utf-8')) > 1)
+                if shared >= 2:
+                    return title
 
-            filtered.append(sec)
+            # Strategy 4: Fall back to regular fuzzy
+            return _find_matching_section([condition_text])
 
-        logger.info(f"Section filter: {len(sections)} → {len(filtered)} "
-                     f"(removed {len(sections) - len(filtered)} non-bid sections)")
-        return filtered
+        # ── Rejection conditions check ──
+        rejection_items = []
+        for rc in analysis.get("rejection_conditions", []):
+            condition = rc.get("condition", "")
+            related = rc.get("related_document", "")
+            matched = _match_condition(condition, related)
+            rejection_items.append({
+                "condition": condition,
+                "related_document": related,
+                "source": rc.get("source", ""),
+                "status": "covered" if matched else "missing",
+                "matched_section": matched,
+            })
 
-    async def _structure_from_sections(self, llm, sections: List[Dict],
-                                       raw_text: str) -> Dict:
-        """V2: Build structure directly from parsed sections, LLM only classifies.
+        rej_covered = sum(1 for r in rejection_items if r["status"] == "covered")
 
-        Instead of asking LLM to generate the directory structure (which causes
-        title drift), we use the exact titles from tender_parsing and only ask
-        LLM to classify each section's type and extract content hints.
-        """
-        logger.info(f"V2 structure mode: {len(sections)} raw sections from tender_parsing")
+        # ── Evaluation criteria check ──
+        eval_items = []
+        for ec in analysis.get("evaluation_criteria", []):
+            item_name = ec.get("item", "")
+            needed = ec.get("bid_section_needed", "")
+            matched = _find_matching_section([needed, item_name])
+            eval_items.append({
+                "item": item_name,
+                "max_score": ec.get("max_score", 0),
+                "description": ec.get("description", ""),
+                "bid_section_needed": needed,
+                "status": "covered" if matched else "missing",
+                "matched_section": matched,
+            })
 
-        # Step 1: Filter to bid-relevant sections only
+        eval_covered = sum(1 for e in eval_items if e["status"] == "covered")
+
+        # ── Required documents check ──
+        doc_items = []
+        for doc in analysis.get("bid_composition", {}).get("required_documents", []):
+            doc_name = doc.get("name", "")
+            matched = _find_matching_section([doc_name])
+            doc_items.append({
+                "name": doc_name,
+                "category": doc.get("category", ""),
+                "is_mandatory": doc.get("is_mandatory", True),
+                "source": doc.get("source", ""),
+                "status": "covered" if matched else "missing",
+                "matched_section": matched,
+            })
+
+        doc_covered = sum(1 for d in doc_items if d["status"] == "covered")
+
+        # ── Format & deadline info ──
+        fmt = analysis.get("format_requirements", {})
+        deadline = analysis.get("deadline_info", {})
+
+        return {
+            "rejection_check": {
+                "total": len(rejection_items),
+                "covered": rej_covered,
+                "items": rejection_items,
+            },
+            "evaluation_check": {
+                "total": len(eval_items),
+                "covered": eval_covered,
+                "items": eval_items,
+            },
+            "document_check": {
+                "total": len(doc_items),
+                "covered": doc_covered,
+                "items": doc_items,
+            },
+            "format_info": fmt,
+            "deadline_info": deadline,
+        }
+
+    def _build_from_analysis(self, analysis):
+        # type: (Dict) -> Dict
+        """Fallback: build bid structure directly from Pass 1 results."""
+        sections = []
+        order = 1
+
+        # Add required documents from bid_composition
+        for doc in analysis.get("bid_composition", {}).get("required_documents", []):
+            sections.append({
+                "order": order,
+                "title": doc.get("name", f"文件{order}"),
+                "type": doc.get("category", "narrative"),
+                "required": doc.get("is_mandatory", True),
+                "rejection_risk": doc.get("is_mandatory", False),
+                "score_weight": 0,
+                "content_hints": doc.get("source", ""),
+                "data_fields": [],
+            })
+            order += 1
+
+        # Add sections for evaluation criteria that don't have matching documents
+        existing_titles = {s["title"] for s in sections}
+        for crit in analysis.get("evaluation_criteria", []):
+            needed = crit.get("bid_section_needed", "")
+            if needed and needed not in existing_titles:
+                sections.append({
+                    "order": order,
+                    "title": needed,
+                    "type": "narrative",
+                    "required": True,
+                    "rejection_risk": False,
+                    "score_weight": crit.get("max_score", 0),
+                    "content_hints": crit.get("description", ""),
+                    "data_fields": [],
+                })
+                existing_titles.add(needed)
+                order += 1
+
+        return {
+            "bid_title": analysis.get("project_info", {}).get("project_name", "投标文件") or "投标文件",
+            "volumes": [{"name": "投标文件", "sections": sections}],
+            "rejection_items": [
+                {
+                    "description": r.get("condition", ""),
+                    "related_sections": [r.get("related_document", "")],
+                    "severity": "critical",
+                }
+                for r in analysis.get("rejection_conditions", [])
+            ],
+            "tender_analysis": {
+                "project_info": analysis.get("project_info", {}),
+                "rejection_conditions": analysis.get("rejection_conditions", []),
+                "evaluation_criteria": analysis.get("evaluation_criteria", []),
+                "qualification_requirements": analysis.get("qualification_requirements", []),
+                "format_requirements": analysis.get("format_requirements", {}),
+                "deadline_info": analysis.get("deadline_info", {}),
+            },
+            "qualification_requirements": analysis.get("qualification_requirements", []),
+            "format_requirements": analysis.get("format_requirements", {}),
+            "evaluation_criteria": analysis.get("evaluation_criteria", []),
+            "deadline_info": analysis.get("deadline_info", {}),
+        }
+
+    # ── V2: Section title classification (kept as fallback) ──
+
+    async def _structure_from_sections(self, llm, sections, raw_text):
+        # type: (Any, List[Dict], str) -> Dict
+        """V2: Build structure from parsed section titles, LLM classifies."""
+        logger.info(f"V2 structure mode: {len(sections)} raw sections")
+
         sections = self._filter_bid_sections(sections)
 
-        # Step 2: Build section list for the LLM prompt
         section_lines = []
         for i, sec in enumerate(sections, 1):
             title = sec.get("title", f"第{i}节")
             section_lines.append(f"{i}. {title}")
 
         section_list_text = "\n".join(section_lines)
-
-        # Use first 8000 chars of raw text as context for classification
         tender_context = raw_text[:8000] if raw_text else "暂无原文"
 
         prompt = BATCH_CLASSIFY_PROMPT.format(
@@ -305,7 +642,6 @@ class RequirementExtractionSkill(BaseSkill):
             section_list=section_list_text,
         )
 
-        # Step 3: LLM batch classification
         try:
             response = await llm.generate(prompt, system=BATCH_CLASSIFY_SYSTEM)
             classifications = _safe_parse_json(response)
@@ -313,7 +649,6 @@ class RequirementExtractionSkill(BaseSkill):
             logger.error(f"LLM classification failed: {e}")
             classifications = None
 
-        # Build classification lookup: title -> {type, content_hints, data_fields}
         classify_map = {}  # type: Dict[str, Dict]
         if classifications and isinstance(classifications, list):
             for item in classifications:
@@ -324,30 +659,23 @@ class RequirementExtractionSkill(BaseSkill):
                         "content_hints": item.get("content_hints", ""),
                         "data_fields": item.get("data_fields", []),
                     }
-            logger.info(f"LLM classified {len(classify_map)}/{len(sections)} sections")
-        else:
-            logger.warning("LLM classification returned no results, using heuristic types")
 
-        # Step 4: Build final structure using original titles + LLM classifications
         bid_sections = []
         for i, sec in enumerate(sections):
             title = sec.get("title", f"第{i+1}节")
             original_type = sec.get("section_type", "narrative")
             content = sec.get("content", "")
-
-            # Try to get LLM classification for this title
             classification = classify_map.get(title, {})
-
-            # Use LLM type if available, otherwise use tender_parsing's heuristic
             sec_type = classification.get("type", original_type)
             hints = classification.get("content_hints", content[:100] if content else "")
             fields = classification.get("data_fields", [])
 
             bid_sections.append({
                 "order": i + 1,
-                "title": title,  # Original title, never modified
+                "title": title,
                 "type": sec_type,
                 "required": True,
+                "rejection_risk": False,
                 "content_hints": hints,
                 "data_fields": fields,
             })
@@ -361,86 +689,56 @@ class RequirementExtractionSkill(BaseSkill):
             "deadline_info": {},
         }
 
-    async def _extract_full(self, llm, raw_text: str) -> Any:
-        """Single-pass extraction for shorter documents."""
-        prompt = EXTRACTION_PROMPT_TEMPLATE.format(tender_text=raw_text)
-        response = await llm.generate(prompt, system=EXTRACTION_SYSTEM_PROMPT)
+    def _filter_bid_sections(self, sections):
+        # type: (List[Dict]) -> List[Dict]
+        """Filter tender_parsing sections to keep only bid-relevant headings."""
+        import re
+
+        SKIP_PATTERNS = [
+            r'投标人应当', r'投标人递交', r'投标人没有',
+            r'招标人有权', r'招标人不予',
+            r'投标文件应当使用不褪色', r'应当按照招标文件',
+            r'应当认真阅读', r'并加盖单位公章',
+        ]
+        skip_regex = re.compile('|'.join(SKIP_PATTERNS))
+
+        MAX_TITLE_LEN = 60
+        seen_titles = set()  # type: set
+        filtered = []
+
+        for sec in sections:
+            title = sec.get("title", "").strip()
+            if not title or len(title) > MAX_TITLE_LEN:
+                continue
+            if skip_regex.search(title):
+                continue
+            if title in seen_titles:
+                continue
+            seen_titles.add(title)
+            filtered.append(sec)
+
+        logger.info(f"Section filter: {len(sections)} → {len(filtered)}")
+        return filtered
+
+    # ── V1: Legacy single-pass extraction ──
+
+    async def _extract_full(self, llm, raw_text):
+        # type: (Any, str) -> Any
+        """Legacy: Single pass extraction."""
+        EXTRACTION_PROMPT = """请分析以下招标文件内容，提取投标文件需要包含的所有章节和要求。
+
+【招标文件内容】
+{tender_text}
+
+请输出 JSON 结构（含 bid_title, volumes, qualification_requirements 等），只输出 JSON。"""
+
+        prompt = EXTRACTION_PROMPT.format(tender_text=raw_text[:self.MAX_CHUNK_SIZE])
+        response = await llm.generate(prompt, system=ANALYSIS_SYSTEM)
         return _safe_parse_json(response)
 
-    async def _extract_by_sections(self, llm, sections: List[Dict],
-                                    raw_text: str) -> Dict:
-        """Multi-pass extraction for long documents."""
-        all_requirements = []  # type: List[Dict]
-
-        for section in sections:
-            title = section.get("title", "")
-            content = section.get("content", "")
-
-            if not content or len(content) < 20:
-                continue
-
-            # Truncate very long sections
-            if len(content) > self.MAX_CHUNK_SIZE:
-                content = content[:self.MAX_CHUNK_SIZE] + "\n...(内容过长已截断)"
-
-            prompt = SECTION_EXTRACTION_PROMPT.format(
-                section_title=title,
-                section_content=content,
-            )
-            response = await llm.generate(prompt, system=EXTRACTION_SYSTEM_PROMPT)
-            parsed = _safe_parse_json(response)
-
-            if parsed and isinstance(parsed, list):
-                all_requirements.extend(parsed)
-            elif parsed and isinstance(parsed, dict):
-                all_requirements.append(parsed)
-
-        # Now do a final consolidation pass with extracted requirements
-        # Build a summary and ask LLM to organize into the full structure
-        if all_requirements:
-            return await self._consolidate(llm, all_requirements, raw_text)
-        return self._fallback_from_sections(sections)
-
-    async def _consolidate(self, llm, requirements: List[Dict],
-                           raw_text: str) -> Dict:
-        """Consolidate per-section extractions into final structure."""
-        req_summary = json.dumps(requirements, ensure_ascii=False, indent=2)
-        if len(req_summary) > self.MAX_CHUNK_SIZE:
-            req_summary = req_summary[:self.MAX_CHUNK_SIZE]
-
-        prompt = f"""以下是从招标文件各章节中分别提取的投标要求：
-
-{req_summary}
-
-请将这些要求整合为一份完整的投标文件结构，输出 JSON 格式：
-{{
-  "bid_title": "投标文件",
-  "volumes": [
-    {{
-      "name": "分册名称",
-      "sections": [
-        {{"order": 1, "title": "章节标题", "type": "narrative|table|form|qualification",
-          "required": true, "content_hints": "内容摘要", "data_fields": []}}
-      ]
-    }}
-  ],
-  "qualification_requirements": [],
-  "format_requirements": {{}},
-  "evaluation_criteria": [],
-  "deadline_info": {{}}
-}}
-
-注意确保：
-1. 章节不重复
-2. 顺序合理（资质→报价→商务→技术 是典型顺序）
-3. 只输出 JSON"""
-
-        response = await llm.generate(prompt, system=EXTRACTION_SYSTEM_PROMPT)
-        result = _safe_parse_json(response)
-        return result if result else self._fallback_from_sections([])
-
-    def _fallback_from_sections(self, sections: List[Dict]) -> Dict:
-        """Create a basic structure from parsed sections when LLM fails."""
+    def _fallback_from_sections(self, sections):
+        # type: (List[Dict]) -> Dict
+        """Create basic structure from parsed sections when all else fails."""
         logger.warning("Using fallback structure from parsed sections")
         bid_sections = []
         for i, sec in enumerate(sections):
@@ -449,6 +747,7 @@ class RequirementExtractionSkill(BaseSkill):
                 "title": sec.get("title", f"第{i+1}节"),
                 "type": sec.get("section_type", "narrative"),
                 "required": True,
+                "rejection_risk": False,
                 "content_hints": sec.get("content", "")[:100],
                 "data_fields": [],
             })
@@ -462,15 +761,9 @@ class RequirementExtractionSkill(BaseSkill):
             "deadline_info": {},
         }
 
-    def _refine_section_types(self, result: Dict) -> Dict:
-        """Use local BGE classifier to correct section types assigned by LLM.
-
-        LLM sometimes misclassifies section types (e.g., assigns "narrative" to
-        what should be "table" or "form"). The local classifier has 90.9% accuracy
-        on real tender data and runs in <1ms per section.
-
-        Only overrides LLM type when classifier confidence > 0.7.
-        """
+    def _refine_section_types(self, result):
+        # type: (Dict) -> Dict
+        """Use local BGE classifier to correct section types if available."""
         try:
             from app.core.rag.section_classifier import section_classifier
 
@@ -482,7 +775,9 @@ class RequirementExtractionSkill(BaseSkill):
 
                 classifications = section_classifier.classify_batch(titles)
 
-                for section, (predicted_type, confidence) in zip(volume.get("sections", []), classifications):
+                for section, (predicted_type, confidence) in zip(
+                    volume.get("sections", []), classifications
+                ):
                     llm_type = section.get("type", "narrative")
                     if predicted_type != llm_type and confidence > 0.7:
                         logger.debug(
@@ -497,10 +792,9 @@ class RequirementExtractionSkill(BaseSkill):
                         section["type_source"] = "llm"
 
             if corrections > 0:
-                logger.info(f"Section type classifier corrected {corrections} section types")
+                logger.info(f"Section type classifier corrected {corrections} types")
 
         except Exception as e:
-            logger.warning(f"Section classifier not available, keeping LLM types: {e}")
+            logger.warning(f"Section classifier not available: {e}")
 
         return result
-

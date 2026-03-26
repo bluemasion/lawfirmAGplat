@@ -332,19 +332,37 @@ async def parse_tender_structure(file: UploadFile = File(...),
                 for i, t in enumerate(sample_titles, 1):
                     yield emit("log", message=f"   {i}. {t[:60]}")
 
-            # ── Step 2: LLM Classification ──
-            yield emit("phase", phase="classifying", message=f"🤖 正在用 AI 分类 {total_sections} 个章节...")
+            # ── Step 2: Tender Analysis (V3 multi-pass) ──
+            yield emit("phase", phase="analyzing", message=f"🤖 正在深度分析招标文件 (AI 两轮解析)...")
             extract_result = await _extractor.execute({
                 "raw_text": parse_result["raw_text"],
                 "sections": parse_result["sections"],
                 "llm_provider": llm_provider,
             })
 
-            # Show classified structure
+            # Show analysis results
             volumes = extract_result.get("volumes", [])
             total_secs = sum(len(v.get("sections", [])) for v in volumes)
-            yield emit("log", message=f"✅ AI 分类完成: {len(volumes)} 个分册, {total_secs} 个有效章节")
+            rejection_items = extract_result.get("rejection_items", [])
+            eval_criteria = extract_result.get("evaluation_criteria", [])
+            tender_analysis = extract_result.get("tender_analysis", {})
 
+            yield emit("log", message=f"✅ 分析完成: {total_secs} 个投标章节")
+
+            # Show rejection conditions (critical)
+            if rejection_items:
+                yield emit("log", message=f"🔴 发现 {len(rejection_items)} 个废标条件:")
+                for ri in rejection_items[:5]:
+                    yield emit("log", message=f"   ⚠️ {ri.get('description', '')[:60]}")
+
+            # Show evaluation criteria
+            if eval_criteria:
+                yield emit("log", message=f"📊 评分维度 ({len(eval_criteria)} 项):")
+                for ec in eval_criteria[:5]:
+                    score = ec.get("max_score", "")
+                    yield emit("log", message=f"   📌 {ec.get('item', '')} ({score}分)")
+
+            # Show classified structure
             for vol in volumes:
                 vol_name = vol.get("name", "?")
                 vol_secs = vol.get("sections", [])
@@ -352,7 +370,9 @@ async def parse_tender_structure(file: UploadFile = File(...),
                 for sec in vol_secs[:5]:
                     sec_type = sec.get("type", "?")
                     icon = {"narrative": "📝", "table": "📊", "form": "📋", "qualification": "🏅"}.get(sec_type, "📄")
-                    yield emit("section", title=sec.get("title", "?"), type=sec_type, icon=icon)
+                    rej_flag = " 🔴废标" if sec.get("rejection_risk") else ""
+                    score_flag = f" ({sec['score_weight']}分)" if sec.get("score_weight") else ""
+                    yield emit("section", title=sec.get("title", "?") + rej_flag + score_flag, type=sec_type, icon=icon)
                 if len(vol_secs) > 5:
                     yield emit("log", message=f"   ... 还有 {len(vol_secs) - 5} 个章节")
 
@@ -424,10 +444,18 @@ async def parse_tender_structure(file: UploadFile = File(...),
 
 @router.post("/generate-full/{task_id}")
 async def generate_full_document(task_id: str, req: FullBiddingRequest):
-    """逐章节生成完整投标文件 — SSE 流式进度
+    """逐章节生成完整投标文件 — SSE 流式进度 + 实时内容输出
 
     Reads the requirements from parse_structure step, generates each section,
     assembles into .docx, and runs verification.
+
+    SSE event types:
+        - start: generation begins
+        - progress: section generation started
+        - content_chunk: real-time content token (for live preview)
+        - section_done: section generation completed (includes full content)
+        - section_cached: section loaded from cache (skipped)
+        - assembling / verifying / complete: final stages
     """
     task = _bidding_tasks.get(task_id)
     if not task:
@@ -440,10 +468,37 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
     # Get company info summary for prompts
     company_info = TemplateFillingSkill.get_company_info_summary(company_data)
 
+    # ── Section cache directory ──
+    import hashlib
+    cache_dir = os.path.join("data", "tasks", task_id, "sections")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    def _section_cache_path(idx, title):
+        # type: (int, str) -> str
+        safe_title = "".join(c for c in title if c.isalnum() or c in "_ -")[:40]
+        return os.path.join(cache_dir, f"{idx:03d}_{safe_title}.json")
+
+    def _load_cached_section(cache_path):
+        # type: (str) -> Any
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return None
+
+    def _save_section_cache(cache_path, result):
+        # type: (str, dict) -> None
+        try:
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to cache section: {e}")
+
     async def event_generator():
         generated_sections = []
         total_sections = 0
-        current = 0
 
         # Collect all sections from all volumes
         all_sections = []
@@ -472,27 +527,56 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
         llm_count = sum(1 for s in all_sections if s.get("type") == "narrative")
         code_count = total_sections - llm_count
 
+        # Check how many are cached
+        cached_count = 0
+        for i, sec in enumerate(all_sections):
+            cp = _section_cache_path(i, sec.get("title", ""))
+            if os.path.exists(cp):
+                cached_count += 1
+
         yield _sse({
             "type": "start",
             "total_sections": total_sections,
             "llm_sections": llm_count,
             "code_sections": code_count,
-            "message": f"开始生成投标文件：{code_count} 个章节用代码模板，{llm_count} 个用LLM",
+            "cached_sections": cached_count,
+            "message": f"开始生成投标文件：{code_count} 个代码模板，{llm_count} 个LLM" +
+                       (f"，{cached_count} 个已缓存" if cached_count else ""),
         })
 
-        # ── Concurrent generation (5 workers) ──
+        # ── Concurrent generation (5 workers) with streaming ──
         import asyncio
 
         CONCURRENCY = 5
         sem = asyncio.Semaphore(CONCURRENCY)
-        event_queue: asyncio.Queue = asyncio.Queue()
-        completed_count = 0
+        event_queue = asyncio.Queue()  # type: asyncio.Queue
+        gen_start_time = time.time()
 
-        async def _gen_one(idx: int, section: dict):
-            """Generate a single section with semaphore limiting."""
+        async def _gen_one(idx, section):
+            # type: (int, dict) -> dict
+            """Generate a single section: check cache → stream generate → save cache."""
             title = section.get("title", f"章节{idx + 1}")
             sec_type = section.get("type", "narrative")
+            sec_start = time.time()
 
+            # ── Check cache first ──
+            cache_path = _section_cache_path(idx, title)
+            cached = _load_cached_section(cache_path)
+            if cached:
+                elapsed = time.time() - sec_start
+                logger.info(f"  [{idx+1}/{total_sections}] CACHED: {title} ({elapsed:.1f}s)")
+                await event_queue.put(_sse({
+                    "type": "section_cached",
+                    "current": idx + 1,
+                    "total": total_sections,
+                    "section_title": title,
+                    "section_type": sec_type,
+                    "content": cached.get("content", ""),
+                    "elapsed": round(elapsed, 1),
+                }))
+                return cached
+
+            # ── Notify start ──
             await event_queue.put(_sse({
                 "type": "progress",
                 "current": idx + 1,
@@ -516,17 +600,36 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
                         if relevant_chunks:
                             reference_data = "\n\n---\n\n".join(relevant_chunks)
 
-                    result = await _generator.execute({
+                    # ── Streaming callback: push content chunks to SSE ──
+                    async def on_chunk(chunk):
+                        # type: (str) -> None
+                        await event_queue.put(_sse({
+                            "type": "content_chunk",
+                            "current": idx + 1,
+                            "section_title": title,
+                            "chunk": chunk,
+                        }))
+
+                    result = await _generator.execute_streaming({
                         "section": section,
                         "company_info": company_info,
                         "reference_data": reference_data,
                         "llm_provider": llm_provider,
                         "skeleton": skeleton_text,
-                    })
+                    }, chunk_callback=on_chunk)
 
                     result["order"] = section.get("order", idx + 1)
                     result["type"] = section.get("type", "narrative")
                     result["level"] = 2
+
+                    # ── Save to disk cache ──
+                    _save_section_cache(cache_path, result)
+
+                    elapsed = time.time() - sec_start
+                    logger.info(
+                        f"  [{idx+1}/{total_sections}] DONE: {title} "
+                        f"({sec_type}, {len(result.get('content', ''))}字, {elapsed:.1f}s)"
+                    )
 
                     await event_queue.put(_sse({
                         "type": "section_done",
@@ -534,18 +637,22 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
                         "total": total_sections,
                         "section_title": title,
                         "status": result.get("status", "generated"),
+                        "content": result.get("content", ""),
                         "content_length": len(result.get("content", "")),
                         "missing_fields": result.get("missing_fields", []),
+                        "elapsed": round(elapsed, 1),
                     }))
                     return result
 
                 except Exception as e:
-                    logger.error(f"Error generating section '{title}': {e}")
+                    elapsed = time.time() - sec_start
+                    logger.error(f"Error generating section '{title}': {e} ({elapsed:.1f}s)")
                     await event_queue.put(_sse({
                         "type": "section_error",
                         "current": idx + 1,
                         "section_title": title,
                         "error": str(e),
+                        "elapsed": round(elapsed, 1),
                     }))
                     return {
                         "title": title,
@@ -577,6 +684,9 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
 
         # Collect results in original order
         generated_sections = [t.result() for t in tasks]
+
+        total_elapsed = time.time() - gen_start_time
+        logger.info(f"=== Generation complete: {total_sections} sections in {total_elapsed:.0f}s ===")
 
         # Assemble document
         yield _sse({"type": "assembling", "message": "正在组装 Word 文档..."})
@@ -618,10 +728,22 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
             "filename": assembly_result.get("filename"),
             "page_estimate": assembly_result.get("page_count_estimate", 0),
             "section_count": len(generated_sections),
+            "total_elapsed": round(total_elapsed, 1),
             "verification": verification,
         })
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.delete("/clear-cache/{task_id}")
+async def clear_section_cache(task_id: str):
+    """清除任务的章节缓存，使下次生成不再命中缓存"""
+    import shutil
+    cache_dir = os.path.join("data", "tasks", task_id, "sections")
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir)
+        return {"success": True, "message": f"已清除任务 {task_id} 的 {cache_dir} 缓存"}
+    return {"success": True, "message": "无缓存需要清除"}
 
 
 @router.post("/verify/{task_id}")

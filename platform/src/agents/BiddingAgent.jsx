@@ -17,6 +17,9 @@ export default function BiddingAgent() {
     const [showMaterialPanel, setShowMaterialPanel] = useState(false);
     const [sectionChecked, setSectionChecked] = useState({}); // { "vi-si": true/false }
     const [genProgress, setGenProgress] = useState({ total: 0, done: 0, current: '', sections: {} }); // per-section status
+    const [liveContent, setLiveContent] = useState({ title: '', text: '', index: 0 }); // streaming content preview
+    const [completedSections, setCompletedSections] = useState({}); // { title: content } for review
+    const [viewingSection, setViewingSection] = useState(null); // title of section user is viewing
 
     // Company data for generation
     const [companyData, setCompanyData] = useState({
@@ -28,12 +31,18 @@ export default function BiddingAgent() {
     const fileInputRef = useRef(null);
     const materialInputRef = useRef(null);
     const chatEndRef = useRef(null);
+    const contentEndRef = useRef(null);
     const abortRef = useRef(null);
 
     // Auto-scroll to bottom when messages change
     useEffect(() => {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
+
+    // Auto-scroll live content panel
+    useEffect(() => {
+        contentEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [liveContent.text, viewingSection]);
 
     // ── Helpers ──
     const addMsg = (role, content, type = 'text') => {
@@ -276,7 +285,7 @@ export default function BiddingAgent() {
         }
     };
 
-    // ── Start generation → SSE stream ──
+    // ── Start generation → SSE stream with live content ──
     const startGeneration = async () => {
         if (!taskId) return;
 
@@ -296,6 +305,14 @@ export default function BiddingAgent() {
             });
         });
         setGenProgress({ total: checkedCount, done: 0, current: '', sections: initSections });
+        setLiveContent({ title: '', text: '', index: 0 });
+        setCompletedSections({});
+        setViewingSection(null);
+
+        // Accumulate streaming content locally (not via state to avoid re-render storm)
+        const contentAcc = {};  // { sectionTitle: text }
+        const completedAcc = {}; // { sectionTitle: fullContent }
+        let genStartTime = Date.now();
 
         try {
             const res = await fetch(`${API_BASE}/api/bidding/generate-full/${taskId}`, {
@@ -325,32 +342,66 @@ export default function BiddingAgent() {
                     try {
                         const ev = JSON.parse(ds);
                         if (ev.type === 'start') {
-                            setGenProgress(p => ({ ...p, total: ev.total_sections }));
+                            setGenProgress(p => ({ ...p, total: ev.total_sections, cached: ev.cached_sections || 0 }));
                         } else if (ev.type === 'progress') {
+                            contentAcc[ev.section_title] = ''; // start accumulating
+                            setLiveContent({ title: ev.section_title, text: '', index: ev.current });
                             setGenProgress(p => ({
                                 ...p, current: ev.section_title,
                                 sections: { ...p.sections, [ev.section_title]: { status: 'generating', chars: 0 } },
                             }));
+                        } else if (ev.type === 'content_chunk') {
+                            // Real-time streaming content
+                            const t = ev.section_title;
+                            contentAcc[t] = (contentAcc[t] || '') + ev.chunk;
+                            setLiveContent(prev => (
+                                prev.title === t
+                                    ? { ...prev, text: contentAcc[t] }
+                                    : { title: t, text: contentAcc[t], index: ev.current }
+                            ));
                         } else if (ev.type === 'section_done') {
                             doneCount++;
+                            completedAcc[ev.section_title] = ev.content || contentAcc[ev.section_title] || '';
+                            setCompletedSections(prev => ({ ...prev, [ev.section_title]: completedAcc[ev.section_title] }));
+                            setGenProgress(p => ({
+                                ...p, done: doneCount,
+                                elapsed: ((Date.now() - genStartTime) / 1000).toFixed(0),
+                                sections: {
+                                    ...p.sections,
+                                    [ev.section_title]: {
+                                        status: ev.status === 'error' ? 'error' : 'done',
+                                        chars: ev.content_length || 0,
+                                        elapsed: ev.elapsed,
+                                    },
+                                },
+                            }));
+                        } else if (ev.type === 'section_cached') {
+                            doneCount++;
+                            completedAcc[ev.section_title] = ev.content || '';
+                            setCompletedSections(prev => ({ ...prev, [ev.section_title]: ev.content || '' }));
                             setGenProgress(p => ({
                                 ...p, done: doneCount,
                                 sections: {
                                     ...p.sections,
-                                    [ev.section_title]: { status: ev.status === 'error' ? 'error' : 'done', chars: ev.content_length || 0 },
+                                    [ev.section_title]: { status: 'cached', chars: (ev.content || '').length, elapsed: ev.elapsed },
                                 },
                             }));
                         } else if (ev.type === 'section_error') {
                             doneCount++;
                             setGenProgress(p => ({
                                 ...p, done: doneCount,
-                                sections: { ...p.sections, [ev.section_title]: { status: 'error', chars: 0, error: ev.error } },
+                                sections: { ...p.sections, [ev.section_title]: { status: 'error', chars: 0, error: ev.error, elapsed: ev.elapsed } },
                             }));
                         } else if (ev.type === 'assembling') {
                             setGenProgress(p => ({ ...p, current: '📦 组装文件...' }));
+                            setLiveContent({ title: '📦 正在组装 Word 文档...', text: '', index: 0 });
                         } else if (ev.type === 'complete') {
                             setOutputFilename(ev.file_path);
-                            setGenProgress(p => ({ ...p, current: '✅ 完成', verification: ev.verification }));
+                            setGenProgress(p => ({
+                                ...p, current: '✅ 完成',
+                                totalElapsed: ev.total_elapsed,
+                                verification: ev.verification,
+                            }));
                             setPhase('done');
                         }
                     } catch { }
@@ -542,6 +593,122 @@ export default function BiddingAgent() {
                             <p className="text-[11px] text-zinc-500 mt-1">
                                 勾选需要生成的章节，取消勾选的章节将跳过。确认后点击「开始生成」
                             </p>
+                            {/* Rejection items warning banner */}
+                            {/* ── 招标要点分析面板 ── */}
+                            {requirements?.verification && (() => {
+                                const v = requirements.verification;
+                                const rej = v.rejection_check || {};
+                                const evl = v.evaluation_check || {};
+                                const doc = v.document_check || {};
+                                const fmt = v.format_info || {};
+                                const dl = v.deadline_info || {};
+                                return (
+                                    <div className="mt-3 rounded-lg border border-zinc-700/50 bg-zinc-900/60 overflow-hidden">
+                                        {/* Panel header */}
+                                        <div className="px-4 py-2.5 flex items-center justify-between cursor-pointer bg-gradient-to-r from-orange-500/8 to-transparent"
+                                            onClick={() => {
+                                                const el = document.getElementById('verification-detail');
+                                                if (el) el.classList.toggle('hidden');
+                                            }}>
+                                            <span className="text-[12px] font-bold text-zinc-200 flex items-center gap-2">
+                                                📋 招标要点分析
+                                                {rej.total > 0 && (
+                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-400">
+                                                        {rej.total}项废标条件
+                                                    </span>
+                                                )}
+                                                {evl.total > 0 && (
+                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400">
+                                                        {evl.total}项评分维度
+                                                    </span>
+                                                )}
+                                                {doc.total > 0 && (
+                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400">
+                                                        {doc.total}份必须文件
+                                                    </span>
+                                                )}
+                                            </span>
+                                            <span className="text-[10px] text-zinc-500">点击展开/收起 ▼</span>
+                                        </div>
+
+                                        <div id="verification-detail" className="px-4 py-3 space-y-3 border-t border-zinc-800">
+                                            {/* Rejection conditions */}
+                                            {rej.total > 0 && (
+                                                <div>
+                                                    <div className="text-[11px] font-bold text-red-400 mb-1.5">
+                                                        🔴 废标条件 — 以下情形将导致投标无效
+                                                    </div>
+                                                    {(rej.items || []).map((item, i) => (
+                                                        <div key={i} className="flex items-start gap-2 text-[10px] py-1 pl-3 border-l-2 border-red-500/20 mb-1">
+                                                            <span className="text-red-400/70 shrink-0">{i + 1}.</span>
+                                                            <span className="text-zinc-300 flex-1">{item.condition}</span>
+                                                            {item.source && (
+                                                                <span className="text-zinc-600 shrink-0 text-[9px]">来源: {item.source}</span>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            {/* Evaluation criteria */}
+                                            {evl.total > 0 && (
+                                                <div>
+                                                    <div className="text-[11px] font-bold text-blue-400 mb-1.5">
+                                                        📊 评分维度 — 评标打分依据
+                                                    </div>
+                                                    {(evl.items || []).map((item, i) => (
+                                                        <div key={i} className="flex items-start gap-2 text-[10px] py-1 pl-3 border-l-2 border-blue-500/20 mb-1">
+                                                            <span className="text-blue-400/70 shrink-0">{i + 1}.</span>
+                                                            <span className="text-zinc-300 flex-1">
+                                                                {item.item}
+                                                                {item.max_score > 0 && <span className="text-blue-400 ml-1 font-bold">({item.max_score}分)</span>}
+                                                            </span>
+                                                            {item.description && (
+                                                                <span className="text-zinc-600 shrink-0 text-[9px] max-w-[200px] truncate">{item.description}</span>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            {/* Required documents */}
+                                            {doc.total > 0 && (
+                                                <div>
+                                                    <div className="text-[11px] font-bold text-purple-400 mb-1.5">
+                                                        📃 必须提供的文件清单
+                                                    </div>
+                                                    <div className="flex flex-wrap gap-1.5">
+                                                        {(doc.items || []).map((item, i) => (
+                                                            <span key={i} className={`text-[9px] px-2 py-1 rounded border ${item.is_mandatory
+                                                                ? 'bg-zinc-800/80 text-zinc-300 border-zinc-700'
+                                                                : 'bg-zinc-900/50 text-zinc-500 border-zinc-800'
+                                                                }`}>
+                                                                {item.name}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {/* Format & deadline info */}
+                                            {(fmt.copies || fmt.binding || dl.submission_deadline || dl.validity_period) && (
+                                                <div className="flex gap-4 pt-2 border-t border-zinc-800/50">
+                                                    {(fmt.copies || fmt.binding || fmt.paper_size) && (
+                                                        <div className="text-[10px] text-zinc-500">
+                                                            📐 格式: {[fmt.copies, fmt.binding, fmt.paper_size, fmt.font].filter(Boolean).join(' | ')}
+                                                        </div>
+                                                    )}
+                                                    {(dl.submission_deadline || dl.validity_period) && (
+                                                        <div className="text-[10px] text-zinc-500">
+                                                            ⏰ {dl.submission_deadline && `截止: ${dl.submission_deadline}`} {dl.validity_period && `有效期: ${dl.validity_period}`}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })()}
                         </div>
 
                         {/* Section list with checkboxes */}
@@ -569,7 +736,8 @@ export default function BiddingAgent() {
                                 <div key={vi}>
                                     {(vol.sections || []).map((sec, si) => {
                                         const key = `${vi}-${si}`;
-                                        const checked = sectionChecked[key] !== false;
+                                        const isRejectionRisk = sec.rejection_risk === true;
+                                        const checked = isRejectionRisk ? true : sectionChecked[key] !== false;
                                         const typeLabel = { narrative: '叙述', table: '表格', form: '表单', qualification: '资质' };
                                         const typeColor = {
                                             narrative: 'bg-blue-500/10 text-blue-400 border-blue-500/30',
@@ -585,22 +753,35 @@ export default function BiddingAgent() {
 
                                         return (
                                             <label key={si}
-                                                className={`flex items-center py-2.5 px-3 rounded-lg mb-1 cursor-pointer transition-all ${checked
-                                                    ? 'bg-zinc-800/50 hover:bg-zinc-800'
-                                                    : 'bg-zinc-900/30 opacity-50 hover:opacity-70'
+                                                className={`flex items-center py-2.5 px-3 rounded-lg mb-1 cursor-pointer transition-all ${isRejectionRisk
+                                                    ? 'bg-red-500/5 border border-red-500/20 hover:bg-red-500/10'
+                                                    : checked
+                                                        ? 'bg-zinc-800/50 hover:bg-zinc-800'
+                                                        : 'bg-zinc-900/30 opacity-50 hover:opacity-70'
                                                     }`}>
                                                 <input type="checkbox"
                                                     checked={checked}
-                                                    onChange={() => setSectionChecked(prev => ({ ...prev, [key]: !prev[key] }))}
-                                                    className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-orange-500 focus:ring-orange-500 accent-orange-500 shrink-0"
+                                                    disabled={isRejectionRisk}
+                                                    onChange={() => !isRejectionRisk && setSectionChecked(prev => ({ ...prev, [key]: !prev[key] }))}
+                                                    className={`w-4 h-4 rounded border-zinc-600 bg-zinc-800 focus:ring-orange-500 shrink-0 ${isRejectionRisk ? 'accent-red-500 text-red-500' : 'accent-orange-500 text-orange-500'}`}
                                                 />
                                                 <span className="text-zinc-500 text-[11px] w-8 text-right mx-2 shrink-0">{sec.order || si + 1}</span>
                                                 <span className={`flex-1 text-[13px] leading-snug ${checked ? 'text-zinc-200' : 'text-zinc-500 line-through'}`}>
                                                     {sec.title}
                                                 </span>
+                                                {isRejectionRisk && (
+                                                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/30 mr-1.5 shrink-0 font-bold">
+                                                        🔴 废标项
+                                                    </span>
+                                                )}
+                                                {sec.score_weight > 0 && (
+                                                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 mr-1.5 shrink-0">
+                                                        {sec.score_weight}分
+                                                    </span>
+                                                )}
                                                 {usesMaterials && checked && (
-                                                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20 mr-2 shrink-0">
-                                                        {usesResumes ? '📋 素材库简历' : '📁 素材库业绩'}
+                                                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20 mr-1.5 shrink-0">
+                                                        {usesResumes ? '📋 素材库' : '📁 业绩'}
                                                     </span>
                                                 )}
                                                 <span className={`text-[9px] px-1.5 py-0.5 rounded border shrink-0 ${typeColor[sec.type] || 'bg-zinc-800 text-zinc-500 border-zinc-700'}`}>
@@ -640,55 +821,111 @@ export default function BiddingAgent() {
                     </div>
                 ) : phase === 'generating' ? (
                     /* ══════════════════════════════════════════════════════════ */
-                    /* ── STEP 3: Generation Progress Page ──────────────────── */
+                    /* ── STEP 3: Generation — Two-Panel Live Preview ─────── */
                     /* ══════════════════════════════════════════════════════════ */
                     <div className="flex-1 flex flex-col overflow-hidden">
                         {/* Progress header */}
-                        <div className="px-6 py-4 border-b border-zinc-800 bg-zinc-900/50">
-                            <h2 className="text-base font-bold text-zinc-100 flex items-center space-x-2">
-                                <Loader2 size={16} className="text-orange-400 animate-spin" />
-                                <span>正在生成投标文件</span>
-                            </h2>
-                            {/* Overall progress bar */}
-                            <div className="mt-3 flex items-center space-x-3">
-                                <div className="flex-1 h-2 bg-zinc-800 rounded-full overflow-hidden">
-                                    <div className="h-full bg-gradient-to-r from-orange-500 to-amber-500 rounded-full transition-all duration-500"
-                                        style={{ width: `${genProgress.total ? (genProgress.done / genProgress.total * 100) : 0}%` }} />
+                        <div className="px-6 py-3 border-b border-zinc-800 bg-zinc-900/50">
+                            <div className="flex items-center justify-between">
+                                <h2 className="text-sm font-bold text-zinc-100 flex items-center space-x-2">
+                                    <Loader2 size={14} className="text-orange-400 animate-spin" />
+                                    <span>正在生成投标文件</span>
+                                </h2>
+                                <div className="flex items-center space-x-3 text-[11px]">
+                                    {genProgress.elapsed && (
+                                        <span className="text-zinc-500">⏱ {genProgress.elapsed}s</span>
+                                    )}
+                                    <span className="font-bold text-orange-400">
+                                        {genProgress.done} / {genProgress.total}
+                                    </span>
                                 </div>
-                                <span className="text-[12px] font-bold text-orange-400 shrink-0">
-                                    {genProgress.done} / {genProgress.total}
-                                </span>
                             </div>
-                            <p className="text-[11px] text-zinc-500 mt-2">
-                                {genProgress.current || '准备中...'}
-                            </p>
+                            <div className="mt-2 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                                <div className="h-full bg-gradient-to-r from-orange-500 to-amber-500 rounded-full transition-all duration-500"
+                                    style={{ width: `${genProgress.total ? (genProgress.done / genProgress.total * 100) : 0}%` }} />
+                            </div>
                         </div>
 
-                        {/* Per-section progress list */}
-                        <div className="flex-1 overflow-y-auto px-6 py-3">
-                            {Object.entries(genProgress.sections).map(([title, info], i) => (
-                                <div key={title} className={`flex items-center py-2 px-3 rounded-lg mb-1 ${info.status === 'generating' ? 'bg-orange-500/5 border border-orange-500/20' : 'bg-zinc-800/30'
-                                    }`}>
-                                    <span className="w-6 text-center shrink-0">
-                                        {info.status === 'pending' && <span className="text-zinc-600">○</span>}
-                                        {info.status === 'generating' && <Loader2 size={14} className="text-orange-400 animate-spin" />}
-                                        {info.status === 'done' && <CheckCircle size={14} className="text-emerald-400" />}
-                                        {info.status === 'error' && <AlertTriangle size={14} className="text-red-400" />}
-                                    </span>
-                                    <span className={`flex-1 text-[12px] ml-2 ${info.status === 'generating' ? 'text-orange-200 font-bold' :
-                                        info.status === 'done' ? 'text-zinc-300' :
-                                            info.status === 'error' ? 'text-red-300' : 'text-zinc-500'
-                                        }`}>
-                                        {title}
-                                    </span>
-                                    {info.chars > 0 && (
-                                        <span className="text-[10px] text-zinc-500 shrink-0">{info.chars} 字</span>
-                                    )}
-                                    {info.error && (
-                                        <span className="text-[10px] text-red-400 ml-2 shrink-0">{info.error}</span>
+                        {/* Two-panel layout */}
+                        <div className="flex-1 flex overflow-hidden">
+                            {/* Left: Section list */}
+                            <div className="w-[280px] border-r border-zinc-800 overflow-y-auto bg-zinc-900/30">
+                                {Object.entries(genProgress.sections).map(([title, info]) => (
+                                    <div key={title}
+                                        onClick={() => {
+                                            if (info.status === 'done' || info.status === 'cached') {
+                                                setViewingSection(viewingSection === title ? null : title);
+                                            }
+                                        }}
+                                        className={`flex items-center py-2 px-3 text-[11px] border-b border-zinc-800/50 cursor-pointer transition-all ${info.status === 'generating'
+                                            ? 'bg-orange-500/5 border-l-2 border-l-orange-500'
+                                            : viewingSection === title
+                                                ? 'bg-zinc-800 border-l-2 border-l-blue-500'
+                                                : 'hover:bg-zinc-800/50 border-l-2 border-l-transparent'
+                                            }`}>
+                                        <span className="w-5 shrink-0 text-center">
+                                            {info.status === 'pending' && <span className="text-zinc-600">○</span>}
+                                            {info.status === 'generating' && <Loader2 size={12} className="text-orange-400 animate-spin" />}
+                                            {info.status === 'done' && <CheckCircle size={12} className="text-emerald-400" />}
+                                            {info.status === 'cached' && <span className="text-blue-400">⚡</span>}
+                                            {info.status === 'error' && <AlertTriangle size={12} className="text-red-400" />}
+                                        </span>
+                                        <span className={`flex-1 ml-1.5 truncate ${info.status === 'generating' ? 'text-orange-200 font-bold' :
+                                            info.status === 'done' || info.status === 'cached' ? 'text-zinc-300' :
+                                                info.status === 'error' ? 'text-red-300' : 'text-zinc-600'
+                                            }`}>
+                                            {title}
+                                        </span>
+                                        {info.elapsed > 0 && (
+                                            <span className="text-[9px] text-zinc-600 ml-1 shrink-0">{info.elapsed}s</span>
+                                        )}
+                                        {info.chars > 0 && (
+                                            <span className="text-[9px] text-zinc-600 ml-1 shrink-0">{info.chars}字</span>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+
+                            {/* Right: Live content preview */}
+                            <div className="flex-1 flex flex-col overflow-hidden bg-zinc-950">
+                                {/* Content header */}
+                                <div className="px-5 py-2.5 border-b border-zinc-800 bg-zinc-900/40 flex items-center justify-between shrink-0">
+                                    <div className="flex items-center space-x-2">
+                                        {(viewingSection || liveContent.title) && (
+                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20">
+                                                {viewingSection ? '📖 回顾' : '✍️ 生成中'}
+                                            </span>
+                                        )}
+                                        <h3 className="text-[13px] font-bold text-zinc-200 truncate">
+                                            {viewingSection || liveContent.title || '等待生成...'}
+                                        </h3>
+                                    </div>
+                                    {viewingSection && (
+                                        <button onClick={() => setViewingSection(null)}
+                                            className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-1 rounded hover:bg-zinc-800">
+                                            ← 返回实时
+                                        </button>
                                     )}
                                 </div>
-                            ))}
+                                {/* Content body */}
+                                <div className="flex-1 overflow-y-auto px-5 py-4">
+                                    <div className="text-[13px] text-zinc-300 leading-relaxed whitespace-pre-wrap font-[system-ui]">
+                                        {viewingSection
+                                            ? (completedSections[viewingSection] || '内容加载中...')
+                                            : (liveContent.text || (
+                                                <div className="text-zinc-600 text-center py-20">
+                                                    <Loader2 size={24} className="animate-spin mx-auto mb-3 text-zinc-700" />
+                                                    <p>等待章节开始生成...</p>
+                                                </div>
+                                            ))
+                                        }
+                                        {!viewingSection && liveContent.text && (
+                                            <span className="inline-block w-2 h-4 bg-orange-400 animate-pulse ml-0.5 align-text-bottom" />
+                                        )}
+                                        <div ref={contentEndRef} />
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 ) : phase === 'done' ? (

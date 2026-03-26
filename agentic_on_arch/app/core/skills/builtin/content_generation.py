@@ -584,6 +584,169 @@ class ContentGenerationSkill(BaseSkill):
         missing = self._scan_missing(content)
         return self._result(title, content, missing, "generated")
 
+    async def execute_streaming(self, params, chunk_callback=None):
+        # type: (Dict[str, Any], Any) -> Any
+        """Like execute(), but streams narrative content via chunk_callback.
+
+        chunk_callback(chunk: str) is called for each token/chunk of content.
+        For table/form/qualification, the full content is generated instantly
+        and chunk_callback is called once with the entire content.
+        Returns the same result dict as execute().
+        """
+        section = params.get("section", {})
+        company_info = params.get("company_info", "暂无律所信息")
+        reference_data = params.get("reference_data", "暂无参考资料")
+        llm_provider = params.get("llm_provider", "qwen")
+        skeleton = params.get("skeleton", None)
+
+        title = section.get("title", "未知章节")
+        sec_type = section.get("type", "narrative")
+        content_hints = section.get("content_hints", "")
+        data_fields = section.get("data_fields", [])
+
+        logger.info(f"Generating (stream) content for: [{sec_type}] {title}")
+
+        # Non-narrative types: generate instantly, callback once
+        if sec_type == "qualification":
+            content = self._generate_qualification_placeholder(title, content_hints, data_fields)
+            if chunk_callback:
+                await chunk_callback(content)
+            return self._result(title, content, data_fields or [title], "placeholder")
+
+        if sec_type == "table":
+            content = await self._generate_table_by_template(title, content_hints, data_fields)
+            if chunk_callback:
+                await chunk_callback(content)
+            missing = self._scan_missing(content)
+            return self._result(title, content, missing, "template")
+
+        if sec_type == "form":
+            content = self._generate_form_by_template(title, content_hints)
+            if chunk_callback:
+                await chunk_callback(content)
+            missing = self._scan_missing(content)
+            return self._result(title, content, missing, "template")
+
+        # ── narrative → LLM streaming ──
+        content = await self._generate_narrative_section_streaming(
+            title, content_hints, reference_data, company_info,
+            llm_provider, skeleton, chunk_callback
+        )
+        missing = self._scan_missing(content)
+        return self._result(title, content, missing, "generated")
+
+    async def _generate_narrative_section_streaming(
+        self, title, hints, reference, company_info,
+        llm_provider, skeleton=None, chunk_callback=None
+    ):
+        # type: (str, str, str, str, str, Optional[str], Any) -> str
+        """Stream narrative section using llm.stream(), calling chunk_callback per token."""
+        llm = get_llm(llm_provider)
+
+        # Build prompt (same logic as _generate_narrative_section)
+        skeleton_hint = ""
+        if skeleton:
+            skeleton_hint = f"\n【参考骨架（来自历史模板）】\n{skeleton}\n请参考以上骨架结构，结合本次招标要求改写。\n"
+
+        # S4: material RAG context
+        material_context = ""
+        store = _get_material_store()
+        if store:
+            try:
+                relevant = await store.search_narratives(title, top_k=3)
+                if relevant:
+                    material_context = "\n【来自历史投标文件的参考范文】\n"
+                    for chunk in relevant:
+                        material_context += f"[{chunk.get('title', '')}]\n{chunk.get('content', '')}\n\n"
+                    material_context += "请参考以上范文的写法和结构，结合本次招标要求改写。\n"
+                    logger.info(f"  Material RAG: {len(relevant)} chunks for '{title}'")
+            except Exception as e:
+                logger.debug(f"Material RAG failed for '{title}': {e}")
+
+        # S7-P1B: structured material injection
+        structured_context = ""
+        if store:
+            title_lower = title.lower()
+            try:
+                team_kws = ["团队介绍", "人员介绍", "律师团队", "拟投入人员",
+                            "项目团队", "核心团队", "服务团队", "人员配置"]
+                if any(kw in title_lower for kw in team_kws):
+                    resumes = store.get_resumes()
+                    if resumes:
+                        structured_context = "\n【素材库：律师简历数据】\n"
+                        for r in resumes[:8]:
+                            structured_context += (
+                                f"- {r.get('name', '?')}, "
+                                f"{r.get('title', '律师')}, "
+                                f"执业{r.get('years_of_practice', '?')}年, "
+                                f"擅长{r.get('specialty', '?')}"
+                            )
+                            cases = r.get('representative_cases', [])
+                            if cases:
+                                structured_context += f", 代表案例: {'; '.join(str(c) for c in cases[:3])}"
+                            structured_context += "\n"
+                        structured_context += "请使用以上真实律师信息撰写，不要编造姓名或经历。\n"
+
+                proj_kws = ["业绩介绍", "类似业绩", "项目经验", "服务案例",
+                            "成功案例", "代表业绩", "项目业绩"]
+                if any(kw in title_lower for kw in proj_kws):
+                    projects = store.get_projects()
+                    if projects:
+                        structured_context = "\n【素材库：项目业绩数据】\n"
+                        for p in projects[:6]:
+                            structured_context += (
+                                f"- {p.get('project_name', '?')}, "
+                                f"委托方: {p.get('client', '?')}, "
+                                f"金额: {p.get('contract_amount', p.get('amount', '?'))}, "
+                                f"类型: {p.get('project_type', '?')}"
+                            )
+                            desc = p.get('description', '')
+                            if desc:
+                                structured_context += f", {desc[:60]}"
+                            structured_context += "\n"
+                        structured_context += "请使用以上真实项目信息撰写，不要编造项目名称或金额。\n"
+
+                qual_kws = ["资质", "资格", "荣誉", "证书"]
+                if any(kw in title_lower for kw in qual_kws):
+                    quals = store.get_qualifications()
+                    if quals:
+                        structured_context = "\n【素材库：资质证书数据】\n"
+                        for q in quals[:10]:
+                            structured_context += (
+                                f"- {q.get('name', '?')}, "
+                                f"编号: {q.get('number', '?')}, "
+                                f"颁发: {q.get('issuer', '?')}, "
+                                f"有效期至: {q.get('valid_until', '?')}\n"
+                            )
+                        structured_context += "请使用以上真实资质信息。\n"
+            except Exception as e:
+                logger.debug(f"Structured material inject failed for '{title}': {e}")
+
+        selected_prompt = _route_prompt(title)
+        prompt = selected_prompt.format(
+            section_title=title,
+            content_hints=hints or "按照招标要求撰写",
+            reference_data=reference,
+            company_info=company_info,
+            skeleton_hint=skeleton_hint + material_context + structured_context,
+        )
+
+        # Stream from LLM, accumulate full content
+        full_content = []
+        try:
+            async for token in llm.stream(prompt, system=SECTION_GENERATION_SYSTEM):
+                full_content.append(token)
+                if chunk_callback:
+                    await chunk_callback(token)
+        except Exception as e:
+            error_msg = f"[LLM流式生成错误: {str(e)}]"
+            full_content.append(error_msg)
+            if chunk_callback:
+                await chunk_callback(error_msg)
+            logger.error(f"Stream generation failed for '{title}': {e}")
+
+        return "".join(full_content)
+
     # ── Form: code templates ──
 
     def _generate_form_by_template(self, title: str, hints: str) -> str:
