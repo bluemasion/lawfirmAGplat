@@ -7,7 +7,9 @@ Parse historical bid documents (.docx) to automatically extract:
 - Narrative chunks (for RAG vector store)
 """
 
+import hashlib
 import json
+import os
 import re
 from typing import Any, Dict, List, Optional
 
@@ -211,22 +213,33 @@ class BidDocumentParserSkill(BaseSkill):
             material_type = sec.get("material_type", "other")
             title = sec.get("title", "")
             content = sec.get("content", "")
+            section_images = sec.get("images", [])
 
             if not content.strip():
                 continue
 
             if material_type == "resume":
                 extracted = await self._extract_resumes(llm, title, content)
+                # Attach section images to each extracted item
+                if section_images:
+                    for item in extracted:
+                        item["_images"] = [img["filename"] for img in section_images]
                 resumes.extend(extracted)
                 logger.info(f"  Extracted {len(extracted)} resumes from '{title}'")
 
             elif material_type == "project":
                 extracted = await self._extract_projects(llm, title, content)
+                if section_images:
+                    for item in extracted:
+                        item["_images"] = [img["filename"] for img in section_images]
                 projects.extend(extracted)
                 logger.info(f"  Extracted {len(extracted)} projects from '{title}'")
 
             elif material_type == "qualification":
                 extracted = await self._extract_qualifications(llm, title, content)
+                if section_images:
+                    for item in extracted:
+                        item["_images"] = [img["filename"] for img in section_images]
                 qualifications.extend(extracted)
                 logger.info(f"  Extracted {len(extracted)} qualifications from '{title}'")
 
@@ -266,8 +279,60 @@ class BidDocumentParserSkill(BaseSkill):
             "total_sections": len(sections),
         }
 
+    # ── Image storage directory ──
+    IMAGES_DIR = os.path.join(
+        os.path.dirname(__file__), "..", "..", "..", "..", "data", "materials", "images"
+    )
+
+    def _extract_images_from_element(self, element, doc, saved_hashes):
+        """Extract images from a paragraph/table element. Returns list of saved image info dicts."""
+        images = []
+        # Look for <a:blip r:embed="rIdN"> in the element XML
+        nsmap = {
+            'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
+            'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+        }
+        blips = element.findall('.//a:blip', nsmap)
+        for blip in blips:
+            embed_id = blip.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed')
+            if not embed_id:
+                continue
+            try:
+                rel = doc.part.rels[embed_id]
+                image_part = rel.target_part
+                blob = image_part.blob
+                content_type = image_part.content_type or 'image/png'
+                ext = content_type.split('/')[-1].replace('jpeg', 'jpg')
+                if ext not in ('png', 'jpg', 'gif', 'bmp', 'tiff', 'webp', 'svg+xml'):
+                    ext = 'png'
+
+                # Use content hash as filename (dedup across uploads)
+                img_hash = hashlib.md5(blob).hexdigest()[:12]
+                if img_hash in saved_hashes:
+                    images.append(saved_hashes[img_hash])
+                    continue
+
+                filename = f"{img_hash}.{ext}"
+                os.makedirs(self.IMAGES_DIR, exist_ok=True)
+                filepath = os.path.join(self.IMAGES_DIR, filename)
+                with open(filepath, 'wb') as f:
+                    f.write(blob)
+
+                info = {
+                    "filename": filename,
+                    "hash": img_hash,
+                    "size": len(blob),
+                    "content_type": content_type,
+                }
+                saved_hashes[img_hash] = info
+                images.append(info)
+                logger.debug(f"Extracted image: {filename} ({len(blob)} bytes)")
+            except Exception as e:
+                logger.debug(f"Failed to extract image {embed_id}: {e}")
+        return images
+
     def _parse_docx(self, file_path: str) -> List[Dict]:
-        """Parse .docx file into sections (simplified version of tender_parsing)."""
+        """Parse .docx file into sections, including embedded images."""
         try:
             doc = Document(file_path)
         except Exception as e:
@@ -277,6 +342,8 @@ class BidDocumentParserSkill(BaseSkill):
         current_title = ""
         current_content_parts = []  # type: List[str]
         current_tables = []  # type: List[str]
+        current_images = []  # type: List[Dict]
+        saved_hashes = {}  # type: Dict[str, Dict]  -- dedup across doc
 
         cn_heading_patterns = [
             r'^[一二三四五六七八九十]+[、.]',
@@ -286,18 +353,29 @@ class BidDocumentParserSkill(BaseSkill):
         ]
 
         def _flush():
-            nonlocal current_title, current_content_parts, current_tables
+            nonlocal current_title, current_content_parts, current_tables, current_images
             if current_title:
                 content = "\n".join(current_content_parts + current_tables).strip()
-                sections.append({
+                sec = {
                     "title": current_title,
                     "content": content,
-                })
+                }
+                if current_images:
+                    sec["images"] = list(current_images)
+                sections.append(sec)
                 current_content_parts = []
                 current_tables = []
+                current_images = []
 
         for element in doc.element.body:
             if element.tag.endswith('}p'):
+                # Check for images in this paragraph
+                para_images = self._extract_images_from_element(element, doc, saved_hashes)
+                if para_images:
+                    current_images.extend(para_images)
+                    for img in para_images:
+                        current_content_parts.append(f"[图片: {img['filename']}]")
+
                 for para in doc.paragraphs:
                     if para._element is element:
                         text = para.text.strip()
@@ -321,6 +399,11 @@ class BidDocumentParserSkill(BaseSkill):
                         break
 
             elif element.tag.endswith('}tbl'):
+                # Check for images in table cells
+                tbl_images = self._extract_images_from_element(element, doc, saved_hashes)
+                if tbl_images:
+                    current_images.extend(tbl_images)
+
                 for table in doc.tables:
                     if table._element is element:
                         rows_text = []
@@ -333,10 +416,15 @@ class BidDocumentParserSkill(BaseSkill):
         _flush()
 
         # If no sections found, treat whole document as one section
-        # Include BOTH paragraph text AND table content
         if not sections:
             parts = []
+            all_images = []
             for p in doc.paragraphs:
+                p_imgs = self._extract_images_from_element(p._element, doc, saved_hashes)
+                if p_imgs:
+                    all_images.extend(p_imgs)
+                    for img in p_imgs:
+                        parts.append(f"[图片: {img['filename']}]")
                 if p.text.strip():
                     parts.append(p.text.strip())
             for table in doc.tables:
@@ -347,12 +435,19 @@ class BidDocumentParserSkill(BaseSkill):
                 parts.append("\n".join(rows_text))
             full_text = "\n".join(parts)
             title = "投标文件正文"
-            # Use first non-empty paragraph or table row as title if available
             if parts:
                 first_line = parts[0].split("\n")[0][:60]
                 if first_line:
                     title = first_line
-            sections.append({"title": title, "content": full_text})
+            sec = {"title": title, "content": full_text}
+            if all_images:
+                sec["images"] = all_images
+            sections.append(sec)
+
+        # Log image summary
+        total_images = sum(len(s.get("images", [])) for s in sections)
+        if total_images:
+            logger.info(f"Extracted {total_images} images from document (saved to {self.IMAGES_DIR})")
 
         return sections
 

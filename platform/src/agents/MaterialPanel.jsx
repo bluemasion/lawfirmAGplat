@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Plus, Trash2, Edit3, Users, Briefcase, Award, ArrowLeft, Save, Loader2, ChevronDown, ChevronRight, FileText, File, ExternalLink, Upload, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
+import { X, Plus, Trash2, Edit3, Users, Briefcase, Award, ArrowLeft, Save, Loader2, ChevronDown, ChevronRight, FileText, File, ExternalLink, Upload, CheckCircle2, AlertCircle, RefreshCw, ImageIcon } from 'lucide-react';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -87,6 +87,65 @@ function SourceFilesBlock({ data }) {
                 })}
             </div>
         </div>
+    );
+}
+
+/* ── Images Block (show extracted images from Word docs) ── */
+function ImagesBlock({ images }) {
+    const [lightbox, setLightbox] = useState(null);
+    if (!images || images.length === 0) return null;
+
+    return (
+        <>
+            <div className="px-5 py-3 border-t border-zinc-700/50 bg-zinc-900/50">
+                <div className="text-[10px] text-zinc-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                    <ImageIcon size={10} />
+                    <span>文档内嵌图片 ({images.length})</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                    {images.map((img, i) => {
+                        const src = `${API_BASE}/api/bidding/materials/images/${img}`;
+                        return (
+                            <div
+                                key={i}
+                                className="w-20 h-20 rounded-lg border border-zinc-700 overflow-hidden cursor-pointer hover:border-orange-500/60 hover:shadow-lg hover:shadow-orange-500/10 transition-all group/img relative"
+                                onClick={(e) => { e.stopPropagation(); setLightbox(src); }}
+                            >
+                                <img
+                                    src={src}
+                                    alt={img}
+                                    className="w-full h-full object-cover group-hover/img:scale-110 transition-transform duration-200"
+                                    onError={(e) => { e.target.style.display = 'none'; }}
+                                />
+                                <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/20 transition-colors flex items-center justify-center">
+                                    <ExternalLink size={14} className="text-white opacity-0 group-hover/img:opacity-80 transition-opacity" />
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+            {/* Lightbox */}
+            {lightbox && (
+                <div
+                    className="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center p-8 cursor-pointer"
+                    onClick={() => setLightbox(null)}
+                >
+                    <img
+                        src={lightbox}
+                        alt="preview"
+                        className="max-w-full max-h-full rounded-xl shadow-2xl border border-zinc-700"
+                        onClick={(e) => e.stopPropagation()}
+                    />
+                    <button
+                        className="absolute top-6 right-6 text-white/70 hover:text-white p-2 rounded-full bg-black/50 hover:bg-black/80 transition-colors"
+                        onClick={() => setLightbox(null)}
+                    >
+                        <X size={20} />
+                    </button>
+                </div>
+            )}
+        </>
     );
 }
 
@@ -519,6 +578,8 @@ export default function MaterialPanel({ onClose }) {
                                                     </div>
                                                 </div>
                                             )}
+                                            {/* Extracted images */}
+                                            <ImagesBlock images={item._images} />
                                             {/* Source files */}
                                             <SourceFilesBlock data={currentSourceFiles} />
                                         </div>
@@ -554,6 +615,8 @@ export default function MaterialPanel({ onClose }) {
                                                     <p className="text-[12px] text-zinc-300 leading-relaxed">{item.description}</p>
                                                 </div>
                                             )}
+                                            {/* Extracted images */}
+                                            <ImagesBlock images={item._images} />
                                             {/* Source files */}
                                             <SourceFilesBlock data={currentSourceFiles} />
                                         </div>
@@ -586,6 +649,8 @@ export default function MaterialPanel({ onClose }) {
                                                     ))}
                                                 </tbody>
                                             </table>
+                                            {/* Extracted images */}
+                                            <ImagesBlock images={item._images} />
                                             {/* Source files */}
                                             <SourceFilesBlock data={currentSourceFiles} />
                                         </div>
@@ -825,6 +890,23 @@ export default function MaterialPanel({ onClose }) {
                                                                         <span>{typeof v === 'string' ? v.slice(0, 30) : JSON.stringify(v).slice(0, 30)}</span>
                                                                     </span>
                                                                 ))}
+                                                        </div>
+                                                    )}
+                                                    {/* Image thumbnails from extracted data */}
+                                                    {item.data?._images?.length > 0 && (
+                                                        <div className="mt-2 pl-7 flex flex-wrap gap-1.5">
+                                                            {item.data._images.map((img, ii) => (
+                                                                <img
+                                                                    key={ii}
+                                                                    src={`${API_BASE}/api/bidding/materials/images/${img}`}
+                                                                    alt={img}
+                                                                    className="w-14 h-14 rounded border border-zinc-700 object-cover hover:border-orange-500/60 transition-colors"
+                                                                    onError={(e) => { e.target.style.display = 'none'; }}
+                                                                />
+                                                            ))}
+                                                            <span className="text-[10px] text-zinc-500 self-end ml-1">
+                                                                🖼️ {item.data._images.length}张图片
+                                                            </span>
                                                         </div>
                                                     )}
                                                 </div>

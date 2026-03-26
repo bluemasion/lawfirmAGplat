@@ -344,7 +344,7 @@ class MaterialStore:
 
         # Internal fields to skip in diff comparison
         _SKIP_FIELDS = {"_source", "_extracted_at", "_source_file", "_source_path",
-                        "_source_section"}
+                        "_source_section", "_images"}
 
         def _find_best_match(name: str, candidates: Dict[str, Dict]) -> Optional[str]:
             """Find best fuzzy match for a name in candidates (threshold 0.7)."""

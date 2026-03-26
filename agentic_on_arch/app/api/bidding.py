@@ -1005,6 +1005,33 @@ async def confirm_materials(req: ConfirmMaterialsRequest):
     }
 
 
+@router.get("/materials/images/{filename}")
+async def serve_material_image(filename: str):
+    """Serve an extracted material image file."""
+    from fastapi.responses import FileResponse
+    images_dir = os.path.join(
+        os.path.dirname(__file__), "..", "core", "skills", "builtin",
+        "..", "..", "..", "data", "materials", "images"
+    )
+    # Normalize the path
+    images_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "data", "materials", "images"))
+    if not os.path.isdir(images_dir):
+        images_dir = os.path.normpath(os.path.join("data", "materials", "images"))
+
+    filepath = os.path.join(images_dir, filename)
+    if not os.path.isfile(filepath):
+        return {"success": False, "message": f"Image not found: {filename}"}
+
+    # Determine content type
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "png"
+    ct_map = {"png": "image/png", "jpg": "image/jpeg", "gif": "image/gif",
+              "bmp": "image/bmp", "webp": "image/webp", "tiff": "image/tiff"}
+    content_type = ct_map.get(ext, "image/png")
+
+    return FileResponse(filepath, media_type=content_type,
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+
 @router.get("/materials")
 async def get_materials():
     """获取所有已提取的素材"""
