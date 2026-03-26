@@ -694,6 +694,7 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
         try:
             assembly_result = await _assembler.execute({
                 "bid_title": requirements.get("bid_title", "投标文件"),
+                "company_name": task.get("company_name", "投标人"),
                 "sections": generated_sections,
                 "format_rules": requirements.get("format_requirements", {}),
             })
