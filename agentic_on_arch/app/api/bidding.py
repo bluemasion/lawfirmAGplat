@@ -855,6 +855,7 @@ async def delete_template(template_id: str):
 async def upload_historical_bid(
     file: UploadFile = File(...),
     llm_provider: str = Form("qwen"),
+    company: str = Form(""),
 ):
     """上传历史投标/素材文件 → 提取 → 返回变更对比 (不自动入库)
 
@@ -925,9 +926,26 @@ async def upload_historical_bid(
         store = get_material_store()
         diff = store.diff_materials(materials)
 
+        # Detect company name from document content
+        detected_company = materials.pop("detected_company", "") or ""
+
         # Store pending materials in memory for confirmation
         upload_id = f"upload_{int(_time.time())}"
-        _pending_uploads[upload_id] = materials
+        # Resolve company name: form field > AI-detected > default > empty
+        resolved_company = company or detected_company or store.get_default_company()
+        logger.info(f"[upload] upload_id={upload_id}, company_form='{company}', "
+                    f"detected='{detected_company}', resolved='{resolved_company}'")
+        logger.info(f"[upload] Saving pending: resumes={len(materials.get('resumes',[]))}, "
+                    f"projects={len(materials.get('projects',[]))}, "
+                    f"qualifications={len(materials.get('qualifications',[]))}, "
+                    f"narrative_chunks={len(materials.get('narrative_chunks',[]))}")
+        for cat in ['resumes', 'projects', 'qualifications']:
+            items = materials.get(cat, [])
+            if items:
+                key = 'project_name' if cat == 'projects' else 'name'
+                names = [item.get(key, '?') for item in items]
+                logger.info(f"[upload] {cat} names: {names}")
+        store.save_pending(upload_id, {"materials": materials, "company": resolved_company})
 
         return {
             "success": True,
@@ -941,6 +959,8 @@ async def upload_historical_bid(
                     "qualifications": len(materials.get("qualifications", [])),
                     "narrative_chunks": len(materials.get("narrative_chunks", [])),
                 },
+                "company": resolved_company,
+                "detected_company": detected_company,
                 "diff": diff,
                 "materials": {
                     "resumes": materials.get("resumes", []),
@@ -955,12 +975,11 @@ async def upload_historical_bid(
         return {"success": False, "message": f"处理失败: {str(e)}"}
 
 
-# In-memory pending uploads (awaiting user confirmation)
-_pending_uploads = {}  # type: Dict[str, Any]
 
 
 class ConfirmMaterialsRequest(BaseModel):
     upload_id: str
+    company: str = ""
     # Optional: subset of items to save (if user deselects some)
     # If empty, save all extracted materials
     selected_resumes: Optional[list] = None
@@ -974,27 +993,70 @@ async def confirm_materials(req: ConfirmMaterialsRequest):
 
     Step 2 of 2-step flow. Called after user reviews diff from upload-historical.
     """
-    materials = _pending_uploads.pop(req.upload_id, None)
-    if not materials:
+    logger.info(f"[confirm] Starting: upload_id={req.upload_id}, company={req.company}")
+    logger.info(f"[confirm] selected_resumes={req.selected_resumes}")
+    logger.info(f"[confirm] selected_projects={req.selected_projects}")
+    logger.info(f"[confirm] selected_qualifications={req.selected_qualifications}")
+
+    from app.core.skills.builtin.material_store import get_material_store as _get_store
+    store = _get_store()
+    pending = store.pop_pending(req.upload_id)
+    if not pending:
+        logger.warning(f"[confirm] Pending upload not found: {req.upload_id}")
         return {"success": False, "message": f"上传 {req.upload_id} 不存在或已过期"}
 
-    # If user selected specific items, filter
-    if req.selected_resumes is not None:
-        names = set(req.selected_resumes)
-        materials["resumes"] = [r for r in materials.get("resumes", [])
-                                if r.get("name") in names]
-    if req.selected_projects is not None:
-        names = set(req.selected_projects)
-        materials["projects"] = [p for p in materials.get("projects", [])
-                                 if p.get("project_name") in names]
-    if req.selected_qualifications is not None:
-        names = set(req.selected_qualifications)
-        materials["qualifications"] = [q for q in materials.get("qualifications", [])
-                                       if q.get("name") in names]
+    # Support both old format (dict of materials) and new format (dict with materials + company)
+    if "materials" in pending and "company" in pending:
+        materials = pending["materials"]
+        company = req.company or pending.get("company", "")
+    else:
+        materials = pending
+        company = req.company
 
-    from app.core.skills.builtin.material_store import get_material_store
-    store = get_material_store()
-    save_counts = store.save_materials(materials)
+    logger.info(f"[confirm] Resolved company: '{company}'")
+    logger.info(f"[confirm] Pending materials: "
+                f"resumes={len(materials.get('resumes', []))}, "
+                f"projects={len(materials.get('projects', []))}, "
+                f"qualifications={len(materials.get('qualifications', []))}, "
+                f"narrative_chunks={len(materials.get('narrative_chunks', []))}")
+
+    # Log actual item names in pending for debugging
+    for cat in ['resumes', 'projects', 'qualifications']:
+        items = materials.get(cat, [])
+        if items:
+            key = 'project_name' if cat == 'projects' else 'name'
+            names = [item.get(key, '?') for item in items]
+            logger.info(f"[confirm] Pending {cat} names: {names}")
+
+    # If user selected specific items, filter by name
+    # None = no filter (save all), [] = save nothing, [names] = save only those
+    _FILTER_MAP = [
+        ("resumes", req.selected_resumes, "name"),
+        ("projects", req.selected_projects, "project_name"),
+        ("qualifications", req.selected_qualifications, "name"),
+    ]
+    for cat, selected, key_field in _FILTER_MAP:
+        if selected is None:
+            continue  # No filter, save all
+        if not selected:
+            logger.info(f"[confirm] {cat}: empty selection → removing all")
+            materials[cat] = []
+            continue
+        names = set(selected)
+        orig = materials.get(cat, [])
+        filtered = [item for item in orig if item.get(key_field) in names]
+        logger.info(f"[confirm] Filter {cat}: {len(orig)} → {len(filtered)} "
+                    f"(selected={names})")
+        if not filtered and orig:
+            logger.warning(f"[confirm] ⚠️ Name mismatch in {cat}! "
+                          f"Selected: {names}, "
+                          f"Actual: {[item.get(key_field) for item in orig]}. "
+                          f"Falling back to all.")
+            filtered = orig
+        materials[cat] = filtered
+
+    save_counts = store.save_materials(materials, company=company)
+    logger.info(f"[confirm] ✅ Save complete: {save_counts}")
 
     return {
         "success": True,
@@ -1009,23 +1071,19 @@ async def confirm_materials(req: ConfirmMaterialsRequest):
 async def serve_material_image(filename: str):
     """Serve an extracted material image file."""
     from fastapi.responses import FileResponse
-    images_dir = os.path.join(
-        os.path.dirname(__file__), "..", "core", "skills", "builtin",
-        "..", "..", "..", "data", "materials", "images"
-    )
-    # Normalize the path
-    images_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "data", "materials", "images"))
-    if not os.path.isdir(images_dir):
-        images_dir = os.path.normpath(os.path.join("data", "materials", "images"))
+    images_dir = os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..", "..", "data", "materials", "images"
+    ))
 
     filepath = os.path.join(images_dir, filename)
     if not os.path.isfile(filepath):
+        logger.warning(f"[images] Not found: {filepath}")
         return {"success": False, "message": f"Image not found: {filename}"}
 
-    # Determine content type
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "png"
-    ct_map = {"png": "image/png", "jpg": "image/jpeg", "gif": "image/gif",
-              "bmp": "image/bmp", "webp": "image/webp", "tiff": "image/tiff"}
+    ct_map = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+              "gif": "image/gif", "bmp": "image/bmp", "webp": "image/webp"}
     content_type = ct_map.get(ext, "image/png")
 
     return FileResponse(filepath, media_type=content_type,
@@ -1033,19 +1091,65 @@ async def serve_material_image(filename: str):
 
 
 @router.get("/materials")
-async def get_materials():
-    """获取所有已提取的素材"""
+async def get_materials(company: str = ""):
+    """获取所有已提取的素材（可按公司过滤）"""
     from app.core.skills.builtin.material_store import get_material_store
     store = get_material_store()
-    return {"success": True, "data": store.get_all_materials()}
+    return {"success": True, "data": store.get_all_materials(company=company)}
 
 
 @router.get("/materials/summary")
-async def get_materials_summary():
-    """获取素材库概要统计"""
+async def get_materials_summary(company: str = ""):
+    """获取素材库概要统计（可按公司过滤）"""
     from app.core.skills.builtin.material_store import get_material_store
     store = get_material_store()
-    return {"success": True, "data": store.get_summary()}
+    return {"success": True, "data": store.get_summary(company=company)}
+
+
+@router.get("/materials/companies")
+async def get_companies():
+    """获取所有公司列表（含素材计数）"""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    companies = store.get_companies()
+    default = store.get_default_company()
+    return {"success": True, "data": {"companies": companies, "default": default}}
+
+
+class SetDefaultCompanyRequest(BaseModel):
+    company: str
+
+
+@router.put("/materials/default-company")
+async def set_default_company(req: SetDefaultCompanyRequest):
+    """设置默认公司"""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    store.set_default_company(req.company)
+    return {"success": True, "data": {"default_company": req.company}}
+
+
+class MigrateCompanyRequest(BaseModel):
+    company: str
+
+
+@router.post("/materials/migrate-company")
+async def migrate_company(req: MigrateCompanyRequest):
+    """批量给现有素材补上 _company 字段"""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    updated = store.migrate_company(req.company)
+    return {"success": True, "data": {"updated": updated, "company": req.company}}
+
+
+@router.delete("/materials/company/{name}")
+async def delete_company(name: str):
+    """删除一个公司及其所有素材"""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    deleted = store.delete_company(name)
+    total = sum(deleted.values())
+    return {"success": True, "data": {"deleted": deleted, "total": total, "company": name}}
 
 
 @router.get("/materials/search")

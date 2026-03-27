@@ -6,7 +6,8 @@
     "valid_from": null,
     "valid_until": "长期",
     "holder": null,
-    "_source_section": "3.2营业执照、组织机构代码证、税务登记证"
+    "_source_section": "3.2营业执照、组织机构代码证、税务登记证",
+    "_company": "天元律师事务所"
   },
   {
     "name": "增值税一般纳税人资格",
@@ -15,7 +16,8 @@
     "valid_from": null,
     "valid_until": "长期",
     "holder": null,
-    "_source_section": "3.3增值税一般纳税人证明材料"
+    "_source_section": "3.3增值税一般纳税人证明材料",
+    "_company": "天元律师事务所"
   },
   {
     "name": "司法部首批部级文明律师事务所",
@@ -24,7 +26,8 @@
     "valid_from": null,
     "valid_until": null,
     "holder": "天元",
-    "_source_section": "二、卓著行业声誉，权威专业认可"
+    "_source_section": "二、卓著行业声誉，权威专业认可",
+    "_company": "天元律师事务所"
   },
   {
     "name": "全国优秀律师事务所",
@@ -33,7 +36,8 @@
     "valid_from": null,
     "valid_until": null,
     "holder": "天元",
-    "_source_section": "二、卓著行业声誉，权威专业认可"
+    "_source_section": "二、卓著行业声誉，权威专业认可",
+    "_company": "天元律师事务所"
   },
   {
     "name": "北京市优秀律师事务所",
@@ -42,7 +46,8 @@
     "valid_from": null,
     "valid_until": null,
     "holder": "天元",
-    "_source_section": "二、卓著行业声誉，权威专业认可"
+    "_source_section": "二、卓著行业声誉，权威专业认可",
+    "_company": "天元律师事务所"
   },
   {
     "name": "钱伯斯大中华区指南2026",
@@ -51,7 +56,8 @@
     "valid_from": null,
     "valid_until": null,
     "holder": "天元",
-    "_source_section": "二、卓著行业声誉，权威专业认可"
+    "_source_section": "二、卓著行业声誉，权威专业认可",
+    "_company": "天元律师事务所"
   },
   {
     "name": "LEGALBAND中国顶级律所排行榜2025",
@@ -60,7 +66,8 @@
     "valid_from": null,
     "valid_until": null,
     "holder": "天元",
-    "_source_section": "二、卓著行业声誉，权威专业认可"
+    "_source_section": "二、卓著行业声誉，权威专业认可",
+    "_company": "天元律师事务所"
   },
   {
     "name": "IFLR1000亚太版指南2025",
@@ -69,7 +76,8 @@
     "valid_from": null,
     "valid_until": null,
     "holder": "天元",
-    "_source_section": "二、卓著行业声誉，权威专业认可"
+    "_source_section": "二、卓著行业声誉，权威专业认可",
+    "_company": "天元律师事务所"
   },
   {
     "name": "The Legal 500亚太指南2026",
@@ -78,7 +86,8 @@
     "valid_from": null,
     "valid_until": null,
     "holder": "天元",
-    "_source_section": "二、卓著行业声誉，权威专业认可"
+    "_source_section": "二、卓著行业声誉，权威专业认可",
+    "_company": "天元律师事务所"
   },
   {
     "name": "商法卓越律所大奖2025",
@@ -87,6 +96,7 @@
     "valid_from": null,
     "valid_until": null,
     "holder": "天元",
-    "_source_section": "二、卓著行业声誉，权威专业认可"
+    "_source_section": "二、卓著行业声誉，权威专业认可",
+    "_company": "天元律师事务所"
   }
 ]

@@ -1,13 +1,14 @@
-"""Material store — storage and retrieval for extracted bid materials.
+"""Material store — SQLite-backed storage for extracted bid materials.
 
 Manages the lifecycle of materials extracted from historical bid documents:
-- Save structured data (resumes, projects, qualifications) to JSON
+- Save structured data (resumes, projects, qualifications) to SQLite
 - Vectorize narrative chunks with BGE embedding
 - Search materials by type and relevance
 """
 
 import json
 import os
+import sqlite3
 import time
 from typing import Any, Dict, List, Optional
 
@@ -20,107 +21,550 @@ from app.utils.logger import logger
 MATERIAL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "..", "..", "..", "..", "data", "materials")
 
+# Key field mapping per category
+_KEY_FIELDS = {
+    "resumes": "name",
+    "projects": "project_name",
+    "qualifications": "name",
+}
+
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS companies (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL UNIQUE,
+    is_default  INTEGER DEFAULT 0,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS materials (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id   INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    category     TEXT NOT NULL,
+    name         TEXT NOT NULL,
+    data         TEXT NOT NULL DEFAULT '{}',
+    source_file  TEXT DEFAULT '',
+    source_path  TEXT DEFAULT '',
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(company_id, category, name)
+);
+
+CREATE TABLE IF NOT EXISTS narrative_chunks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    title       TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    source_file TEXT DEFAULT '',
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS pending_uploads (
+    upload_id   TEXT PRIMARY KEY,
+    data        TEXT NOT NULL,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_materials_company ON materials(company_id);
+CREATE INDEX IF NOT EXISTS idx_materials_category ON materials(category);
+CREATE INDEX IF NOT EXISTS idx_narratives_company ON narrative_chunks(company_id);
+"""
+
 
 class MaterialStore:
-    """Manage extracted materials from historical bid documents."""
+    """Manage extracted materials from historical bid documents (SQLite)."""
 
     def __init__(self, base_dir: str = ""):
         self.base_dir = base_dir or MATERIAL_DIR
         os.makedirs(self.base_dir, exist_ok=True)
 
-        # JSON file paths
-        self.resumes_file = os.path.join(self.base_dir, "resumes.json")
-        self.projects_file = os.path.join(self.base_dir, "projects.json")
-        self.qualifications_file = os.path.join(self.base_dir, "qualifications.json")
-        self.narratives_file = os.path.join(self.base_dir, "narrative_chunks.json")
+        self.db_path = os.path.join(self.base_dir, "materials.db")
 
         # In-memory vector index for narrative chunks
         self._narrative_vectors = None  # type: Optional[np.ndarray]
         self._narrative_chunks = []     # type: List[Dict]
         self._embedding_service = None
 
+        # Initialize database
+        self._init_db()
+
+        # Auto-migrate from JSON if needed
+        self._migrate_from_json()
+
+    # ── Database Helpers ──
+
+    def _get_conn(self) -> sqlite3.Connection:
+        """Get a SQLite connection with foreign keys enabled."""
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init_db(self):
+        """Create tables if they don't exist."""
+        conn = self._get_conn()
+        try:
+            conn.executescript(_SCHEMA_SQL)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _get_or_create_company(self, conn: sqlite3.Connection,
+                                company_name: str) -> int:
+        """Get company id by name, creating if it doesn't exist."""
+        row = conn.execute(
+            "SELECT id FROM companies WHERE name = ?", (company_name,)
+        ).fetchone()
+        if row:
+            return row[0]
+        cur = conn.execute(
+            "INSERT INTO companies (name) VALUES (?)", (company_name,)
+        )
+        return cur.lastrowid
+
+    # ── JSON Migration ──
+
+    def _migrate_from_json(self):
+        """Auto-import data from old JSON files if they exist."""
+        json_files = {
+            "resumes": os.path.join(self.base_dir, "resumes.json"),
+            "projects": os.path.join(self.base_dir, "projects.json"),
+            "qualifications": os.path.join(self.base_dir, "qualifications.json"),
+        }
+        narratives_file = os.path.join(self.base_dir, "narrative_chunks.json")
+        config_file = os.path.join(self.base_dir, "config.json")
+
+        # Check if any JSON file exists
+        has_json = any(os.path.isfile(f) for f in json_files.values())
+        has_json = has_json or os.path.isfile(narratives_file)
+        if not has_json:
+            return
+
+        # Check if DB already has data (avoid re-migration)
+        conn = self._get_conn()
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM materials").fetchone()[0]
+            if count > 0:
+                logger.info("SQLite already has data, skipping JSON migration")
+                return
+        finally:
+            conn.close()
+
+        logger.info("Migrating JSON data to SQLite...")
+
+        # Load config for default company
+        default_company = ""
+        if os.path.isfile(config_file):
+            try:
+                with open(config_file, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                default_company = cfg.get("default_company", "")
+            except Exception:
+                pass
+
+        conn = self._get_conn()
+        try:
+            total = 0
+
+            # Migrate materials (resumes, projects, qualifications)
+            for category, filepath in json_files.items():
+                if not os.path.isfile(filepath):
+                    continue
+                try:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        items = json.load(f)
+                except Exception:
+                    continue
+                if not isinstance(items, list):
+                    continue
+
+                key_field = _KEY_FIELDS[category]
+                for item in items:
+                    company = item.pop("_company", "") or default_company or "未分类"
+                    name = item.get(key_field, "")
+                    if not name:
+                        continue
+                    company_id = self._get_or_create_company(conn, company)
+                    source_file = item.pop("_source_file", "")
+                    source_path = item.pop("_source_path", "")
+                    conn.execute("""
+                        INSERT OR REPLACE INTO materials
+                        (company_id, category, name, data, source_file, source_path)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (company_id, category, name,
+                          json.dumps(item, ensure_ascii=False),
+                          source_file, source_path))
+                    total += 1
+
+                # Rename to .bak
+                bak = filepath + ".bak"
+                os.rename(filepath, bak)
+                logger.info(f"  Migrated {filepath} → {bak}")
+
+            # Migrate narrative chunks
+            if os.path.isfile(narratives_file):
+                try:
+                    with open(narratives_file, "r", encoding="utf-8") as f:
+                        chunks = json.load(f)
+                except Exception:
+                    chunks = []
+                if isinstance(chunks, list):
+                    for chunk in chunks:
+                        company = chunk.pop("_company", "") or default_company or "未分类"
+                        company_id = self._get_or_create_company(conn, company)
+                        conn.execute("""
+                            INSERT INTO narrative_chunks
+                            (company_id, title, content, source_file)
+                            VALUES (?, ?, ?, ?)
+                        """, (company_id,
+                              chunk.get("title", ""),
+                              chunk.get("content", ""),
+                              chunk.get("_source_file", "")))
+                        total += 1
+                bak = narratives_file + ".bak"
+                os.rename(narratives_file, bak)
+
+            # Migrate default company
+            if default_company:
+                self.set_default_company(default_company, conn=conn)
+
+            conn.commit()
+            logger.info(f"JSON→SQLite migration complete: {total} items imported")
+
+            # Backup config
+            if os.path.isfile(config_file):
+                os.rename(config_file, config_file + ".bak")
+
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"JSON migration failed: {e}")
+        finally:
+            conn.close()
+
     # ── Save Methods ──
 
-    def save_materials(self, materials: Dict[str, Any]) -> Dict[str, int]:
-        """Save extracted materials to JSON files, merging with existing data.
+    def save_materials(self, materials: Dict[str, Any],
+                       company: str = "") -> Dict[str, int]:
+        """Save extracted materials to SQLite, merging with existing data.
+
+        Args:
+            materials: Dict with resumes, projects, qualifications, narrative_chunks
+            company: Company name to tag on every item (uses default if empty)
 
         Returns dict with counts of items saved per type.
         """
+        company = company or self.get_default_company() or "未分类"
         counts = {}
 
-        # Save resumes
-        resumes = materials.get("resumes", [])
-        if resumes:
-            existing = self._load_json(self.resumes_file)
-            existing.extend(resumes)
-            existing = self._dedup_by_field(existing, "name")
-            self._save_json(self.resumes_file, existing)
-            counts["resumes"] = len(resumes)
+        conn = self._get_conn()
+        try:
+            company_id = self._get_or_create_company(conn, company)
 
-        # Save projects
-        projects = materials.get("projects", [])
-        if projects:
-            existing = self._load_json(self.projects_file)
-            existing.extend(projects)
-            existing = self._dedup_by_field(existing, "project_name")
-            self._save_json(self.projects_file, existing)
-            counts["projects"] = len(projects)
+            for category in ["resumes", "projects", "qualifications"]:
+                items = materials.get(category, [])
+                if not items:
+                    continue
+                key_field = _KEY_FIELDS[category]
+                saved = 0
+                for idx, item in enumerate(items):
+                    name = item.get(key_field) or ""
+                    if not name:
+                        # Generate fallback name from available fields
+                        name = (item.get("_source_section")
+                                or item.get("title")
+                                or item.get("description", "")[:30]
+                                or f"{category}_{idx+1}")
+                        item[key_field] = name
+                        logger.info(f"[save] Generated fallback name for "
+                                    f"{category}: '{name}'")
+                    # Remove internal fields before storing
+                    clean = {k: v for k, v in item.items()
+                             if not k.startswith("_") or k == "_images"}
+                    source_file = item.get("_source_file", "")
+                    source_path = item.get("_source_path", "")
+                    conn.execute("""
+                        INSERT OR REPLACE INTO materials
+                        (company_id, category, name, data, source_file, source_path,
+                         updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """, (company_id, category, name,
+                          json.dumps(clean, ensure_ascii=False),
+                          source_file, source_path))
+                    saved += 1
+                counts[category] = saved
 
-        # Save qualifications
-        qualifications = materials.get("qualifications", [])
-        if qualifications:
-            existing = self._load_json(self.qualifications_file)
-            existing.extend(qualifications)
-            existing = self._dedup_by_field(existing, "name")
-            self._save_json(self.qualifications_file, existing)
-            counts["qualifications"] = len(qualifications)
+            # Save narrative chunks
+            chunks = materials.get("narrative_chunks", [])
+            if chunks:
+                saved = 0
+                for chunk in chunks:
+                    conn.execute("""
+                        INSERT INTO narrative_chunks
+                        (company_id, title, content, source_file)
+                        VALUES (?, ?, ?, ?)
+                    """, (company_id,
+                          chunk.get("title", ""),
+                          chunk.get("content", ""),
+                          chunk.get("_source_file", "")))
+                    saved += 1
+                counts["narrative_chunks"] = saved
 
-        # Save narrative chunks
-        narrative_chunks = materials.get("narrative_chunks", [])
-        if narrative_chunks:
-            existing = self._load_json(self.narratives_file)
-            existing.extend(narrative_chunks)
-            self._save_json(self.narratives_file, existing)
-            counts["narrative_chunks"] = len(narrative_chunks)
+            conn.commit()
+        finally:
+            conn.close()
 
-        logger.info(f"Materials saved: {counts}")
+        logger.info(f"Materials saved: {counts} (company={company})")
         return counts
 
     # ── Load Methods ──
 
-    def get_resumes(self) -> List[Dict]:
-        """Get all stored resumes."""
-        return self._load_json(self.resumes_file)
+    def _rows_to_dicts(self, rows, category: str) -> List[Dict]:
+        """Convert DB rows to dicts matching old JSON format."""
+        key_field = _KEY_FIELDS.get(category, "name")
+        results = []
+        for row in rows:
+            data = json.loads(row["data"]) if row["data"] else {}
+            data[key_field] = row["name"]
+            data["_company"] = row["company_name"]
+            if row["source_file"]:
+                data["_source_file"] = row["source_file"]
+            if row["source_path"]:
+                data["_source_path"] = row["source_path"]
+            results.append(data)
+        return results
 
-    def get_projects(self) -> List[Dict]:
-        """Get all stored projects."""
-        return self._load_json(self.projects_file)
+    def _get_materials(self, category: str,
+                       company: str = "") -> List[Dict]:
+        """Get materials by category, optionally filtered by company."""
+        conn = self._get_conn()
+        try:
+            if company:
+                rows = conn.execute("""
+                    SELECT m.*, c.name as company_name
+                    FROM materials m JOIN companies c ON m.company_id = c.id
+                    WHERE m.category = ? AND c.name = ?
+                    ORDER BY m.name
+                """, (category, company)).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT m.*, c.name as company_name
+                    FROM materials m JOIN companies c ON m.company_id = c.id
+                    WHERE m.category = ?
+                    ORDER BY m.name
+                """, (category,)).fetchall()
+            return self._rows_to_dicts(rows, category)
+        finally:
+            conn.close()
 
-    def get_qualifications(self) -> List[Dict]:
-        """Get all stored qualifications."""
-        return self._load_json(self.qualifications_file)
+    def get_resumes(self, company: str = "") -> List[Dict]:
+        """Get stored resumes, optionally filtered by company."""
+        return self._get_materials("resumes", company)
 
-    def get_narrative_chunks(self) -> List[Dict]:
-        """Get all stored narrative chunks."""
-        return self._load_json(self.narratives_file)
+    def get_projects(self, company: str = "") -> List[Dict]:
+        """Get stored projects, optionally filtered by company."""
+        return self._get_materials("projects", company)
 
-    def get_all_materials(self) -> Dict[str, Any]:
-        """Get all materials as a dict."""
+    def get_qualifications(self, company: str = "") -> List[Dict]:
+        """Get stored qualifications, optionally filtered by company."""
+        return self._get_materials("qualifications", company)
+
+    def get_narrative_chunks(self, company: str = "") -> List[Dict]:
+        """Get stored narrative chunks, optionally filtered by company."""
+        conn = self._get_conn()
+        try:
+            if company:
+                rows = conn.execute("""
+                    SELECT n.*, c.name as company_name
+                    FROM narrative_chunks n
+                    JOIN companies c ON n.company_id = c.id
+                    WHERE c.name = ?
+                    ORDER BY n.id
+                """, (company,)).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT n.*, c.name as company_name
+                    FROM narrative_chunks n
+                    JOIN companies c ON n.company_id = c.id
+                    ORDER BY n.id
+                """).fetchall()
+            return [{"title": r["title"], "content": r["content"],
+                     "_company": r["company_name"],
+                     "_source_file": r["source_file"] or ""}
+                    for r in rows]
+        finally:
+            conn.close()
+
+    def get_all_materials(self, company: str = "") -> Dict[str, Any]:
+        """Get all materials as a dict, optionally filtered by company."""
         return {
-            "resumes": self.get_resumes(),
-            "projects": self.get_projects(),
-            "qualifications": self.get_qualifications(),
-            "narrative_chunks": self.get_narrative_chunks(),
+            "resumes": self.get_resumes(company),
+            "projects": self.get_projects(company),
+            "qualifications": self.get_qualifications(company),
+            "narrative_chunks": self.get_narrative_chunks(company),
         }
 
-    def get_summary(self) -> Dict[str, int]:
-        """Get count summary of all materials."""
-        return {
-            "resumes": len(self.get_resumes()),
-            "projects": len(self.get_projects()),
-            "qualifications": len(self.get_qualifications()),
-            "narrative_chunks": len(self.get_narrative_chunks()),
-        }
+    def get_summary(self, company: str = "") -> Dict[str, int]:
+        """Get count summary, optionally filtered by company."""
+        conn = self._get_conn()
+        try:
+            result = {"resumes": 0, "projects": 0, "qualifications": 0,
+                      "narrative_chunks": 0}
+            if company:
+                rows = conn.execute("""
+                    SELECT m.category, COUNT(*) as cnt
+                    FROM materials m JOIN companies c ON m.company_id = c.id
+                    WHERE c.name = ?
+                    GROUP BY m.category
+                """, (company,)).fetchall()
+                nc = conn.execute("""
+                    SELECT COUNT(*) FROM narrative_chunks n
+                    JOIN companies c ON n.company_id = c.id
+                    WHERE c.name = ?
+                """, (company,)).fetchone()[0]
+            else:
+                rows = conn.execute("""
+                    SELECT category, COUNT(*) as cnt
+                    FROM materials GROUP BY category
+                """).fetchall()
+                nc = conn.execute(
+                    "SELECT COUNT(*) FROM narrative_chunks"
+                ).fetchone()[0]
+
+            for r in rows:
+                result[r["category"]] = r["cnt"]
+            result["narrative_chunks"] = nc
+            return result
+        finally:
+            conn.close()
+
+    # ── Company Management ──
+
+    def get_companies(self) -> List[Dict]:
+        """Get list of all companies with item counts."""
+        conn = self._get_conn()
+        try:
+            rows = conn.execute("""
+                SELECT c.name,
+                    COALESCE(SUM(CASE WHEN m.category='resumes' THEN 1 END), 0) as resumes,
+                    COALESCE(SUM(CASE WHEN m.category='projects' THEN 1 END), 0) as projects,
+                    COALESCE(SUM(CASE WHEN m.category='qualifications' THEN 1 END), 0) as qualifications,
+                    COUNT(m.id) as total
+                FROM companies c
+                LEFT JOIN materials m ON m.company_id = c.id
+                GROUP BY c.id, c.name
+                ORDER BY c.name
+            """).fetchall()
+            return [{"name": r["name"], "total": r["total"],
+                     "resumes": r["resumes"], "projects": r["projects"],
+                     "qualifications": r["qualifications"]}
+                    for r in rows]
+        finally:
+            conn.close()
+
+    def get_default_company(self) -> str:
+        """Get default company name."""
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT name FROM companies WHERE is_default = 1 LIMIT 1"
+            ).fetchone()
+            return row["name"] if row else ""
+        finally:
+            conn.close()
+
+    def set_default_company(self, company: str,
+                            conn: sqlite3.Connection = None):
+        """Set default company name."""
+        own_conn = conn is None
+        if own_conn:
+            conn = self._get_conn()
+        try:
+            conn.execute("UPDATE companies SET is_default = 0")
+            company_id = self._get_or_create_company(conn, company)
+            conn.execute(
+                "UPDATE companies SET is_default = 1 WHERE id = ?",
+                (company_id,)
+            )
+            if own_conn:
+                conn.commit()
+            logger.info(f"Default company set to: {company}")
+        finally:
+            if own_conn:
+                conn.close()
+
+    def delete_company(self, company: str) -> Dict[str, int]:
+        """Delete all materials belonging to a company."""
+        conn = self._get_conn()
+        try:
+            # Get counts before delete
+            row = conn.execute(
+                "SELECT id FROM companies WHERE name = ?", (company,)
+            ).fetchone()
+            if not row:
+                return {"resumes": 0, "projects": 0, "qualifications": 0,
+                        "narrative_chunks": 0}
+
+            company_id = row["id"]
+            deleted = {}
+            for cat in ["resumes", "projects", "qualifications"]:
+                cnt = conn.execute("""
+                    SELECT COUNT(*) FROM materials
+                    WHERE company_id = ? AND category = ?
+                """, (company_id, cat)).fetchone()[0]
+                deleted[cat] = cnt
+
+            nc = conn.execute("""
+                SELECT COUNT(*) FROM narrative_chunks
+                WHERE company_id = ?
+            """, (company_id,)).fetchone()[0]
+            deleted["narrative_chunks"] = nc
+
+            # CASCADE will delete materials and narrative_chunks
+            conn.execute("DELETE FROM companies WHERE id = ?", (company_id,))
+            conn.commit()
+            logger.info(f"Company '{company}' deleted: {deleted}")
+            return deleted
+        finally:
+            conn.close()
+
+    def migrate_company(self, company: str) -> Dict[str, int]:
+        """No-op for SQLite (kept for API compatibility)."""
+        logger.info(f"migrate_company called for '{company}' — no-op in SQLite mode")
+        return {"resumes": 0, "projects": 0, "qualifications": 0,
+                "narrative_chunks": 0}
+
+    # ── Pending Uploads ──
+
+    def save_pending(self, upload_id: str, data: dict):
+        """Save pending upload data to SQLite."""
+        conn = self._get_conn()
+        try:
+            conn.execute("""
+                INSERT OR REPLACE INTO pending_uploads (upload_id, data)
+                VALUES (?, ?)
+            """, (upload_id, json.dumps(data, ensure_ascii=False)))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def pop_pending(self, upload_id: str) -> Optional[dict]:
+        """Get and remove pending upload data."""
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT data FROM pending_uploads WHERE upload_id = ?",
+                (upload_id,)
+            ).fetchone()
+            if not row:
+                return None
+            conn.execute(
+                "DELETE FROM pending_uploads WHERE upload_id = ?",
+                (upload_id,)
+            )
+            conn.commit()
+            return json.loads(row["data"])
+        finally:
+            conn.close()
 
     # ── Search Methods ──
 
@@ -177,118 +621,107 @@ class MaterialStore:
         if not chunks:
             return []
 
-        # Try to use embedding service for semantic search
         try:
             if self._embedding_service is None:
                 from app.core.rag.embedding_service import EmbeddingService
                 self._embedding_service = EmbeddingService()
 
-            # Build vectors if not cached
-            if self._narrative_vectors is None or len(self._narrative_chunks) != len(chunks):
+            if (self._narrative_vectors is None
+                    or len(self._narrative_chunks) != len(chunks)):
                 self._narrative_chunks = chunks
                 texts = [c.get("content", "") for c in chunks]
                 self._narrative_vectors = self._embedding_service.encode(texts)
                 logger.info(f"Vectorized {len(texts)} narrative chunks")
 
-            # Encode query
             query_vec = self._embedding_service.encode([query])
-
-            # Cosine similarity
             scores = np.dot(self._narrative_vectors, query_vec.T).flatten()
             top_indices = np.argsort(scores)[::-1][:top_k]
 
             results = []
             for idx in top_indices:
-                if scores[idx] > 0.3:  # minimum similarity threshold
+                if scores[idx] > 0.3:
                     chunk = chunks[idx].copy()
                     chunk["similarity"] = float(scores[idx])
                     results.append(chunk)
-
             return results
 
         except Exception as e:
             logger.warning(f"Semantic search failed, falling back to keyword: {e}")
-            # Fallback: keyword search
             q = query.lower()
-            scored = []
-            for c in chunks:
-                content = c.get("content", "").lower()
-                if q in content:
-                    scored.append(c)
+            scored = [c for c in chunks if q in c.get("content", "").lower()]
             return scored[:top_k]
 
     # ── Update / Delete Methods ──
 
     def update_resume(self, name: str, updates: Dict) -> bool:
         """Update a resume by name."""
-        resumes = self.get_resumes()
-        for r in resumes:
-            if r.get("name") == name:
-                r.update(updates)
-                self._save_json(self.resumes_file, resumes)
-                return True
-        return False
+        conn = self._get_conn()
+        try:
+            row = conn.execute("""
+                SELECT id, data FROM materials
+                WHERE category = 'resumes' AND name = ?
+            """, (name,)).fetchone()
+            if not row:
+                return False
+            data = json.loads(row["data"])
+            data.update(updates)
+            conn.execute("""
+                UPDATE materials SET data = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (json.dumps(data, ensure_ascii=False), row["id"]))
+            conn.commit()
+            return True
+        finally:
+            conn.close()
 
     def update_project(self, project_name: str, updates: Dict) -> bool:
         """Update a project by name."""
-        projects = self.get_projects()
-        for p in projects:
-            if p.get("project_name") == project_name:
-                p.update(updates)
-                self._save_json(self.projects_file, projects)
-                return True
-        return False
+        conn = self._get_conn()
+        try:
+            row = conn.execute("""
+                SELECT id, data FROM materials
+                WHERE category = 'projects' AND name = ?
+            """, (project_name,)).fetchone()
+            if not row:
+                return False
+            data = json.loads(row["data"])
+            data.update(updates)
+            conn.execute("""
+                UPDATE materials SET data = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (json.dumps(data, ensure_ascii=False), row["id"]))
+            conn.commit()
+            return True
+        finally:
+            conn.close()
 
     def delete_resume(self, name: str) -> bool:
         """Delete a resume by name."""
-        resumes = self.get_resumes()
-        new_resumes = [r for r in resumes if r.get("name") != name]
-        if len(new_resumes) < len(resumes):
-            self._save_json(self.resumes_file, new_resumes)
-            return True
-        return False
+        conn = self._get_conn()
+        try:
+            cur = conn.execute("""
+                DELETE FROM materials
+                WHERE category = 'resumes' AND name = ?
+            """, (name,))
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
 
     def clear_all(self):
         """Clear all materials."""
-        for f in [self.resumes_file, self.projects_file,
-                  self.qualifications_file, self.narratives_file]:
-            if os.path.exists(f):
-                os.remove(f)
+        conn = self._get_conn()
+        try:
+            conn.execute("DELETE FROM materials")
+            conn.execute("DELETE FROM narrative_chunks")
+            conn.execute("DELETE FROM companies")
+            conn.execute("DELETE FROM pending_uploads")
+            conn.commit()
+        finally:
+            conn.close()
         self._narrative_vectors = None
         self._narrative_chunks = []
         logger.info("All materials cleared")
-
-    # ── Internal Helpers ──
-
-    def _load_json(self, path: str) -> List[Dict]:
-        """Load JSON array from file, returning empty list if missing."""
-        if not os.path.exists(path):
-            return []
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return data if isinstance(data, list) else []
-        except (json.JSONDecodeError, IOError):
-            return []
-
-    def _save_json(self, path: str, data: List[Dict]):
-        """Save JSON array to file."""
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-
-    def _dedup_by_field(self, items: List[Dict],
-                         field: str) -> List[Dict]:
-        """Remove duplicates by a specific field, keeping the last occurrence."""
-        seen = {}  # type: Dict[str, Dict]
-        for item in items:
-            key = item.get(field, "")
-            if key:
-                seen[key] = item
-            else:
-                # Items without the field are always kept
-                seen[id(item)] = item
-        return list(seen.values())
 
     # ── Change Detection ──
 
@@ -311,22 +744,27 @@ class MaterialStore:
         # Diff resumes
         new_resumes = new_materials.get("resumes", [])
         if new_resumes:
-            existing = {r.get("name", ""): r for r in self.get_resumes() if r.get("name")}
+            existing = {r.get("name", ""): r for r in self.get_resumes()
+                        if r.get("name")}
             diff["resumes"] = self._diff_items(new_resumes, existing, "name")
 
         # Diff projects
         new_projects = new_materials.get("projects", [])
         if new_projects:
-            existing = {p.get("project_name", ""): p for p in self.get_projects() if p.get("project_name")}
-            diff["projects"] = self._diff_items(new_projects, existing, "project_name")
+            existing = {p.get("project_name", ""): p for p in self.get_projects()
+                        if p.get("project_name")}
+            diff["projects"] = self._diff_items(
+                new_projects, existing, "project_name")
 
         # Diff qualifications
         new_quals = new_materials.get("qualifications", [])
         if new_quals:
-            existing = {q.get("name", ""): q for q in self.get_qualifications() if q.get("name")}
-            diff["qualifications"] = self._diff_items(new_quals, existing, "name")
+            existing = {q.get("name", ""): q for q in self.get_qualifications()
+                        if q.get("name")}
+            diff["qualifications"] = self._diff_items(
+                new_quals, existing, "name")
 
-        # Narrative chunks: always "new" (no dedup for text chunks)
+        # Narrative chunks: always "new"
         new_narratives = new_materials.get("narrative_chunks", [])
         if new_narratives:
             diff["narrative_chunks"] = [
@@ -337,23 +775,20 @@ class MaterialStore:
 
         return diff
 
-    def _diff_items(self, new_items: List[Dict], existing_map: Dict[str, Dict],
+    def _diff_items(self, new_items: List[Dict],
+                    existing_map: Dict[str, Dict],
                     key_field: str) -> List[Dict]:
         """Compare new items against existing by key field (with fuzzy matching)."""
         from difflib import SequenceMatcher
 
-        # Internal fields to skip in diff comparison
-        _SKIP_FIELDS = {"_source", "_extracted_at", "_source_file", "_source_path",
-                        "_source_section", "_images"}
+        _SKIP_FIELDS = {"_source", "_extracted_at", "_source_file",
+                        "_source_path", "_source_section", "_company"}
 
-        def _find_best_match(name: str, candidates: Dict[str, Dict]) -> Optional[str]:
-            """Find best fuzzy match for a name in candidates (threshold 0.7)."""
+        def _find_best_match(name, candidates):
             if not name:
                 return None
-            # Exact match first
             if name in candidates:
                 return name
-            # Fuzzy match
             best_ratio, best_key = 0, None
             for candidate_key in candidates:
                 ratio = SequenceMatcher(None, name, candidate_key).ratio()
@@ -361,7 +796,9 @@ class MaterialStore:
                     best_ratio = ratio
                     best_key = candidate_key
             if best_ratio >= 0.7:
-                logger.info(f"Fuzzy match: '{name}' → '{best_key}' (similarity={best_ratio:.2f})")
+                logger.info(
+                    f"Fuzzy match: '{name}' → '{best_key}' "
+                    f"(similarity={best_ratio:.2f})")
                 return best_key
             return None
 
@@ -375,17 +812,35 @@ class MaterialStore:
             matched_key = _find_best_match(key, existing_map)
 
             if matched_key is None:
-                results.append({"action": "new", key_field: key, "data": item})
+                results.append(
+                    {"action": "new", key_field: key, "data": item})
             else:
                 old = existing_map[matched_key]
                 changes = {}
                 for field, new_val in item.items():
                     if field in _SKIP_FIELDS:
                         continue
+                    if field == "_images":
+                        old_imgs = set(old.get("_images") or [])
+                        new_imgs = set(new_val or [])
+                        if old_imgs != new_imgs:
+                            added = new_imgs - old_imgs
+                            removed = old_imgs - new_imgs
+                            desc_parts = []
+                            if added:
+                                desc_parts.append(f"{len(added)}张新增")
+                            if removed:
+                                desc_parts.append(f"{len(removed)}张移除")
+                            old_desc = f"{len(old_imgs)}张图片"
+                            new_desc = (f"{len(new_imgs)}张图片"
+                                        f"({', '.join(desc_parts)})")
+                            changes["_images"] = [old_desc, new_desc]
+                        continue
                     old_val = old.get(field)
                     if old_val != new_val and new_val:
                         if old_val:
-                            changes[field] = [str(old_val)[:80], str(new_val)[:80]]
+                            changes[field] = [
+                                str(old_val)[:80], str(new_val)[:80]]
                         else:
                             changes[field] = [None, str(new_val)[:80]]
 

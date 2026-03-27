@@ -519,7 +519,7 @@ export default function BiddingAgent() {
                             <p className="text-[9px] text-zinc-500 uppercase tracking-widest">
                                 {phase === 'idle' && '等待上传'}
                                 {phase === 'parsing' && '解析中...'}
-                                {phase === 'confirming' && `确认结构 · ${requirements?.volumes?.reduce((s, v) => s + (v.sections?.length || 0), 0) || 0} 章节`}
+                                {phase === 'confirming' && `大纲确认 · ${requirements?.volumes?.reduce((s, v) => s + (v.sections?.length || 0), 0) || 0} 章节`}
                                 {phase === 'generating' && `生成中 ${genProgress.done}/${genProgress.total}`}
                                 {phase === 'done' && '✅ 完成'}
                             </p>
@@ -602,35 +602,70 @@ export default function BiddingAgent() {
                                     </div>
                                 </div>
 
-                                {/* TOC section */}
-                                <div className="px-10 py-6">
+                                {/* Document outline */}
+                                <div className="px-10 py-6 space-y-1">
                                     <h2 className="text-center text-[13px] font-bold text-gray-800 tracking-[0.4em] mb-5">目    录</h2>
-                                    <div className="space-y-1">
-                                        {requirements?.volumes?.map((vol, vi) =>
-                                            (vol.sections || []).map((sec, si) => {
-                                                const key = `${vi}-${si}`;
-                                                const checked = sec.rejection_risk ? true : sectionChecked[key] !== false;
-                                                const isRejection = sec.rejection_risk === true;
-                                                return (
-                                                    <div key={`toc-${key}`}
-                                                        className={`flex items-baseline text-[11px] py-0.5 transition-opacity ${checked ? '' : 'opacity-30 line-through'}`}>
-                                                        <span className="text-gray-400 w-6 shrink-0 text-right mr-2">{sec.order || si + 1}.</span>
-                                                        <span className={`flex-1 ${isRejection ? 'text-red-600 font-medium' : 'text-gray-700'}`}>
+                                    {requirements?.volumes?.map((vol, vi) =>
+                                        (vol.sections || []).map((sec, si) => {
+                                            const key = `${vi}-${si}`;
+                                            const checked = sec.rejection_risk ? true : sectionChecked[key] !== false;
+                                            const isRejection = sec.rejection_risk === true;
+                                            const outline = sec.content_outline || [];
+                                            const matRefs = sec.material_refs || [];
+                                            const typeLabel = { narrative: '方案', table: '表格', form: '表单', qualification: '证照' };
+                                            const typeColor = {
+                                                narrative: 'text-blue-600 bg-blue-50',
+                                                table: 'text-emerald-600 bg-emerald-50',
+                                                form: 'text-amber-600 bg-amber-50',
+                                                qualification: 'text-purple-600 bg-purple-50',
+                                            };
+
+                                            return (
+                                                <div key={`outline-${key}`}
+                                                    className={`transition-opacity ${checked ? '' : 'opacity-30'}`}>
+                                                    {/* Section title row */}
+                                                    <div className="flex items-baseline py-1.5 group">
+                                                        <span className="text-gray-400 w-6 text-right mr-2 text-[11px] shrink-0 font-mono">{sec.order || si + 1}.</span>
+                                                        <span className={`text-[12px] font-bold flex-1 ${isRejection ? 'text-red-700' : 'text-gray-900'} ${!checked ? 'line-through' : ''}`}>
                                                             {sec.title}
                                                         </span>
                                                         {isRejection && (
-                                                            <span className="text-[8px] text-red-400 shrink-0 ml-1">● 必选</span>
+                                                            <span className="text-[8px] px-1.5 py-0.5 rounded-sm bg-red-50 text-red-500 border border-red-200 shrink-0 ml-2 font-bold">废标</span>
                                                         )}
                                                         {sec.score_weight > 0 && (
-                                                            <span className="text-[8px] text-blue-500 shrink-0 ml-1">{sec.score_weight}分</span>
+                                                            <span className="text-[8px] px-1.5 py-0.5 rounded-sm bg-blue-50 text-blue-600 border border-blue-200 shrink-0 ml-1">{sec.score_weight}分</span>
                                                         )}
-                                                        <span className="border-b border-dotted border-gray-300 flex-1 mx-2 min-w-[30px]"></span>
-                                                        <span className="text-gray-400 text-[9px] shrink-0">{si + 3}</span>
+                                                        <span className={`text-[8px] px-1.5 py-0.5 rounded-sm shrink-0 ml-1 ${typeColor[sec.type] || 'text-gray-500 bg-gray-50'}`}>
+                                                            {typeLabel[sec.type] || sec.type}
+                                                        </span>
                                                     </div>
-                                                );
-                                            })
-                                        )}
-                                    </div>
+
+                                                    {/* Content outline bullets */}
+                                                    {checked && outline.length > 0 && (
+                                                        <div className="ml-8 mb-2 pl-3 border-l-2 border-gray-200 space-y-0.5">
+                                                            {outline.map((point, pi) => (
+                                                                <div key={pi} className="text-[10px] text-gray-500 leading-snug flex items-start">
+                                                                    <span className="text-gray-300 mr-1.5 mt-0.5 shrink-0">›</span>
+                                                                    <span>{point}</span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+
+                                                    {/* Material references */}
+                                                    {checked && matRefs.length > 0 && (
+                                                        <div className="ml-8 mb-2 flex flex-wrap gap-1">
+                                                            {matRefs.map((ref, ri) => (
+                                                                <span key={ri} className="text-[8px] px-1.5 py-0.5 rounded bg-orange-50 text-orange-600 border border-orange-200">
+                                                                    📎 {ref}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -641,10 +676,10 @@ export default function BiddingAgent() {
                             <div className="px-4 py-3 border-b border-zinc-800">
                                 <h2 className="text-[14px] font-bold text-zinc-100 flex items-center space-x-2">
                                     <Eye size={16} className="text-orange-400" />
-                                    <span>投标结构确认</span>
+                                    <span>投标文件大纲</span>
                                 </h2>
                                 <p className="text-[11px] text-zinc-500 mt-1">
-                                    勾选需要生成的章节，取消勾选将跳过
+                                    审阅内容大纲和素材引用，确认后开始制作
                                 </p>
                             </div>
 
@@ -755,6 +790,8 @@ export default function BiddingAgent() {
                                             const key = `${vi}-${si}`;
                                             const isRejectionRisk = sec.rejection_risk === true;
                                             const checked = isRejectionRisk ? true : sectionChecked[key] !== false;
+                                            const outline = sec.content_outline || [];
+                                            const matRefs = sec.material_refs || [];
                                             const typeLabel = { narrative: '叙述', table: '表格', form: '表单', qualification: '资质' };
                                             const typeColor = {
                                                 narrative: 'bg-blue-500/10 text-blue-400 border-blue-500/30',
@@ -762,42 +799,63 @@ export default function BiddingAgent() {
                                                 form: 'bg-amber-500/10 text-amber-400 border-amber-500/30',
                                                 qualification: 'bg-purple-500/10 text-purple-400 border-purple-500/30',
                                             };
-                                            const titleLower = sec.title.toLowerCase();
-                                            const usesResumes = ['团队', '人员', '律师', '简历', '拟投入', '拟委派'].some(k => titleLower.includes(k));
-                                            const usesProjects = ['业绩', '案例', '项目经验'].some(k => titleLower.includes(k));
-                                            const usesMaterials = usesResumes || usesProjects;
 
                                             return (
-                                                <label key={si}
-                                                    className={`flex items-center py-1.5 px-2 rounded-md mb-0.5 cursor-pointer transition-all text-[11px] ${isRejectionRisk
-                                                        ? 'bg-red-500/5 border border-red-500/20 hover:bg-red-500/10'
+                                                <div key={si}
+                                                    className={`rounded-md mb-1 transition-all ${isRejectionRisk
+                                                        ? 'bg-red-500/5 border border-red-500/20'
                                                         : checked
-                                                            ? 'bg-zinc-800/50 hover:bg-zinc-800'
-                                                            : 'bg-zinc-900/30 opacity-50 hover:opacity-70'
+                                                            ? 'bg-zinc-800/50 border border-zinc-700/50'
+                                                            : 'bg-zinc-900/30 border border-transparent opacity-50'
                                                         }`}>
-                                                    <input type="checkbox"
-                                                        checked={checked}
-                                                        disabled={isRejectionRisk}
-                                                        onChange={() => !isRejectionRisk && setSectionChecked(prev => ({ ...prev, [key]: !prev[key] }))}
-                                                        className={`w-3.5 h-3.5 rounded border-zinc-600 bg-zinc-800 focus:ring-orange-500 shrink-0 ${isRejectionRisk ? 'accent-red-500 text-red-500' : 'accent-orange-500 text-orange-500'}`}
-                                                    />
-                                                    <span className="text-zinc-500 w-5 text-right mx-1.5 shrink-0 text-[10px]">{sec.order || si + 1}</span>
-                                                    <span className={`flex-1 leading-snug truncate ${checked ? 'text-zinc-200' : 'text-zinc-500 line-through'}`}>
-                                                        {sec.title}
-                                                    </span>
-                                                    {isRejectionRisk && (
-                                                        <span className="text-[8px] px-1 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/30 shrink-0 font-bold ml-1">🔴</span>
+                                                    {/* Header row with checkbox */}
+                                                    <label className="flex items-center py-1.5 px-2 cursor-pointer text-[11px]">
+                                                        <input type="checkbox"
+                                                            checked={checked}
+                                                            disabled={isRejectionRisk}
+                                                            onChange={() => !isRejectionRisk && setSectionChecked(prev => ({ ...prev, [key]: !prev[key] }))}
+                                                            className={`w-3.5 h-3.5 rounded border-zinc-600 bg-zinc-800 focus:ring-orange-500 shrink-0 ${isRejectionRisk ? 'accent-red-500 text-red-500' : 'accent-orange-500 text-orange-500'}`}
+                                                        />
+                                                        <span className="text-zinc-500 w-5 text-right mx-1.5 shrink-0 text-[10px]">{sec.order || si + 1}</span>
+                                                        <span className={`flex-1 leading-snug truncate ${checked ? 'text-zinc-200' : 'text-zinc-500 line-through'}`}>
+                                                            {sec.title}
+                                                        </span>
+                                                        {isRejectionRisk && (
+                                                            <span className="text-[8px] px-1 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/30 shrink-0 font-bold ml-1">🔴</span>
+                                                        )}
+                                                        {sec.score_weight > 0 && (
+                                                            <span className="text-[8px] px-1 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 shrink-0 ml-1">{sec.score_weight}分</span>
+                                                        )}
+                                                        <span className={`text-[8px] px-1 py-0.5 rounded border shrink-0 ml-1 ${typeColor[sec.type] || 'bg-zinc-800 text-zinc-500 border-zinc-700'}`}>
+                                                            {typeLabel[sec.type] || sec.type}
+                                                        </span>
+                                                    </label>
+
+                                                    {/* Expandable content_outline + material_refs */}
+                                                    {checked && (outline.length > 0 || matRefs.length > 0) && (
+                                                        <div className="px-3 pb-2 ml-7 space-y-1">
+                                                            {outline.length > 0 && (
+                                                                <div className="pl-2 border-l border-zinc-700 space-y-0.5">
+                                                                    {outline.map((point, pi) => (
+                                                                        <div key={pi} className="text-[9px] text-zinc-500 leading-snug flex items-start">
+                                                                            <span className="text-zinc-600 mr-1 shrink-0">›</span>
+                                                                            <span>{point}</span>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                            {matRefs.length > 0 && (
+                                                                <div className="flex flex-wrap gap-1 pt-0.5">
+                                                                    {matRefs.map((ref, ri) => (
+                                                                        <span key={ri} className="text-[8px] px-1 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20">
+                                                                            📎 {ref}
+                                                                        </span>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                        </div>
                                                     )}
-                                                    {sec.score_weight > 0 && (
-                                                        <span className="text-[8px] px-1 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 shrink-0 ml-1">{sec.score_weight}分</span>
-                                                    )}
-                                                    {usesMaterials && checked && (
-                                                        <span className="text-[8px] px-1 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20 shrink-0 ml-1">📋</span>
-                                                    )}
-                                                    <span className={`text-[8px] px-1 py-0.5 rounded border shrink-0 ml-1 ${typeColor[sec.type] || 'bg-zinc-800 text-zinc-500 border-zinc-700'}`}>
-                                                        {typeLabel[sec.type] || sec.type}
-                                                    </span>
-                                                </label>
+                                                </div>
                                             );
                                         })}
                                     </div>
@@ -816,7 +874,7 @@ export default function BiddingAgent() {
                                     disabled={processing || Object.values(sectionChecked).filter(Boolean).length === 0}
                                     className="w-full flex items-center justify-center space-x-1.5 px-6 py-2.5 rounded-md text-[12px] font-bold bg-orange-500 text-white hover:bg-orange-600 shadow-lg shadow-orange-500/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed">
                                     <Sparkles size={14} />
-                                    <span>确认结构，开始生成</span>
+                                    <span>确认结构，开始制作</span>
                                 </button>
                             </div>
                         </div>

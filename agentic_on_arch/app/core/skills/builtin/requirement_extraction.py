@@ -118,7 +118,7 @@ STRUCTURE_PROMPT = """根据以下招标文件分析结果，生成完整的投�
   "bid_title": "XX项目投标文件",
   "volumes": [
     {{
-      "name": "分册名称（如只有一个分册，用"投标文件"）",
+      "name": "分册名称（如只有一个分册，用\"投标文件\"）",
       "sections": [
         {{
           "order": 1,
@@ -128,6 +128,14 @@ STRUCTURE_PROMPT = """根据以下招标文件分析结果，生成完整的投�
           "rejection_risk": false,
           "score_weight": 0,
           "content_hints": "该章节应包含的具体内容描述",
+          "content_outline": [
+            "子要点1：该章节需要覆盖的第一个关键内容",
+            "子要点2：该章节需要覆盖的第二个关键内容",
+            "子要点3：该章节需要覆盖的第三个关键内容"
+          ],
+          "material_refs": [
+            "需引用的素材类型和数量，如：项目经理简历、类似业绩3项、营业执照副本"
+          ],
           "data_fields": ["需要填写的数据字段（如有）"],
           "source_reference": "对应招标文件的要求来源"
         }}
@@ -162,6 +170,19 @@ STRUCTURE_PROMPT = """根据以下招标文件分析结果，生成完整的投�
 4. score_weight: 如果该章节对应某个评分项，填写该评分项的最高分值
 5. 确保招标文件中所有废标条件对应的文件都有对应章节
 6. 确保评标办法中所有评分维度都有对应的投标章节
+
+7. content_outline 规则：
+   - 每个章节必须有 3-5 个子要点，描述该章节需要写哪些具体内容
+   - narrative 类型：列出需要论述的关键主题和要点
+   - table 类型：列出表格应包含的数据列和关键内容
+   - form 类型：列出需要填写的关键项目
+   - qualification 类型：列出需要提供的具体证照文件
+
+8. material_refs 规则：
+   - 标注该章节在编制时需要从素材库引用的内容
+   - 常见素材类型：人员简历、类似业绩/项目经验、资质证书、获奖荣誉
+   - 如果不需要引用素材库，设为空数组 []
+   - 示例：["项目经理及核心成员简历 3-5人", "近3年类似业绩 5项"]
 
 请严格输出 JSON，不要有任何额外说明文字。"""
 
@@ -573,6 +594,8 @@ class RequirementExtractionSkill(BaseSkill):
                 "rejection_risk": doc.get("is_mandatory", False),
                 "score_weight": 0,
                 "content_hints": doc.get("source", ""),
+                "content_outline": [],
+                "material_refs": [],
                 "data_fields": [],
             })
             order += 1
@@ -590,6 +613,8 @@ class RequirementExtractionSkill(BaseSkill):
                     "rejection_risk": False,
                     "score_weight": crit.get("max_score", 0),
                     "content_hints": crit.get("description", ""),
+                    "content_outline": [crit.get("description", "")] if crit.get("description") else [],
+                    "material_refs": [],
                     "data_fields": [],
                 })
                 existing_titles.add(needed)
@@ -749,6 +774,8 @@ class RequirementExtractionSkill(BaseSkill):
                 "required": True,
                 "rejection_risk": False,
                 "content_hints": sec.get("content", "")[:100],
+                "content_outline": [],
+                "material_refs": [],
                 "data_fields": [],
             })
 

@@ -25,6 +25,24 @@ from app.utils.logger import logger
 MATERIAL_CLASSIFY_SYSTEM = """你是法律投标文件分析专家。你的任务是识别投标文件中各章节包含的素材类型。
 你必须输出严格的 JSON 格式，不要包含任何其他内容。"""
 
+DETECT_COMPANY_PROMPT = """请从以下文档内容中识别出这份文件所属的**主体公司/机构名称**。
+这是投标相关文件，请找出文件中资质、简历或业绩所归属的那家公司或律所的全称。
+
+【文件名】
+{filename}
+
+【文档前部内容】
+{content_preview}
+
+请严格按以下 JSON 格式输出：
+{{"company_name": "完整公司/机构名称", "confidence": "high|medium|low"}}
+
+规则：
+- 如果能明确识别出公司名，confidence 为 high
+- 如果只能猜测，confidence 为 medium
+- 如果无法识别，输出 {{"company_name": "", "confidence": "low"}}
+- 只输出 JSON，不要额外文字"""
+
 MATERIAL_CLASSIFY_PROMPT = """以下是一份历史投标文件中的章节列表。
 请为每个章节标注它包含什么类型的素材：
 
@@ -270,6 +288,14 @@ class BidDocumentParserSkill(BaseSkill):
         logger.info(f"After dedup: {len(resumes)} resumes, "
                      f"{len(projects)} projects, {len(qualifications)} qualifications")
 
+        # Step 4: Detect company name from content
+        full_text = "\n".join(s.get("content", "")[:200] for s in sections[:5])
+        detected_company = await self._detect_company_name(
+            llm, filename, full_text[:800]
+        )
+        if detected_company:
+            logger.info(f"Detected company name: {detected_company}")
+
         return {
             "resumes": resumes,
             "projects": projects,
@@ -277,6 +303,7 @@ class BidDocumentParserSkill(BaseSkill):
             "narrative_chunks": narrative_chunks,
             "source_file": file_path,
             "total_sections": len(sections),
+            "detected_company": detected_company,
         }
 
     # ── Image storage directory ──
@@ -592,6 +619,24 @@ class BidDocumentParserSkill(BaseSkill):
         """Backward-compat wrapper for detect_document_type."""
         result = BidDocumentParserSkill.detect_document_type(filename)
         return result.get("material_hint")
+
+    async def _detect_company_name(self, llm, filename: str,
+                                    content_preview: str) -> str:
+        """Detect main company/organization name from document content."""
+        prompt = DETECT_COMPANY_PROMPT.format(
+            filename=filename, content_preview=content_preview[:800]
+        )
+        try:
+            response = await llm.generate(prompt, system="你是文档分析助手。只输出JSON。")
+            result = _safe_parse_json(response)
+            if isinstance(result, dict):
+                name = result.get("company_name", "").strip()
+                confidence = result.get("confidence", "low")
+                if name and confidence in ("high", "medium"):
+                    return name
+        except Exception as e:
+            logger.warning(f"Company detection failed: {e}")
+        return ""
 
     async def _extract_resumes(self, llm, title: str,
                                 content: str) -> List[Dict]:
