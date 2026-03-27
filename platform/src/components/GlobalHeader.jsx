@@ -6,7 +6,7 @@ export default function GlobalHeader({ onReset }) {
             <div className="flex items-center space-x-6">
                 <div className="flex items-center space-x-2 cursor-pointer group" onClick={onReset}>
                     <div className="w-6 h-6 bg-orange-500 rounded-sm flex items-center justify-center font-bold text-xs italic text-white shadow-sm">L</div>
-                    <span className="font-bold text-sm tracking-tight uppercase group-hover:text-orange-400 transition-colors">律所 AI 控制台</span>
+                    <span className="font-bold text-sm tracking-tight uppercase group-hover:text-orange-400 transition-colors">智能控制台</span>
                 </div>
                 <div className="h-6 w-px bg-zinc-700"></div>
                 <div className="flex items-center space-x-1 text-zinc-400 text-xs hover:text-white cursor-pointer transition">
