@@ -59,7 +59,14 @@ ANALYSIS_PROMPT = """请深度分析以下招标文件内容，提取编制投�
       "item": "评分项名称",
       "max_score": 0,
       "description": "评分要点",
-      "bid_section_needed": "投标文件中需要哪个章节来回应这个评分项"
+      "bid_section_needed": "投标文件中需要哪个章节来回应这个评分项",
+      "sub_criteria": [
+        {{
+          "name": "子评分项名称",
+          "score": 0,
+          "scoring_rule": "得分规则，如：5人以上得8分，3-5人得5分"
+        }}
+      ]
     }}
   ],
 
@@ -93,7 +100,12 @@ ANALYSIS_PROMPT = """请深度分析以下招标文件内容，提取编制投�
 3. 如果没有明确的格式章节，从评标办法、资格条件、技术要求中推导出投标文件应包含的部分
 4. 废标条件（rejection_conditions）是最重要的——任何漏项都会导致投标无效
 5. 评标办法中的评分项目直接决定了投标文件的核心章节
-6. 所有字段尽量填写，实在找不到的写 null
+6. evaluation_criteria 必须深度提取：
+   - 每个评分大项下的子评分项（sub_criteria）必须逐条列出
+   - 包含具体得分规则（如"5人以上得8分，3-5人得5分"）
+   - 子项分值之和应等于大项的 max_score
+   - 如果评标办法以表格形式呈现，逐行提取
+7. 所有字段尽量填写，实在找不到的写 null
 
 请严格输出 JSON，不要有任何额外说明文字。"""
 
@@ -312,9 +324,33 @@ class RequirementExtractionSkill(BaseSkill):
 
     # ── V3: Multi-pass analysis ──
 
+    def _extract_scoring_sections(self, sections):
+        # type: (List[Dict]) -> str
+        """Locate and extract full text of scoring/evaluation sections from parsed tender."""
+        SCORING_KEYWORDS = [
+            '评标', '评审', '评分', '打分', '计分',
+            '评标办法', '评标标准', '评分标准', '评分细则',
+            '评审标准', '评审办法', '评分方法',
+        ]
+        scoring_parts = []
+        for sec in (sections or []):
+            title = sec.get('title', '')
+            # Check if section title contains scoring keywords
+            if any(kw in title for kw in SCORING_KEYWORDS):
+                content = sec.get('content', '')
+                if content and len(content) > 20:
+                    scoring_parts.append(f"## {title}\n{content}")
+
+        return "\n\n".join(scoring_parts) if scoring_parts else ""
+
     async def _analyze_and_build(self, llm, raw_text, sections):
         # type: (Any, str, List[Dict]) -> Dict
         """V3: Analyze tender → derive bid structure in two passes."""
+
+        # ── Step 0: Extract scoring sections for targeted analysis ──
+        scoring_text = self._extract_scoring_sections(sections)
+        if scoring_text:
+            logger.info(f"Located scoring sections: {len(scoring_text)} chars")
 
         # Prepare text: use full raw_text, truncate if too long
         text_for_analysis = raw_text
@@ -328,6 +364,14 @@ class RequirementExtractionSkill(BaseSkill):
                 raw_text[-half:]
             )
             logger.info(f"Tender text truncated: {len(raw_text)} → {len(text_for_analysis)} chars")
+
+        # Append scoring sections if they exist and were likely truncated
+        if scoring_text and len(raw_text) > self.MAX_CHUNK_SIZE:
+            # Check if scoring text is already covered
+            if scoring_text[:100] not in text_for_analysis:
+                supplement = f"\n\n【评标办法原文（定向提取）】\n{scoring_text[:8000]}"
+                text_for_analysis += supplement
+                logger.info(f"Appended scoring section: +{len(supplement)} chars")
 
         # ── Pass 1: Deep analysis ──
         logger.info("Pass 1: Analyzing tender document...")
@@ -522,16 +566,45 @@ class RequirementExtractionSkill(BaseSkill):
         rej_covered = sum(1 for r in rejection_items if r["status"] == "covered")
 
         # ── Evaluation criteria check ──
+        # Synonym mapping for common evaluation terms → section titles
+        _EVAL_SYNONYM_MAP = {
+            '技术方案': ['技术', '方案', '实施', '解决方案', '技术路线'],
+            '服务方案': ['服务', '运维', '售后', '服务保障', '服务承诺'],
+            '团队': ['人员', '律师', '团队', '简历', '拟投入', '拟委派', '项目经理'],
+            '业绩': ['业绩', '案例', '项目经验', '类似项目', '合同'],
+            '报价': ['报价', '价格', '费用', '开标', '一览表', '投标报价'],
+            '资质': ['资质', '证书', '营业执照', '许可证', '认证'],
+            '管理': ['管理', '质量', '进度', '风控', '安全', '保密'],
+            '培训': ['培训', '知识转移', '交接'],
+            '应急': ['应急', '预案', '备份', '容灾'],
+        }
+
+        def _eval_match(item_name, needed):
+            """Try to match an evaluation criterion to a section using synonyms."""
+            # Direct match first
+            matched = _find_matching_section([needed, item_name])
+            if matched:
+                return matched
+            # Synonym-based matching
+            for trigger, synonyms in _EVAL_SYNONYM_MAP.items():
+                if trigger in item_name or trigger in (needed or ''):
+                    for syn in synonyms:
+                        for title in all_titles:
+                            if syn in title:
+                                return title
+            return None
+
         eval_items = []
         for ec in analysis.get("evaluation_criteria", []):
             item_name = ec.get("item", "")
             needed = ec.get("bid_section_needed", "")
-            matched = _find_matching_section([needed, item_name])
+            matched = _eval_match(item_name, needed)
             eval_items.append({
                 "item": item_name,
                 "max_score": ec.get("max_score", 0),
                 "description": ec.get("description", ""),
                 "bid_section_needed": needed,
+                "sub_criteria": ec.get("sub_criteria", []),
                 "status": "covered" if matched else "missing",
                 "matched_section": matched,
             })

@@ -1,6 +1,6 @@
 # 智能投标系统 — 上下文恢复文档
 
-> 最后更新: 2026-03-26 10:39 (会话 ID: 49d94557-5cb8-401c-bad9-4cf1ccb5b3b5)
+> 最后更新: 2026-03-27 10:55 (会话 ID: fee4462f-687f-4e3d-9928-5063bc4f8845)
 
 ---
 
@@ -22,7 +22,18 @@
 - 废标项章节红标 🔴 + 不可取消勾选
 - 评分权重蓝色标签
 
-### 2. 测试结果
+### 2. 素材库 SQLite 迁移 ✅
+- `material_store.py` 从 JSON 文件存储完全重写为 SQLite
+- 四张表：`companies`、`materials`、`narrative_chunks`、`pending_uploads`
+- 自动检测旧 JSON 数据并导入 SQLite
+- 公司级管理：公司选择器、删除确认、CRUD 接口
+
+### 3. 素材库入库流程修复 ✅
+- 修正 `_PENDING_DIR` 和图片服务接口路径
+- `bidding.py` 改为调用 `MaterialStore.save_pending()`/`pop_pending()` 替代文件操作
+- 添加 `[upload]` 和 `[confirm]` 全链路日志
+
+### 4. 测试结果
 | 文件 | 页数 | 字数 | 章节 | 废标 | 评分 | 文件覆盖 |
 |------|------|------|------|------|------|---------|
 | 8.29.docx | ~80 | 49K | 22 | 8/8✅ | 3/3✅ | 22/22✅ |
@@ -30,158 +41,116 @@
 
 ---
 
-## 三、待优化：精准章节定位策略（未实施）
+## 三、3/27 完成的工作
 
-**问题**：当前对超长文档（>28K 字）采用头尾截断，丢失中间关键内容。
+### 1. 素材库入库 Bug 修复 ✅
+**根因**：
+- 前端选中 key 用 `item_${Math.random()}`，后端按 name 过滤 → 永远匹配不上
+- LLM 提取的资质 `name=null`，`save_materials` 直接跳过
 
-**优化方案**：
-```
-Step 1: 解析全文，建立章节标题索引（确定性，不用 LLM）
-Step 2: 按关键词定位 4 个核心章节：
-        - 供应商须知（含资格审查表、符合性审查表）
-        - 评标方法和评标标准
-        - 投标文件格式
-        - 采购需求/技术要求
-Step 3: 只把这 4 个章节的原文分别交给 LLM 分析（每段 <10K 字）
-Step 4: 合并结果，生成投标结构
-```
+**修复**：
+- `MaterialPanel.jsx` — 选中 key 改为 `idx:N`（索引），确认时反查真实名称
+- `material_store.py` — `save_materials` 自动从章节标题等字段生成兜底名称
+- `bidding.py` — confirm 过滤逻辑统一化，三类素材都加了名称不匹配兜底
 
-**预期效果**：消除截断导致的信息丢失，160 页文档也能精确提取。
-**开发时间**：约 40 分钟，仅改 requirement_extraction.py 的文本预处理。
+### 2. 投标文件大纲增强 ✅ ← 核心改动
+**目标**：在"结构确认"和"内容生成"之间插入大纲层，让用户能审阅每章要写什么
 
----
+**后端**：
+- `requirement_extraction.py` Pass 2 Prompt 新增两个字段：
+  - `content_outline`：每章 3-5 条内容要点
+  - `material_refs`：该章节需引用的素材类型和数量
+- 三个兜底方法（`_build_from_analysis`、`_fallback_from_sections`、`_fallback`）都补全新字段
 
-## 四、关键文件路径
+**前端**：
+- 左面板（Word 预览）：从平铺目录改为 **文档大纲视图**
+  - 章节标题 + 类型标签（方案/表格/表单/证照）
+  - 缩进 `›` content_outline 子要点
+  - 📎 material_refs 素材引用标签
+  - 废标/评分标记保留
+- 右面板：从扁平 checkbox 改为 **可展开卡片**
+  - 勾选后展开内容要点和素材引用
+  - 取消勾选后折叠
+- 状态栏文案：`大纲确认 · N 章节`
+- 按钮文案：`确认结构，开始制作`
 
-| 文件 | 说明 |
-|------|------|
-| `app/core/skills/builtin/requirement_extraction.py` | V3 多轮分析 + 校验 |
-| `app/core/skills/builtin/content_generation.py` | 流式内容生成 |
-| `app/api/bidding.py` | API 主路由（SSE + 缓存） |
-| `platform/src/agents/BiddingAgent.jsx` | 前端主组件 |
-
-## 五、环境
-
-- 后端: FastAPI + Uvicorn, Python 3.8
-- 前端: Vite 7 + React 19
-- LLM: Qwen-Max (DashScope)
-
-
----
-
-## 一、今日完成的工作 (3/25)
-
-### 1. P0-1: 流式实时打印 ✅
-
-**`content_generation.py`** — 新增两个方法:
-- `execute_streaming(params, chunk_callback)` — 入口
-- `_generate_narrative_section_streaming(...)` — narrative 章节用 `llm.stream()` 实现逐 token 输出
-- table/form/qualification 保持瞬时生成，通过 callback 一次性推送
-
-**`bidding.py`** — `_gen_one()` 重写:
-- 调用 `execute_streaming` 取代 `execute`
-- 每个 token 通过 `content_chunk` SSE 事件推送到前端
-- `section_done` 事件现在包含完整 content 用于前端回顾
-
-**`BiddingAgent.jsx`** — 生成页面改为双栏布局:
-- 左栏: 章节目录（✅完成 ⚡缓存 🔄生成中 ○待生成），显示耗时+字数
-- 右栏: 实时内容流（打字机效果 + 光标闪烁），自动滚动
-- 点击左栏已完成章节可切换到右栏查看内容
-
-### 2. P0-2: 断点缓存 ✅
-
-**`bidding.py`**:
-- 每章节生成后写入 `data/tasks/{task_id}/sections/{idx}_{title}.json`
-- 重新生成时检查缓存，跳过已完成章节（`section_cached` SSE 事件）
-- 新增 `DELETE /api/bidding/clear-cache/{task_id}` 清缓存接口
-- 每章节记录耗时日志，总耗时统计
-
-### 3. 投标结构智能化（核心改造）✅ 代码已写，待实测
-
-**问题**: 原来的 `requirement_extraction.py` 只是把招标文件的标题搬过来当投标结构，不理解招标文件内容。
-
-**解决**: 全面重写为 V3 多轮分析:
-
-```
-Pass 1: 深度分析招标文件
-  → project_info, bid_composition, rejection_conditions,
-    evaluation_criteria, qualification_requirements,
-    format_requirements, deadline_info
-
-Pass 2: 生成投标文件目录
-  → 每个章节标注 rejection_risk（废标项）和 score_weight（评分分值）
-  → 基于 Pass 1 的分析结果组织标准投标文件结构
-```
-
-**前端更新**:
-- 确认页面废标项显示 🔴红标，不可取消勾选
-- 评分分值显示蓝色标签
-- 顶部红色警告横幅显示废标条件数量
+**实测结果**（8.31.docx ~80 页）：
+- Pass 1: 20 必须文件, 10 废标条件, 4 评分维度 ✅
+- Pass 2: 20 投标章节, 16 有废标风险, 每章均有 content_outline + material_refs ✅
+- Pass 3: 废标 10/10, 文件 20/20, 评分 1/4 ⚠️
 
 ---
 
-## 二、明日待做 (3/26)
+## 四、当前阶段与下一步
 
-### 必做
-1. **实测投标结构分析** — 用真实招标文件测试 V3 分析效果
-   - 检查废标项是否提取正确
-   - 检查投标结构是否合理（不再是搬运标题）
-   - 如果有明确的"投标文件格式"章节，应直接提取目录
-2. **验证流式生成 + 缓存** — 完整走一遍生成流程
-   - LLM 流式输出效果
-   - 中断后重新生成能否命中缓存
+### 当前状态
+投标文件制作流程已具备：
+```
+上传招标文件 → AI 解析(Pass1+2+3) → 大纲确认(content_outline+material_refs)
+→ 逐章节生成 → 流式实时显示 → Word 下载
+```
 
-### 可选
-3. **性能诊断** — 根据日志分析每章节 LLM 耗时
-4. **A+B 计划** — 素材注入验证
+### 下一步工作（3/27 讨论确认的优先级）
+
+| 优先级 | 工作 | 说明 |
+|--------|------|------|
+| **P0** | 素材注入到生成流程 | content_generation 按 type 分路径，table/qualification 从素材库拉数据 |
+| **P1** | 公司信息填充 form 章节 | 投标函、授权书等套模板填字段 |
+| **P2** | narrative 章节质量提升 | content_outline + 素材库范文注入 LLM 上下文 |
+| **P3→正在做** | 评分细则提取+覆盖率优化 | 见下方详细设计 |
+| **P4** | 素材库 OCR | 解决纯图片资质证书无法提取的问题 |
+
+#### P3 详细设计 — 评分细则深度提取
+**问题**：Pass 1 只提取了评分维度的一行描述（如"服务方案 20分"），但招标文件里有详细的评分子项和得分规则。
+
+**目标**：提取评分子项，让用户和 LLM 都能看到每一分怎么拿：
+```json
+{
+  "item": "服务方案", "max_score": 20,
+  "sub_criteria": [
+    { "name": "服务人员配置", "score": 8, "scoring_rule": "5人以上8分，3-5人5分" },
+    { "name": "人员资质要求", "score": 6, "scoring_rule": "高级职称3人以上6分" },
+    { "name": "响应时间", "score": 6, "scoring_rule": "2小时内6分，4小时内4分" }
+  ]
+}
+```
+
+**实现路径**：
+1. 精准定位"评标办法"章节 → 提取完整文本（不被截断）
+2. Pass 1 的 `evaluation_criteria` 增加 `sub_criteria` 字段
+3. Pass 2 强化评分覆盖：每个评分项（含子项）必须有对应章节
+4. Pass 3 匹配逻辑加同义词映射
+5. 前端招标要点面板：评分维度展开为树状结构
 
 ---
 
-## 三、关键文件路径
+## 五、关键文件路径
 
 ### 后端 (agentic_on_arch/)
 | 文件 | 说明 |
 |------|------|
-| `app/api/bidding.py` | 投标 API 主路由（流式 SSE + 缓存） |
-| `app/core/skills/builtin/requirement_extraction.py` | **V3 多轮分析**（今日重写） |
-| `app/core/skills/builtin/content_generation.py` | 内容生成（新增 streaming） |
-| `app/core/llm/qwen.py` | Qwen LLM 适配器（stream 方法） |
+| `app/api/bidding.py` | 投标 API 主路由（流式 SSE + 缓存 + 素材确认） |
+| `app/core/skills/builtin/requirement_extraction.py` | V3 多轮分析（Pass1+2+3, content_outline） |
+| `app/core/skills/builtin/content_generation.py` | 内容生成（streaming） |
+| `app/core/skills/builtin/material_store.py` | 素材库 SQLite 存储 |
+| `app/core/skills/builtin/bid_document_parser.py` | 历史标书解析 + 图片提取 |
 
 ### 前端 (platform/)
 | 文件 | 说明 |
 |------|------|
-| `src/agents/BiddingAgent.jsx` | 投标 Agent 主组件（双栏布局） |
-| `src/agents/MaterialPanel.jsx` | 素材库管理面板 |
+| `src/agents/BiddingAgent.jsx` | 投标 Agent 主组件（大纲视图+双栏生成） |
+| `src/agents/MaterialPanel.jsx` | 素材库管理面板（公司级管理+diff审阅） |
 
 ### 数据
 | 路径 | 说明 |
 |------|------|
 | `data/tasks/{task_id}/sections/` | 章节缓存文件 |
-| `data/materials/` | 素材库持久化 |
+| `data/materials/materials.db` | 素材库 SQLite 数据库 |
+| `data/materials/images/` | 提取的图片文件 |
 
 ---
 
-## 四、核心设计决策记录
-
-### 投标结构生成策略
-- **纯 LLM 方案**，不用 RAG 和本地模型
-- 对于有"投标文件格式"章节的文件：直接提取
-- 对于没有的：从评标办法 + 资格条件 + 技术要求推导
-- 废标项是最高优先级，必须被提取和标注
-
-### 流式输出策略
-- narrative 章节用 `llm.stream()` 逐 token 推送
-- table/form/qualification 瞬时生成一次性推送
-- 前端用 local variable `contentAcc` 累积避免 re-render 风暴
-
-### 缓存策略
-- 每章节完成后立即写盘（JSON 文件）
-- 缓存 key = `{idx}_{title}.json`
-- 提供 clear-cache API 用于强制重生
-
----
-
-## 五、环境信息
+## 六、环境信息
 
 - **后端**: FastAPI + Uvicorn, Python 3.8, `venv/bin/activate`
 - **前端**: Vite 7 + React 19, `npm run dev`

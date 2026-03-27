@@ -733,13 +733,34 @@ export default function BiddingAgent() {
                                             )}
                                             {evl.total > 0 && (
                                                 <div>
-                                                    <div className="text-[11px] font-bold text-blue-400 mb-1.5">📊 评分维度 — 评标打分依据</div>
-                                                    {(evl.items || []).map((item, i) => (
-                                                        <div key={i} className="flex items-start gap-2 text-[10px] py-1 pl-3 border-l-2 border-blue-500/20 mb-0.5">
-                                                            <span className="text-blue-400/70 shrink-0">{i + 1}.</span>
-                                                            <span className="text-zinc-300">{item.item} {item.max_score > 0 && <span className="text-blue-400 font-bold ml-1">({item.max_score}分)</span>}</span>
-                                                        </div>
-                                                    ))}
+                                                    <div className="text-[11px] font-bold text-blue-400 mb-1.5">📊 评分维度 — 评标打分依据 ({evl.covered}/{evl.total} 已覆盖)</div>
+                                                    {(evl.items || []).map((item, i) => {
+                                                        const isMissing = item.status === 'missing';
+                                                        const subs = item.sub_criteria || [];
+                                                        return (
+                                                            <div key={i} className={`mb-2 pl-3 border-l-2 ${isMissing ? 'border-red-500/30' : 'border-blue-500/20'}`}>
+                                                                <div className="flex items-center gap-2 text-[10px] py-0.5">
+                                                                    <span className={`shrink-0 ${isMissing ? 'text-red-400' : 'text-emerald-400'}`}>{isMissing ? '✗' : '✓'}</span>
+                                                                    <span className={`font-bold ${isMissing ? 'text-red-300' : 'text-zinc-200'}`}>{item.item}</span>
+                                                                    {item.max_score > 0 && <span className="text-blue-400 font-bold">({item.max_score}分)</span>}
+                                                                    {isMissing && <span className="text-[8px] px-1 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/30 font-bold">未覆盖</span>}
+                                                                </div>
+                                                                {/* Sub-criteria tree */}
+                                                                {subs.length > 0 && (
+                                                                    <div className="ml-4 mt-0.5 space-y-0.5">
+                                                                        {subs.map((sub, si) => (
+                                                                            <div key={si} className="text-[9px] text-zinc-400 flex items-start gap-1">
+                                                                                <span className="text-zinc-600 shrink-0">›</span>
+                                                                                <span className="text-zinc-300">{sub.name}</span>
+                                                                                {sub.score > 0 && <span className="text-blue-400/70 shrink-0">({sub.score}分)</span>}
+                                                                                {sub.scoring_rule && <span className="text-zinc-500 ml-1">— {sub.scoring_rule}</span>}
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })}
                                                 </div>
                                             )}
                                             {doc.total > 0 && (
