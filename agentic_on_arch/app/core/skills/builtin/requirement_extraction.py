@@ -402,6 +402,33 @@ class RequirementExtractionSkill(BaseSkill):
                 except Exception:
                     pass
 
+        async def _stream_with_progress(prompt, system, pass_name=""):
+            """Use LLM streaming to show real-time generation progress."""
+            buffer = []
+            total_chars = 0
+            last_report = 0
+            REPORT_INTERVAL = 300  # Report every 300 chars
+
+            try:
+                async for chunk in llm.stream(prompt, system=system):
+                    buffer.append(chunk)
+                    total_chars += len(chunk)
+                    # Send periodic progress with content snippet
+                    if total_chars - last_report >= REPORT_INTERVAL:
+                        last_report = total_chars
+                        # Show last ~60 chars as a preview
+                        recent = ''.join(buffer)[-80:].replace('\n', ' ').strip()
+                        if len(recent) > 60:
+                            recent = '...' + recent[-60:]
+                        _progress(f"   └─ [{pass_name}] 已接收 {total_chars} 字符 | {recent}")
+            except Exception as e:
+                _progress(f"⚠️ [{pass_name}] 流式调用异常: {str(e)[:80]}")
+                raise
+
+            full_text = ''.join(buffer)
+            _progress(f"   └─ [{pass_name}] 完成接收: 共 {len(full_text)} 字符")
+            return full_text
+
         # ── Step 0: Extract scoring & rejection sections (with tables) ──
         scoring_text = self._extract_scoring_sections(sections)
         rejection_text = self._extract_rejection_sections(sections)
@@ -450,7 +477,7 @@ class RequirementExtractionSkill(BaseSkill):
             # Try up to 2 times to handle transient Qwen API timeouts
             for attempt in range(2):
                 try:
-                    response1 = await llm.generate(prompt1, system=ANALYSIS_SYSTEM)
+                    response1 = await _stream_with_progress(prompt1, system=ANALYSIS_SYSTEM, pass_name="Pass1")
                     analysis = _safe_parse_json(response1)
                     if analysis:
                         break
@@ -502,7 +529,7 @@ class RequirementExtractionSkill(BaseSkill):
                 analysis_json=analysis_json,
                 tender_context=tender_context,
             )
-            response2 = await llm.generate(prompt2, system=STRUCTURE_SYSTEM)
+            response2 = await _stream_with_progress(prompt2, system=STRUCTURE_SYSTEM, pass_name="Pass2")
             structure = _safe_parse_json(response2)
 
             if structure and structure.get("volumes"):
