@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { FileText, Loader2, CheckCircle, Download, Upload, Sparkles, RotateCcw, Send, AlertTriangle, ChevronDown, Eye, X, Package } from 'lucide-react';
 import MaterialPanel from './MaterialPanel';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = 'http://localhost:8001';
 
 export default function BiddingAgent() {
     const [messages, setMessages] = useState([
@@ -95,9 +95,13 @@ export default function BiddingAgent() {
             formData.append('file', file);
             formData.append('llm_provider', 'qwen');
 
-            const res = await fetch(`${API_BASE}/api/bidding/parse-structure`, {
+            const uploadUrl = `${API_BASE}/api/bidding/parse-structure`;
+            console.log('[BiddingAgent] 📤 Uploading to:', uploadUrl, '| File:', file.name, file.size, 'bytes');
+
+            const res = await fetch(uploadUrl, {
                 method: 'POST', body: formData,
             });
+            console.log('[BiddingAgent] 📥 Response:', res.status, res.statusText);
 
             const reader = res.body.getReader();
             const decoder = new TextDecoder();
@@ -118,6 +122,8 @@ export default function BiddingAgent() {
                             updateLastAiMsg(ev.message);
                         } else if (ev.type === 'phase') {
                             updateLastAiMsg(ev.message);
+                        } else if (ev.type === 'heartbeat') {
+                            // SSE keep-alive, ignore
                         } else if (ev.type === 'section') {
                             updateLastAiMsg(`   ${ev.icon || '📄'} ${ev.title}  → ${ev.type}`);
                         } else if (ev.type === 'complete') {
@@ -632,8 +638,8 @@ export default function BiddingAgent() {
                                                         {isRejection && (
                                                             <span className="text-[8px] px-1.5 py-0.5 rounded-sm bg-red-50 text-red-500 border border-red-200 shrink-0 ml-2 font-bold">废标</span>
                                                         )}
-                                                        {sec.score_weight > 0 && (
-                                                            <span className="text-[8px] px-1.5 py-0.5 rounded-sm bg-blue-50 text-blue-600 border border-blue-200 shrink-0 ml-1">{sec.score_weight}分</span>
+                                                        {(sec.linked_total_score || sec.score_weight || 0) > 0 && (
+                                                            <span className="text-[8px] px-1.5 py-0.5 rounded-sm bg-blue-50 text-blue-600 border border-blue-200 shrink-0 ml-1">{sec.linked_total_score || sec.score_weight}分</span>
                                                         )}
                                                         <span className={`text-[8px] px-1.5 py-0.5 rounded-sm shrink-0 ml-1 ${typeColor[sec.type] || 'text-gray-500 bg-gray-50'}`}>
                                                             {typeLabel[sec.type] || sec.type}
@@ -659,6 +665,46 @@ export default function BiddingAgent() {
                                                                 <span key={ri} className="text-[8px] px-1.5 py-0.5 rounded bg-orange-50 text-orange-600 border border-orange-200">
                                                                     📎 {ref}
                                                                 </span>
+                                                            ))}
+                                                        </div>
+                                                    )}
+
+                                                    {/* Linked scoring items */}
+                                                    {checked && (sec.linked_scoring || []).length > 0 && (
+                                                        <div className="ml-8 mb-2 pl-3 border-l-2 border-blue-200 space-y-1">
+                                                            {sec.linked_scoring.map((sc, sci) => (
+                                                                <div key={sci}>
+                                                                    <div className="text-[10px] text-blue-700 font-medium flex items-center gap-1">
+                                                                        <span>🏆</span>
+                                                                        <span>{sc.item}</span>
+                                                                        <span className="text-[8px] px-1 py-0.5 rounded bg-blue-50 text-blue-500 border border-blue-200">{sc.max_score}分</span>
+                                                                    </div>
+                                                                    {(sc.sub_criteria || []).length > 0 && (
+                                                                        <div className="ml-4 mt-0.5 space-y-0.5">
+                                                                            {sc.sub_criteria.map((sub, subi) => (
+                                                                                <div key={subi} className="text-[9px] text-gray-500 flex items-start">
+                                                                                    <span className="text-blue-300 mr-1 shrink-0">├─</span>
+                                                                                    <span>{sub.name || sub.item} {sub.score > 0 ? `${sub.score}分` : ''}</span>
+                                                                                    {sub.scoring_rule && (
+                                                                                        <span className="text-gray-400 ml-1">({sub.scoring_rule})</span>
+                                                                                    )}
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+
+                                                    {/* Linked rejection items */}
+                                                    {checked && (sec.linked_rejection || []).length > 0 && (
+                                                        <div className="ml-8 mb-2 pl-3 border-l-2 border-red-200 space-y-0.5">
+                                                            {sec.linked_rejection.map((rj, rji) => (
+                                                                <div key={rji} className="text-[9px] text-red-600 flex items-start">
+                                                                    <span className="mr-1 shrink-0">🔴</span>
+                                                                    <span>{rj.condition}</span>
+                                                                </div>
                                                             ))}
                                                         </div>
                                                     )}
@@ -845,7 +891,7 @@ export default function BiddingAgent() {
                                                             <span className="text-[8px] px-1 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/30 shrink-0 font-bold ml-1">🔴</span>
                                                         )}
                                                         {sec.score_weight > 0 && (
-                                                            <span className="text-[8px] px-1 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 shrink-0 ml-1">{sec.score_weight}分</span>
+                                                            <span className="text-[8px] px-1 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 shrink-0 ml-1">{sec.linked_total_score || sec.score_weight}分</span>
                                                         )}
                                                         <span className={`text-[8px] px-1 py-0.5 rounded border shrink-0 ml-1 ${typeColor[sec.type] || 'bg-zinc-800 text-zinc-500 border-zinc-700'}`}>
                                                             {typeLabel[sec.type] || sec.type}
@@ -871,6 +917,46 @@ export default function BiddingAgent() {
                                                                         <span key={ri} className="text-[8px] px-1 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20">
                                                                             📎 {ref}
                                                                         </span>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+
+                                                            {/* Linked scoring items */}
+                                                            {(sec.linked_scoring || []).length > 0 && (
+                                                                <div className="pt-1 pl-2 border-l border-blue-500/30 space-y-1">
+                                                                    {sec.linked_scoring.map((sc, sci) => (
+                                                                        <div key={sci}>
+                                                                            <div className="text-[9px] text-blue-400 font-medium flex items-center gap-1">
+                                                                                <span>🏆</span>
+                                                                                <span className="flex-1">{sc.item}</span>
+                                                                                <span className="text-[8px] px-1 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">{sc.max_score}分</span>
+                                                                            </div>
+                                                                            {(sc.sub_criteria || []).length > 0 && (
+                                                                                <div className="ml-3 mt-0.5 space-y-0.5">
+                                                                                    {sc.sub_criteria.map((sub, subi) => (
+                                                                                        <div key={subi} className="text-[8px] text-zinc-500 flex items-start">
+                                                                                            <span className="text-blue-500/50 mr-1 shrink-0">├─</span>
+                                                                                            <span className="text-zinc-400">{sub.name || sub.item} {sub.score > 0 ? `${sub.score}分` : ''}</span>
+                                                                                            {sub.scoring_rule && (
+                                                                                                <span className="text-zinc-600 ml-1 truncate">({sub.scoring_rule})</span>
+                                                                                            )}
+                                                                                        </div>
+                                                                                    ))}
+                                                                                </div>
+                                                                            )}
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+
+                                                            {/* Linked rejection items */}
+                                                            {(sec.linked_rejection || []).length > 0 && (
+                                                                <div className="pt-1 pl-2 border-l border-red-500/30 space-y-0.5">
+                                                                    {sec.linked_rejection.map((rj, rji) => (
+                                                                        <div key={rji} className="text-[8px] text-red-400 flex items-start">
+                                                                            <span className="mr-1 shrink-0">🔴</span>
+                                                                            <span>{rj.condition}</span>
+                                                                        </div>
                                                                     ))}
                                                                 </div>
                                                             )}

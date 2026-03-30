@@ -303,7 +303,8 @@ class RequirementExtractionSkill(BaseSkill):
 
         if mode == "analyze":
             # ── V3: Multi-pass tender analysis ──
-            result = await self._analyze_and_build(llm, raw_text, sections)
+            progress_cb = params.get("progress_callback", None)
+            result = await self._analyze_and_build(llm, raw_text, sections, progress_cb=progress_cb)
         elif mode == "structure" and sections:
             # ── V2: Classify parsed section titles ──
             result = await self._structure_from_sections(llm, sections, raw_text)
@@ -324,33 +325,93 @@ class RequirementExtractionSkill(BaseSkill):
 
     # ── V3: Multi-pass analysis ──
 
+    SCORING_KEYWORDS = [
+        '评标', '评审', '评分', '打分', '计分',
+        '评标办法', '评标标准', '评分标准', '评分细则',
+        '评审标准', '评审办法', '评分方法',
+    ]
+
+    REJECTION_KEYWORDS = [
+        '废标', '否决', '无效投标', '不予受理', '拒绝',
+        '投标人须知', '须知前附表', '资格条件', '资格要求',
+    ]
+
+    @staticmethod
+    def _render_table_as_markdown(table_data):
+        # type: (Dict) -> str
+        """Render a parsed table (from tender_parsing) as a markdown table."""
+        rows = table_data.get('rows', [])
+        if not rows:
+            return ''
+        # Build markdown table
+        lines = []
+        for i, row in enumerate(rows):
+            line = '| ' + ' | '.join(cell.replace('|', '/') for cell in row) + ' |'
+            lines.append(line)
+            if i == 0:
+                # Add separator after header
+                lines.append('|' + '|'.join(['---'] * len(row)) + '|')
+        return '\n'.join(lines)
+
     def _extract_scoring_sections(self, sections):
         # type: (List[Dict]) -> str
-        """Locate and extract full text of scoring/evaluation sections from parsed tender."""
-        SCORING_KEYWORDS = [
-            '评标', '评审', '评分', '打分', '计分',
-            '评标办法', '评标标准', '评分标准', '评分细则',
-            '评审标准', '评审办法', '评分方法',
-        ]
+        """Locate and extract scoring/evaluation sections with table data."""
         scoring_parts = []
         for sec in (sections or []):
             title = sec.get('title', '')
-            # Check if section title contains scoring keywords
-            if any(kw in title for kw in SCORING_KEYWORDS):
+            if any(kw in title for kw in self.SCORING_KEYWORDS):
+                part = f"## {title}"
                 content = sec.get('content', '')
                 if content and len(content) > 20:
-                    scoring_parts.append(f"## {title}\n{content}")
+                    part += f"\n{content}"
+                # Extract tables within this section
+                for tbl in sec.get('tables', []):
+                    md_table = self._render_table_as_markdown(tbl)
+                    if md_table:
+                        part += f"\n\n{md_table}"
+                scoring_parts.append(part)
+        return '\n\n'.join(scoring_parts) if scoring_parts else ''
 
-        return "\n\n".join(scoring_parts) if scoring_parts else ""
+    def _extract_rejection_sections(self, sections):
+        # type: (List[Dict]) -> str
+        """Locate and extract rejection/disqualification sections with table data."""
+        rejection_parts = []
+        for sec in (sections or []):
+            title = sec.get('title', '')
+            if any(kw in title for kw in self.REJECTION_KEYWORDS):
+                part = f"## {title}"
+                content = sec.get('content', '')
+                if content and len(content) > 20:
+                    part += f"\n{content}"
+                for tbl in sec.get('tables', []):
+                    md_table = self._render_table_as_markdown(tbl)
+                    if md_table:
+                        part += f"\n\n{md_table}"
+                rejection_parts.append(part)
+        return '\n\n'.join(rejection_parts) if rejection_parts else ''
 
-    async def _analyze_and_build(self, llm, raw_text, sections):
-        # type: (Any, str, List[Dict]) -> Dict
+    async def _analyze_and_build(self, llm, raw_text, sections, progress_cb=None):
+        # type: (Any, str, List[Dict], Any) -> Dict
         """V3: Analyze tender → derive bid structure in two passes."""
 
-        # ── Step 0: Extract scoring sections for targeted analysis ──
+        def _progress(msg):
+            """Send progress update if callback is provided."""
+            if progress_cb:
+                try:
+                    progress_cb(msg)
+                except Exception:
+                    pass
+
+        # ── Step 0: Extract scoring & rejection sections (with tables) ──
         scoring_text = self._extract_scoring_sections(sections)
+        rejection_text = self._extract_rejection_sections(sections)
         if scoring_text:
-            logger.info(f"Located scoring sections: {len(scoring_text)} chars")
+            logger.info(f"Located scoring sections: {len(scoring_text)} chars "
+                        f"(includes structured tables)")
+            _progress(f"🏆 提取评分章节: {len(scoring_text)} 字符 (含表格结构)")
+        if rejection_text:
+            logger.info(f"Located rejection sections: {len(rejection_text)} chars")
+            _progress(f"🔴 提取废标章节: {len(rejection_text)} 字符")
 
         # Prepare text: use full raw_text, truncate if too long
         text_for_analysis = raw_text
@@ -365,21 +426,42 @@ class RequirementExtractionSkill(BaseSkill):
             )
             logger.info(f"Tender text truncated: {len(raw_text)} → {len(text_for_analysis)} chars")
 
-        # Append scoring sections if they exist and were likely truncated
+        # Append scoring sections (with structured tables) if truncated
         if scoring_text and len(raw_text) > self.MAX_CHUNK_SIZE:
-            # Check if scoring text is already covered
             if scoring_text[:100] not in text_for_analysis:
-                supplement = f"\n\n【评标办法原文（定向提取）】\n{scoring_text[:8000]}"
+                supplement = f"\n\n【评标办法原文（定向提取，含表格结构）】\n{scoring_text[:6000]}"
                 text_for_analysis += supplement
                 logger.info(f"Appended scoring section: +{len(supplement)} chars")
 
-        # ── Pass 1: Deep analysis ──
+        # Append rejection sections if truncated
+        if rejection_text and len(raw_text) > self.MAX_CHUNK_SIZE:
+            if rejection_text[:100] not in text_for_analysis:
+                supplement = f"\n\n【废标/否决条件原文（定向提取）】\n{rejection_text[:4000]}"
+                text_for_analysis += supplement
+                logger.info(f"Appended rejection section: +{len(supplement)} chars")
+
+        # ── Pass 1: Deep analysis (with retry) ──
         logger.info("Pass 1: Analyzing tender document...")
+        _progress("🧠 Pass 1/3: AI 正在分析招标文件要求（可能需要 2-5 分钟）...")
         analysis = None
         try:
             prompt1 = ANALYSIS_PROMPT.format(tender_text=text_for_analysis)
-            response1 = await llm.generate(prompt1, system=ANALYSIS_SYSTEM)
-            analysis = _safe_parse_json(response1)
+            _progress(f"   └─ Prompt 大小: {len(prompt1)} 字符, 模型: {llm.get_model_name()}")
+            # Try up to 2 times to handle transient Qwen API timeouts
+            for attempt in range(2):
+                try:
+                    response1 = await llm.generate(prompt1, system=ANALYSIS_SYSTEM)
+                    analysis = _safe_parse_json(response1)
+                    if analysis:
+                        break
+                except Exception as retry_err:
+                    if attempt == 0:
+                        logger.warning(f"Pass 1 attempt 1 failed ({retry_err}), retrying in 3s...")
+                        _progress(f"⚠️ Pass 1 第1次尝试失败: {str(retry_err)[:80]}，3秒后重试...")
+                        import asyncio
+                        await asyncio.sleep(3)
+                    else:
+                        raise
             if analysis:
                 # Log key findings
                 rej_count = len(analysis.get("rejection_conditions", []))
@@ -392,17 +474,25 @@ class RequirementExtractionSkill(BaseSkill):
                     f"{eval_count} evaluation criteria, "
                     f"explicit_format={'yes' if has_format else 'no'}"
                 )
+                _progress(
+                    f"✅ Pass 1 完成: {doc_count} 个必须文件, "
+                    f"{rej_count} 个废标条件, "
+                    f"{eval_count} 个评分大类"
+                )
         except Exception as e:
             logger.error(f"Pass 1 analysis failed: {e}")
+            _progress(f"❌ Pass 1 失败: {str(e)[:100]}")
 
         if not analysis:
             logger.warning("Pass 1 failed, falling back to V2 section classification")
+            _progress("⚠️ AI 分析失败，降级到规则分类模式...")
             if sections:
                 return await self._structure_from_sections(llm, sections, raw_text)
             return None
 
         # ── Pass 2: Generate bid structure ──
         logger.info("Pass 2: Generating bid document structure...")
+        _progress("📝 Pass 2/3: AI 正在生成投标文件大纲（可能需要 3-5 分钟）...")
         try:
             analysis_json = json.dumps(analysis, ensure_ascii=False, indent=2)
             # Provide extra tender context for Pass 2
@@ -447,8 +537,10 @@ class RequirementExtractionSkill(BaseSkill):
                             rej_secs += 1
                 logger.info(f"Pass 2 results: {total_secs} sections, "
                              f"{rej_secs} with rejection risk")
+                _progress(f"✅ Pass 2 完成: {total_secs} 个章节, {rej_secs} 个有废标风险")
 
                 # ── Pass 3: Deterministic verification ──
+                _progress("🔍 Pass 3/3: 快速校验和联动匹配...")
                 verification = self._verify_structure(analysis, structure)
                 structure["verification"] = verification
                 logger.info(
@@ -457,6 +549,25 @@ class RequirementExtractionSkill(BaseSkill):
                     f"evaluation {verification['evaluation_check']['covered']}/{verification['evaluation_check']['total']}, "
                     f"documents {verification['document_check']['covered']}/{verification['document_check']['total']}"
                 )
+
+                # ── Inject linkage into each section for frontend ──
+                linkage = verification.get("section_linkage", {})
+                linked_count = 0
+                for vol in structure.get("volumes", []):
+                    for sec in vol.get("sections", []):
+                        title = sec.get("title", "")
+                        if title in linkage:
+                            sec["linked_scoring"] = linkage[title].get("scoring_items", [])
+                            sec["linked_rejection"] = linkage[title].get("rejection_items", [])
+                            sec["linked_total_score"] = linkage[title].get("total_score", 0)
+                            linked_count += 1
+                        else:
+                            sec["linked_scoring"] = []
+                            sec["linked_rejection"] = []
+                            sec["linked_total_score"] = 0
+                if linked_count:
+                    logger.info(f"Section linkage: {linked_count} sections linked to scoring/rejection items")
+                    _progress(f"✅ Pass 3 完成: {linked_count} 个章节关联到评分/废标项")
 
                 return structure
 
@@ -631,6 +742,55 @@ class RequirementExtractionSkill(BaseSkill):
         fmt = analysis.get("format_requirements", {})
         deadline = analysis.get("deadline_info", {})
 
+        # ── Build forward index: section → linked scoring + rejection ──
+        section_linkage = {}  # type: Dict[str, Dict]
+        for ei in eval_items:
+            matched = ei.get("matched_section", "")
+            if matched:
+                if matched not in section_linkage:
+                    section_linkage[matched] = {
+                        "scoring_items": [], "rejection_items": [],
+                        "total_score": 0,
+                    }
+                section_linkage[matched]["scoring_items"].append({
+                    "item": ei["item"],
+                    "max_score": ei.get("max_score", 0),
+                    "description": ei.get("description", ""),
+                    "sub_criteria": ei.get("sub_criteria", []),
+                })
+                section_linkage[matched]["total_score"] += ei.get("max_score", 0)
+
+        for ri in rejection_items:
+            matched = ri.get("matched_section", "")
+            if matched:
+                if matched not in section_linkage:
+                    section_linkage[matched] = {
+                        "scoring_items": [], "rejection_items": [],
+                        "total_score": 0,
+                    }
+                section_linkage[matched]["rejection_items"].append({
+                    "condition": ri["condition"],
+                    "source": ri.get("source", ""),
+                })
+
+        # ── Validate sub_criteria score sums ──
+        score_warnings = []
+        for ei in eval_items:
+            subs = ei.get("sub_criteria", [])
+            if subs:
+                sub_total = sum(s.get("score", 0) for s in subs)
+                max_score = ei.get("max_score", 0)
+                if max_score > 0 and sub_total != max_score:
+                    score_warnings.append({
+                        "item": ei["item"],
+                        "max_score": max_score,
+                        "sub_total": sub_total,
+                        "diff": max_score - sub_total,
+                    })
+        if score_warnings:
+            logger.warning(f"Score sum mismatch in {len(score_warnings)} items: "
+                          f"{score_warnings}")
+
         return {
             "rejection_check": {
                 "total": len(rejection_items),
@@ -649,6 +809,8 @@ class RequirementExtractionSkill(BaseSkill):
             },
             "format_info": fmt,
             "deadline_info": deadline,
+            "section_linkage": section_linkage,
+            "score_warnings": score_warnings,
         }
 
     def _build_from_analysis(self, analysis):

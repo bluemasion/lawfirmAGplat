@@ -8,6 +8,9 @@ from typing import Any, Dict, List, Optional
 
 from app.core.skills.base import BaseSkill
 from app.core.skills.builtin.data_retrieval import DataRetrievalSkill
+from app.core.skills.builtin.material_matcher import (
+    MaterialMatcher, format_materials_for_prompt,
+)
 from app.core.llm import get_llm
 from app.utils.logger import logger
 
@@ -598,23 +601,40 @@ class ContentGenerationSkill(BaseSkill):
         reference_data = params.get("reference_data", "暂无参考资料")
         llm_provider = params.get("llm_provider", "qwen")
         skeleton = params.get("skeleton", None)
+        company = params.get("company", "")  # company name for material filtering
 
         title = section.get("title", "未知章节")
         sec_type = section.get("type", "narrative")
         content_hints = section.get("content_hints", "")
         data_fields = section.get("data_fields", [])
+        content_outline = section.get("content_outline", [])
+        material_refs = section.get("material_refs", [])
 
         logger.info(f"Generating (stream) content for: [{sec_type}] {title}")
 
+        # ── Match materials for this section ──
+        matched_materials = {}
+        if material_refs:
+            store = _get_material_store()
+            if store:
+                matcher = MaterialMatcher(store)
+                matched_materials = matcher.match_for_section(section, company=company)
+
         # Non-narrative types: generate instantly, callback once
         if sec_type == "qualification":
-            content = self._generate_qualification_placeholder(title, content_hints, data_fields)
+            content = self._generate_qualification_placeholder(
+                title, content_hints, data_fields,
+                matched_quals=matched_materials.get("qualifications", [])
+            )
             if chunk_callback:
                 await chunk_callback(content)
             return self._result(title, content, data_fields or [title], "placeholder")
 
         if sec_type == "table":
-            content = await self._generate_table_by_template(title, content_hints, data_fields)
+            content = await self._generate_table_by_template(
+                title, content_hints, data_fields,
+                company=company
+            )
             if chunk_callback:
                 await chunk_callback(content)
             missing = self._scan_missing(content)
@@ -630,25 +650,58 @@ class ContentGenerationSkill(BaseSkill):
         # ── narrative → LLM streaming ──
         content = await self._generate_narrative_section_streaming(
             title, content_hints, reference_data, company_info,
-            llm_provider, skeleton, chunk_callback
+            llm_provider, skeleton, chunk_callback,
+            content_outline=content_outline,
+            matched_materials=matched_materials,
+            company=company,
         )
         missing = self._scan_missing(content)
         return self._result(title, content, missing, "generated")
 
     async def _generate_narrative_section_streaming(
         self, title, hints, reference, company_info,
-        llm_provider, skeleton=None, chunk_callback=None
+        llm_provider, skeleton=None, chunk_callback=None,
+        content_outline=None, matched_materials=None, company="",
     ):
-        # type: (str, str, str, str, str, Optional[str], Any) -> str
+        # type: (str, str, str, str, str, Optional[str], Any, Optional[List], Optional[Dict], str) -> str
         """Stream narrative section using llm.stream(), calling chunk_callback per token."""
         llm = get_llm(llm_provider)
 
-        # Build prompt (same logic as _generate_narrative_section)
+        # Build prompt
         skeleton_hint = ""
         if skeleton:
             skeleton_hint = f"\n【参考骨架（来自历史模板）】\n{skeleton}\n请参考以上骨架结构，结合本次招标要求改写。\n"
 
-        # S4: material RAG context
+        # ── content_outline injection ──
+        outline_hint = ""
+        if content_outline:
+            outline_hint = "\n【本章内容大纲（必须覆盖以下要点）】\n"
+            for i, point in enumerate(content_outline, 1):
+                outline_hint += f"{i}. {point}\n"
+            outline_hint += "请确保每个要点都有对应段落内容回应。\n"
+            logger.info(f"  Content outline injected: {len(content_outline)} points for '{title}'")
+
+        # ── Material injection via MaterialMatcher ──
+        structured_context = ""
+        if matched_materials:
+            structured_context = format_materials_for_prompt(matched_materials)
+            if structured_context:
+                logger.info(f"  MaterialMatcher injected: {matched_materials.get('match_summary', '')}")
+        else:
+            # Fallback: use MaterialMatcher with title-based matching if no pre-matched data
+            store = _get_material_store()
+            if store:
+                try:
+                    matcher = MaterialMatcher(store)
+                    fallback_section = {"title": title, "type": "narrative", "material_refs": [title]}
+                    auto_matched = matcher.match_for_section(fallback_section, company=company)
+                    structured_context = format_materials_for_prompt(auto_matched)
+                    if structured_context:
+                        logger.info(f"  MaterialMatcher (auto): {auto_matched.get('match_summary', '')}")
+                except Exception as e:
+                    logger.debug(f"MaterialMatcher auto-match failed for '{title}': {e}")
+
+        # ── Narrative RAG: search for relevant narrative chunks ──
         material_context = ""
         store = _get_material_store()
         if store:
@@ -663,72 +716,13 @@ class ContentGenerationSkill(BaseSkill):
             except Exception as e:
                 logger.debug(f"Material RAG failed for '{title}': {e}")
 
-        # S7-P1B: structured material injection
-        structured_context = ""
-        if store:
-            title_lower = title.lower()
-            try:
-                team_kws = ["团队介绍", "人员介绍", "律师团队", "拟投入人员",
-                            "项目团队", "核心团队", "服务团队", "人员配置"]
-                if any(kw in title_lower for kw in team_kws):
-                    resumes = store.get_resumes()
-                    if resumes:
-                        structured_context = "\n【素材库：律师简历数据】\n"
-                        for r in resumes[:8]:
-                            structured_context += (
-                                f"- {r.get('name', '?')}, "
-                                f"{r.get('title', '律师')}, "
-                                f"执业{r.get('years_of_practice', '?')}年, "
-                                f"擅长{r.get('specialty', '?')}"
-                            )
-                            cases = r.get('representative_cases', [])
-                            if cases:
-                                structured_context += f", 代表案例: {'; '.join(str(c) for c in cases[:3])}"
-                            structured_context += "\n"
-                        structured_context += "请使用以上真实律师信息撰写，不要编造姓名或经历。\n"
-
-                proj_kws = ["业绩介绍", "类似业绩", "项目经验", "服务案例",
-                            "成功案例", "代表业绩", "项目业绩"]
-                if any(kw in title_lower for kw in proj_kws):
-                    projects = store.get_projects()
-                    if projects:
-                        structured_context = "\n【素材库：项目业绩数据】\n"
-                        for p in projects[:6]:
-                            structured_context += (
-                                f"- {p.get('project_name', '?')}, "
-                                f"委托方: {p.get('client', '?')}, "
-                                f"金额: {p.get('contract_amount', p.get('amount', '?'))}, "
-                                f"类型: {p.get('project_type', '?')}"
-                            )
-                            desc = p.get('description', '')
-                            if desc:
-                                structured_context += f", {desc[:60]}"
-                            structured_context += "\n"
-                        structured_context += "请使用以上真实项目信息撰写，不要编造项目名称或金额。\n"
-
-                qual_kws = ["资质", "资格", "荣誉", "证书"]
-                if any(kw in title_lower for kw in qual_kws):
-                    quals = store.get_qualifications()
-                    if quals:
-                        structured_context = "\n【素材库：资质证书数据】\n"
-                        for q in quals[:10]:
-                            structured_context += (
-                                f"- {q.get('name', '?')}, "
-                                f"编号: {q.get('number', '?')}, "
-                                f"颁发: {q.get('issuer', '?')}, "
-                                f"有效期至: {q.get('valid_until', '?')}\n"
-                            )
-                        structured_context += "请使用以上真实资质信息。\n"
-            except Exception as e:
-                logger.debug(f"Structured material inject failed for '{title}': {e}")
-
         selected_prompt = _route_prompt(title)
         prompt = selected_prompt.format(
             section_title=title,
             content_hints=hints or "按照招标要求撰写",
             reference_data=reference,
             company_info=company_info,
-            skeleton_hint=skeleton_hint + material_context + structured_context,
+            skeleton_hint=skeleton_hint + outline_hint + material_context + structured_context,
         )
 
         # Stream from LLM, accumulate full content
@@ -775,7 +769,9 @@ class ContentGenerationSkill(BaseSkill):
 
     # ── Table: code templates + data ──
 
-    async def _generate_table_by_template(self, title: str, hints: str, data_fields: List[str]) -> str:
+    async def _generate_table_by_template(self, title: str, hints: str,
+                                          data_fields: List[str],
+                                          company: str = "") -> str:
         """Generate table section using code templates and RAG data."""
         profile = self._data_retrieval.get_company_profile()
 
@@ -785,7 +781,7 @@ class ContentGenerationSkill(BaseSkill):
                 generator = getattr(self, generator_name, None)
                 if generator:
                     logger.info(f"  → Table template matched: {tpl_name}")
-                    return generator(title, profile)
+                    return generator(title, profile, company=company)
 
         # No match → generic table
         logger.info(f"  → No table template match for '{title}', using generic")
@@ -897,7 +893,7 @@ class ContentGenerationSkill(BaseSkill):
 
     # ── Table generators ──
 
-    def _gen_company_basic_table(self, title: str, profile: Dict) -> str:
+    def _gen_company_basic_table(self, title: str, profile: Dict, **kwargs) -> str:
         return f"""## {title}
 
 | 项目 | 信息 |
@@ -917,7 +913,7 @@ class ContentGenerationSkill(BaseSkill):
 | 银行账号 | {profile.get('bank_account', '[待补充]')} |
 """
 
-    def _gen_price_overview_table(self, title: str, profile: Dict) -> str:
+    def _gen_price_overview_table(self, title: str, profile: Dict, **kwargs) -> str:
         return f"""## {title}
 
 | 序号 | 服务项目 | 单位 | 数量 | 单价（元） | 合计（元） | 备注 |
@@ -930,7 +926,7 @@ class ContentGenerationSkill(BaseSkill):
 > 注：以上报价为含税价格，税率为 [待补充：税率]%。
 """
 
-    def _gen_price_detail_table(self, title: str, profile: Dict) -> str:
+    def _gen_price_detail_table(self, title: str, profile: Dict, **kwargs) -> str:
         return f"""## {title}
 
 | 序号 | 费用项目 | 计算方式 | 金额（元） | 说明 |
@@ -942,12 +938,12 @@ class ContentGenerationSkill(BaseSkill):
 | | **合计** | | **[待补充：合计]** | |
 """
 
-    def _gen_project_history_table(self, title: str, profile: Dict) -> str:
+    def _gen_project_history_table(self, title: str, profile: Dict, company: str = "") -> str:
         # S4: Check material store for projects first
         projects = []
         store = _get_material_store()
         if store:
-            mat_projects = store.get_projects()
+            mat_projects = store.get_projects(company=company)
             if mat_projects:
                 projects = mat_projects
                 logger.info(f"  → Using {len(projects)} projects from material store")
@@ -974,12 +970,12 @@ class ContentGenerationSkill(BaseSkill):
         lines.append("> 注：以上业绩均为本律所近五年内完成的代表性项目，相关合同文件可供查验。")
         return "\n".join(lines) + "\n"
 
-    def _gen_team_table(self, title: str, profile: Dict) -> str:
+    def _gen_team_table(self, title: str, profile: Dict, company: str = "") -> str:
         # S4: Check material store for resumes first
         all_members = []
         store = _get_material_store()
         if store:
-            mat_resumes = store.get_resumes()
+            mat_resumes = store.get_resumes(company=company)
             if mat_resumes:
                 # Convert material store format to team member format
                 all_members = []
@@ -1041,7 +1037,7 @@ class ContentGenerationSkill(BaseSkill):
 
         return "\n".join(lines) + "\n"
 
-    def _gen_deviation_table(self, title: str, profile: Dict) -> str:
+    def _gen_deviation_table(self, title: str, profile: Dict, **kwargs) -> str:
         return f"""## {title}
 
 | 序号 | 招标文件条款号 | 招标文件条款内容 | 偏离情况 | 说明 |
@@ -1052,7 +1048,7 @@ class ContentGenerationSkill(BaseSkill):
 > 本公司对招标文件商务条款无偏离，完全接受招标文件的全部商务条款要求。
 """
 
-    def _gen_tech_deviation_table(self, title: str, profile: Dict) -> str:
+    def _gen_tech_deviation_table(self, title: str, profile: Dict, **kwargs) -> str:
         return f"""## {title}
 
 | 序号 | 招标文件条款号 | 技术要求 | 投标人响应 | 偏离程度 | 说明 |
@@ -1063,7 +1059,7 @@ class ContentGenerationSkill(BaseSkill):
 > 本公司对招标文件技术要求无偏离，完全响应招标文件的全部技术规格要求。
 """
 
-    def _gen_review_index_table(self, title: str, profile: Dict) -> str:
+    def _gen_review_index_table(self, title: str, profile: Dict, **kwargs) -> str:
         return f"""## {title}
 
 | 序号 | 评审内容 | 投标文件对应页码 | 备注 |
@@ -1079,7 +1075,7 @@ class ContentGenerationSkill(BaseSkill):
 | 9 | 报价文件 | [待补充：页码] | |
 """
 
-    def _gen_shareholder_table(self, title: str, profile: Dict) -> str:
+    def _gen_shareholder_table(self, title: str, profile: Dict, **kwargs) -> str:
         cn = profile.get("company_name", "[待补充：律所名称]")
         lr = profile.get("legal_rep", "[待补充：法定代表人]")
         return f"""## {title}
@@ -1123,7 +1119,29 @@ class ContentGenerationSkill(BaseSkill):
 
     # ── Qualification (unchanged from Phase 1) ──
 
-    def _generate_qualification_placeholder(self, title: str, hints: str, data_fields: List[str]) -> str:
+    def _generate_qualification_placeholder(self, title: str, hints: str,
+                                            data_fields: List[str],
+                                            matched_quals: List[dict] = None) -> str:
+        """Generate qualification section content.
+        
+        If matched qualifications are provided from the material store,
+        generates a real qualification list instead of placeholders.
+        """
+        if matched_quals:
+            lines = [f"## {title}\n"]
+            lines.append("以下为我方相关资质证书清单：\n")
+            lines.append("| 序号 | 资质/证书名称 | 证书编号 | 颁发机构 | 有效期 |")
+            lines.append("|------|--------------|---------|---------|--------|")
+            for i, q in enumerate(matched_quals, 1):
+                name = q.get('name', '[待补充]')
+                number = q.get('number', '-')
+                issuer = q.get('issuer', '-')
+                valid_until = q.get('valid_until', '-')
+                lines.append(f"| {i} | {name} | {number} | {issuer} | {valid_until} |")
+            lines.append("")
+            lines.append("> 注：以上资质证书复印件可供查验。")
+            logger.info(f"  → Qualification from material store: {len(matched_quals)} items")
+            return "\n".join(lines) + "\n"
         # Check if we have the qualification data
         quals_data = self._data_retrieval.get_qualifications()
         all_quals = quals_data.get("qualifications", [])

@@ -333,12 +333,54 @@ async def parse_tender_structure(file: UploadFile = File(...),
                     yield emit("log", message=f"   {i}. {t[:60]}")
 
             # ── Step 2: Tender Analysis (V3 multi-pass) ──
-            yield emit("phase", phase="analyzing", message=f"🤖 正在深度分析招标文件 (AI 两轮解析)...")
-            extract_result = await _extractor.execute({
-                "raw_text": parse_result["raw_text"],
-                "sections": parse_result["sections"],
-                "llm_provider": llm_provider,
-            })
+            yield emit("phase", phase="analyzing", message=f"🤖 正在深度分析招标文件 (AI 多轮解析)...")
+
+            # Use asyncio.Queue to stream progress from extractor to SSE
+            progress_queue = asyncio.Queue()
+            _sentinel = object()
+
+            def _on_progress(msg):
+                """Callback from extractor → pushes to queue."""
+                progress_queue.put_nowait(msg)
+
+            async def _run_extractor():
+                """Run extractor in background, put result or error."""
+                try:
+                    result = await _extractor.execute({
+                        "raw_text": parse_result["raw_text"],
+                        "sections": parse_result["sections"],
+                        "llm_provider": llm_provider,
+                        "progress_callback": _on_progress,
+                    })
+                    progress_queue.put_nowait(("__RESULT__", result))
+                except Exception as exc:
+                    progress_queue.put_nowait(("__ERROR__", exc))
+
+            # Start extractor as background task
+            extractor_task = asyncio.create_task(_run_extractor())
+
+            # Drain queue: yield progress events until extractor finishes
+            extract_result = None
+            while True:
+                try:
+                    item = await asyncio.wait_for(progress_queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    # No progress yet — send heartbeat to keep SSE alive
+                    yield emit("heartbeat", message="⏳")
+                    continue
+
+                if isinstance(item, tuple) and len(item) == 2:
+                    if item[0] == "__RESULT__":
+                        extract_result = item[1]
+                        break
+                    elif item[0] == "__ERROR__":
+                        raise item[1]
+                else:
+                    # Regular progress message from extractor
+                    yield emit("log", message=str(item))
+
+            # Ensure task is done
+            await extractor_task
 
             # Show analysis results
             volumes = extract_result.get("volumes", [])
@@ -616,6 +658,7 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
                         "reference_data": reference_data,
                         "llm_provider": llm_provider,
                         "skeleton": skeleton_text,
+                        "company": company_data.get("company_name", ""),
                     }, chunk_callback=on_chunk)
 
                     result["order"] = section.get("order", idx + 1)
