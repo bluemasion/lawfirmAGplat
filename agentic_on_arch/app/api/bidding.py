@@ -246,13 +246,114 @@ async def generate_bidding_document(req: BiddingRequest):
 
 
 # ─────────────────────────────────────────────
+#  2.5 Image OCR API
+# ─────────────────────────────────────────────
+
+@router.post("/ocr-images")
+async def ocr_material_images(force: bool = False):
+    """Batch OCR all material images in data/materials/images/.
+    
+    Args:
+        force: If True, re-process already OCR'd images
+    
+    Returns:
+        Summary of OCR results with type classification
+    """
+    from app.core.skills.builtin.material_store import get_material_store
+    from app.core.skills.builtin.image_ocr import batch_ocr
+
+    store = get_material_store()
+    if not store:
+        return {"success": False, "message": "Material store not available"}
+
+    images_dir = os.path.join(
+        os.path.dirname(__file__), "..", "core", "skills", "builtin",
+        "..", "..", "..", "data", "materials", "images"
+    )
+    images_dir = os.path.normpath(images_dir)
+
+    if not os.path.exists(images_dir):
+        return {"success": False, "message": f"Images directory not found: {images_dir}"}
+
+    # Get already processed hashes
+    existing = store.get_processed_image_hashes() if not force else set()
+
+    # Run OCR
+    results = batch_ocr(images_dir, force=force, existing_hashes=existing)
+
+    # Save to DB
+    saved = store.save_image_meta(results)
+
+    # Build summary
+    type_counts = {}
+    for r in results:
+        t = r.get("image_type", "unknown")
+        type_counts[t] = type_counts.get(t, 0) + 1
+
+    return {
+        "success": True,
+        "data": {
+            "total_processed": len(results),
+            "saved": saved,
+            "skipped": len(existing),
+            "type_distribution": type_counts,
+            "sample_results": [
+                {
+                    "image": r.get("image_hash", ""),
+                    "type": r.get("image_type", ""),
+                    "confidence": r.get("confidence", 0),
+                    "text_preview": r.get("ocr_text", "")[:100],
+                    "structured": r.get("structured", {}),
+                }
+                for r in results[:5]
+            ],
+        },
+    }
+
+
+@router.get("/image-meta")
+async def get_image_meta_summary():
+    """Get summary of all OCR-processed images."""
+    from app.core.skills.builtin.material_store import get_material_store
+
+    store = get_material_store()
+    if not store:
+        return {"success": False, "message": "Material store not available"}
+
+    all_meta = store.get_all_image_meta()
+
+    type_counts = {}
+    for m in all_meta:
+        t = m.get("image_type", "unknown")
+        type_counts[t] = type_counts.get(t, 0) + 1
+
+    return {
+        "success": True,
+        "data": {
+            "total": len(all_meta),
+            "type_distribution": type_counts,
+            "items": [
+                {
+                    "hash": m["image_hash"],
+                    "type": m["image_type"],
+                    "confidence": m["confidence"],
+                    "text_preview": m["ocr_text"][:80],
+                    "structured": m["structured"],
+                }
+                for m in all_meta
+            ],
+        },
+    }
+
+
+# ─────────────────────────────────────────────
 #  3. 新版完整投标管线 (Phase 1)
 # ─────────────────────────────────────────────
 
 import os
 import time
 import asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from app.core.skills.builtin.tender_parsing import TenderParsingSkill
 from app.core.skills.builtin.requirement_extraction import RequirementExtractionSkill
@@ -264,9 +365,21 @@ from app.core.skills.builtin.template_store import TemplateStoreSkill
 from app.core.skills.builtin.data_retrieval import DataRetrievalSkill
 from app.core.rag.tender_index import TenderIndex
 from app.config import settings
+from app.core.skills.builtin.bidding_store import get_bidding_store
 
-# In-memory storage for bidding tasks (production would use DB)
-_bidding_tasks: Dict[str, Dict[str, Any]] = {}
+# SQLite-backed task storage (persistent across restarts)
+_bid_store = get_bidding_store()
+
+# In-memory cache for non-serializable objects (tender_index)
+_tender_indexes: Dict[str, Any] = {}
+
+
+def _get_task(task_id: str) -> Optional[Dict[str, Any]]:
+    """Get task from DB, merge with in-memory tender_index."""
+    task = _bid_store.get_task(task_id)
+    if task:
+        task["tender_index"] = _tender_indexes.get(task_id)
+    return task
 
 # Skill instances
 _parser = TenderParsingSkill()
@@ -453,18 +566,20 @@ async def parse_tender_structure(file: UploadFile = File(...),
                 except Exception:
                     pass
 
-            _bidding_tasks[task_id] = {
+            # Save to SQLite (persistent)
+            _bid_store.save_task({
                 "task_id": task_id,
                 "status": "parsed",
-                "tender_file": temp_path,
-                "parse_result": parse_result,
+                "tender_filename": filename,
+                "tender_file_path": temp_path,
                 "requirements": extract_result,
-                "tender_index": tender_index,
+                "parse_result": parse_result,
                 "generated_sections": [],
-                "verification": None,
-                "output_file": None,
+                "output_file": "",
                 "created_at": time.time(),
-            }
+            })
+            # Keep tender_index in memory (not serializable)
+            _tender_indexes[task_id] = tender_index
 
             yield emit("log", message=f"🎉 解析全部完成! 任务ID: {task_id}")
 
@@ -484,6 +599,58 @@ async def parse_tender_structure(file: UploadFile = File(...),
     return StreamingResponse(_stream_parse(), media_type="text/event-stream")
 
 
+@router.get("/preview-materials/{task_id}")
+async def preview_materials(task_id: str, company: str = ""):
+    """预览素材匹配 — 返回每个章节能匹配到的素材摘要。
+
+    用于前端在 '选择投标主体' 步骤展示匹配结果。
+    """
+    task = _get_task(task_id)
+    if not task:
+        return {"success": False, "message": f"任务 {task_id} 不存在"}
+
+    requirements = task.get("requirements", {})
+    all_sections = []
+    for volume in requirements.get("volumes", []):
+        for section in volume.get("sections", []):
+            all_sections.append(section)
+
+    if not all_sections:
+        return {"success": True, "data": {"matches": [], "summary": {}}}
+
+    from app.core.skills.builtin.material_store import get_material_store
+    from app.core.skills.builtin.material_matcher import MaterialMatcher
+
+    store = get_material_store()
+    if not store:
+        return {"success": True, "data": {"matches": [], "summary": {"error": "素材库不可用"}}}
+
+    matcher = MaterialMatcher(store)
+    mat_summary = store.get_summary(company=company)
+
+    matches = []
+    for sec in all_sections:
+        matched = matcher.match_for_section(sec, company=company)
+        matches.append({
+            "title": sec.get("title", ""),
+            "type": sec.get("type", ""),
+            "match_summary": matched.get("match_summary", ""),
+            "resumes_count": len(matched.get("resumes", [])),
+            "projects_count": len(matched.get("projects", [])),
+            "qualifications_count": len(matched.get("qualifications", [])),
+        })
+
+    return {
+        "success": True,
+        "data": {
+            "company": company,
+            "store_summary": mat_summary,
+            "matches": matches,
+            "matched_sections": sum(1 for m in matches if m["match_summary"]),
+            "total_sections": len(matches),
+        }
+    }
+
 @router.post("/generate-full/{task_id}")
 async def generate_full_document(task_id: str, req: FullBiddingRequest):
     """逐章节生成完整投标文件 — SSE 流式进度 + 实时内容输出
@@ -499,7 +666,7 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
         - section_cached: section loaded from cache (skipped)
         - assembling / verifying / complete: final stages
     """
-    task = _bidding_tasks.get(task_id)
+    task = _get_task(task_id)
     if not task:
         return {"success": False, "message": f"任务 {task_id} 不存在"}
 
@@ -575,6 +742,46 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
             cp = _section_cache_path(i, sec.get("title", ""))
             if os.path.exists(cp):
                 cached_count += 1
+
+        # ── Step 3.5: Material pre-matching ──
+        from app.core.skills.builtin.material_store import get_material_store
+        from app.core.skills.builtin.material_matcher import MaterialMatcher, format_materials_for_prompt
+        store = get_material_store()
+        company_name = company_data.get("company_name", "")
+        logger.info(f"[generate-full] company_data keys={list(company_data.keys())}, "
+                    f"company_name='{company_name}'")
+        material_summary_parts = []
+        if store:
+            matcher = MaterialMatcher(store)
+            mat_summary = store.get_summary(company=company_name)
+            yield _sse({
+                "type": "log",
+                "message": f"📦 素材库: {mat_summary.get('resumes',0)}份简历, "
+                           f"{mat_summary.get('projects',0)}项业绩, "
+                           f"{mat_summary.get('qualifications',0)}项资质",
+            })
+            matched_count = 0
+            for sec in all_sections:
+                matched = matcher.match_for_section(sec, company=company_name)
+                sec["pre_matched_materials"] = matched
+                summary = matched.get("match_summary", "")
+                if summary:
+                    matched_count += 1
+                    material_summary_parts.append(f"{sec.get('title','')}: {summary}")
+            if matched_count:
+                yield _sse({
+                    "type": "log",
+                    "message": f"🎯 素材匹配: {matched_count}/{total_sections} 个章节匹配到素材",
+                })
+                for part in material_summary_parts[:5]:
+                    yield _sse({"type": "log", "message": f"   └─ {part}"})
+                if len(material_summary_parts) > 5:
+                    yield _sse({"type": "log", "message": f"   └─ ... 还有{len(material_summary_parts)-5}个"})
+            else:
+                yield _sse({
+                    "type": "log",
+                    "message": "⚠️ 素材匹配: 未匹配到任何素材，将使用AI生成",
+                })
 
         yield _sse({
             "type": "start",
@@ -761,9 +968,13 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
             logger.error(f"Verification error: {e}")
             verification = {"overall_status": "ERROR", "error": str(e)}
 
-        # Update task
-        task["status"] = "completed"
-        task["generated_sections"] = generated_sections
+        # Persist to SQLite
+        _bid_store.update_status(
+            task_id, "done",
+            output_file=assembly_result.get("file_path", ""),
+            generated_sections=generated_sections,
+            company_name=company_data.get("company_name", ""),
+        )
 
         yield _sse({
             "type": "complete",
@@ -793,7 +1004,7 @@ async def clear_section_cache(task_id: str):
 @router.post("/verify/{task_id}")
 async def verify_document(task_id: str):
     """对已生成的投标文件重新运行校验"""
-    task = _bidding_tasks.get(task_id)
+    task = _get_task(task_id)
     if not task:
         return {"success": False, "message": f"任务 {task_id} 不存在"}
 
@@ -817,7 +1028,7 @@ async def download_document(task_id: str):
     """下载生成的投标文件 .docx"""
     from fastapi.responses import FileResponse
 
-    task = _bidding_tasks.get(task_id)
+    task = _get_task(task_id)
     if not task:
         return {"success": False, "message": f"任务 {task_id} 不存在"}
 
@@ -825,7 +1036,7 @@ async def download_document(task_id: str):
     if not file_path or not os.path.exists(file_path):
         return {"success": False, "message": "文件尚未生成或已被删除"}
 
-    filename = task.get("output_filename", "bid_document.docx")
+    filename = os.path.basename(file_path)
     return FileResponse(
         path=file_path,
         filename=filename,
@@ -835,15 +1046,20 @@ async def download_document(task_id: str):
 
 @router.get("/tasks")
 async def list_tasks():
-    """列出所有投标任务"""
+    """列出所有投标任务（从SQLite读取，持久化）"""
+    all_tasks = _bid_store.list_tasks(limit=50)
     tasks = []
-    for tid, t in _bidding_tasks.items():
+    for t in all_tasks:
         tasks.append({
-            "task_id": tid,
+            "task_id": t.get("task_id"),
             "status": t.get("status"),
+            "tender_filename": t.get("tender_filename", ""),
+            "company_name": t.get("company_name", ""),
             "created_at": t.get("created_at"),
+            "confirmed_at": t.get("confirmed_at"),
+            "completed_at": t.get("completed_at"),
             "section_count": len(t.get("generated_sections", [])),
-            "has_output": t.get("output_file") is not None,
+            "has_output": bool(t.get("output_file")),
         })
     return {"success": True, "data": tasks}
 
@@ -869,7 +1085,7 @@ async def get_template(template_id: str):
 @router.post("/templates/save/{task_id}")
 async def save_as_template(task_id: str):
     """将已完成的投标任务存为模板"""
-    task = _bidding_tasks.get(task_id)
+    task = _get_task(task_id)
     if not task:
         return {"success": False, "message": f"任务 {task_id} 不存在"}
     if not task.get("generated_sections"):

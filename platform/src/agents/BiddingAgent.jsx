@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { FileText, Loader2, CheckCircle, Download, Upload, Sparkles, RotateCcw, Send, AlertTriangle, ChevronDown, Eye, X, Package } from 'lucide-react';
 import MaterialPanel from './MaterialPanel';
 
-const API_BASE = 'http://localhost:8001';
+const API_BASE = 'http://localhost:8000';
 
 export default function BiddingAgent() {
     const [messages, setMessages] = useState([
@@ -12,7 +12,7 @@ export default function BiddingAgent() {
     const [requirements, setRequirements] = useState(null);
     const [outputFilename, setOutputFilename] = useState('');
     const [processing, setProcessing] = useState(false);  // true when AI is working
-    const [phase, setPhase] = useState('idle'); // idle | parsing | confirming | generating | done
+    const [phase, setPhase] = useState('idle'); // idle | parsing | confirming | material_selection | generating | done
     const [showStructure, setShowStructure] = useState(false);
     const [showMaterialPanel, setShowMaterialPanel] = useState(false);
     const [sectionChecked, setSectionChecked] = useState({}); // { "vi-si": true/false }
@@ -20,6 +20,12 @@ export default function BiddingAgent() {
     const [liveContent, setLiveContent] = useState({ title: '', text: '', index: 0 }); // streaming content preview
     const [completedSections, setCompletedSections] = useState({}); // { title: content } for review
     const [viewingSection, setViewingSection] = useState(null); // title of section user is viewing
+
+    // Material selection state
+    const [selectedCompany, setSelectedCompany] = useState('');
+    const [companies, setCompanies] = useState([]);
+    const [materialPreview, setMaterialPreview] = useState(null);
+    const [loadingPreview, setLoadingPreview] = useState(false);
 
     // Company data for generation
     const [companyData, setCompanyData] = useState({
@@ -321,10 +327,13 @@ export default function BiddingAgent() {
         let genStartTime = Date.now();
 
         try {
+            // Use selectedCompany directly (not from companyData state which may be stale
+            // due to React's async setState)
+            const effectiveCompanyData = { ...companyData, company_name: selectedCompany || companyData.company_name };
             const res = await fetch(`${API_BASE}/api/bidding/generate-full/${taskId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ company_data: companyData, llm_provider: 'qwen' }),
+                body: JSON.stringify({ company_data: effectiveCompanyData, llm_provider: 'qwen' }),
             });
 
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -526,6 +535,7 @@ export default function BiddingAgent() {
                                 {phase === 'idle' && '等待上传'}
                                 {phase === 'parsing' && '解析中...'}
                                 {phase === 'confirming' && `大纲确认 · ${requirements?.volumes?.reduce((s, v) => s + (v.sections?.length || 0), 0) || 0} 章节`}
+                                {phase === 'material_selection' && '选择投标主体'}
                                 {phase === 'generating' && `生成中 ${genProgress.done}/${genProgress.total}`}
                                 {phase === 'done' && '✅ 完成'}
                             </p>
@@ -977,15 +987,143 @@ export default function BiddingAgent() {
                                     <span>📋 {requirements?.volumes?.reduce((s, v) => s + (v.sections || []).filter(x => x.type === 'form').length, 0)}</span>
                                     <span>🏅 {requirements?.volumes?.reduce((s, v) => s + (v.sections || []).filter(x => x.type === 'qualification').length, 0)}</span>
                                 </div>
-                                <button onClick={startGeneration}
+                                <button onClick={async () => {
+                                    // Fetch companies list and go to material_selection phase
+                                    try {
+                                        console.log('[MaterialSelection] Starting..., taskId=', taskId);
+                                        const res = await fetch(`${API_BASE}/api/bidding/materials/companies`);
+                                        const data = await res.json();
+                                        console.log('[MaterialSelection] Companies API response:', JSON.stringify(data).substring(0, 500));
+                                        const companyList = data.data?.companies || [];
+                                        console.log('[MaterialSelection] companyList:', companyList.length, companyList.map(c => c.name));
+                                        setCompanies(companyList);
+                                        // Auto-select first company if any
+                                        if (companyList.length > 0) {
+                                            const first = companyList[0].name;
+                                            setSelectedCompany(first);
+                                            console.log('[MaterialSelection] Loading preview for:', first);
+                                            // Load preview for first company
+                                            setLoadingPreview(true);
+                                            const previewRes = await fetch(`${API_BASE}/api/bidding/preview-materials/${taskId}?company=${encodeURIComponent(first)}`);
+                                            const previewData = await previewRes.json();
+                                            console.log('[MaterialSelection] Preview result:', JSON.stringify(previewData).substring(0, 500));
+                                            setMaterialPreview(previewData.data);
+                                            setLoadingPreview(false);
+                                        }
+                                        console.log('[MaterialSelection] Setting phase to material_selection');
+                                        setPhase('material_selection');
+                                    } catch (e) {
+                                        console.error('[MaterialSelection] FAILED:', e);
+                                        // Fallback: skip material selection, go directly to generation
+                                        startGeneration();
+                                    }
+                                }}
                                     disabled={processing || Object.values(sectionChecked).filter(Boolean).length === 0}
                                     className="w-full flex items-center justify-center space-x-1.5 px-6 py-2.5 rounded-md text-[12px] font-bold bg-orange-500 text-white hover:bg-orange-600 shadow-lg shadow-orange-500/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed">
                                     <Sparkles size={14} />
-                                    <span>确认结构，开始制作</span>
+                                    <span>确认结构，选择投标主体</span>
                                 </button>
                             </div>
                         </div>
                     </div>
+                ) : phase === 'material_selection' ? (
+                    /* ══════════════════════════════════════════════════════════ */
+                    /*  PHASE: Material Selection                              */
+                    /* ══════════════════════════════════════════════════════════ */
+                    <div className="flex-1 flex flex-col overflow-hidden">
+                        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                            {/* Company Selector */}
+                            <div className="bg-zinc-900/80 backdrop-blur rounded-xl border border-zinc-800 p-4">
+                                <h3 className="text-[13px] font-bold text-zinc-100 mb-3 flex items-center">
+                                    <Package size={14} className="mr-2 text-orange-400" />
+                                    选择投标主体
+                                </h3>
+                                <select
+                                    value={selectedCompany}
+                                    onChange={async (e) => {
+                                        const company = e.target.value;
+                                        setSelectedCompany(company);
+                                        setLoadingPreview(true);
+                                        try {
+                                            const res = await fetch(`${API_BASE}/api/bidding/preview-materials/${taskId}?company=${encodeURIComponent(company)}`);
+                                            const data = await res.json();
+                                            setMaterialPreview(data.data);
+                                        } catch (err) {
+                                            console.error('Preview failed:', err);
+                                        }
+                                        setLoadingPreview(false);
+                                    }}
+                                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2.5 text-[12px] text-zinc-100 focus:outline-none focus:border-orange-500 transition-colors"
+                                >
+                                    <option value="">全部公司素材（不限）</option>
+                                    {companies.map((c, i) => (
+                                        <option key={i} value={c.name}>
+                                            {c.name} ({c.resumes}简历 · {c.projects}业绩 · {c.qualifications}资质)
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            {/* Material Preview */}
+                            <div className="bg-zinc-900/80 backdrop-blur rounded-xl border border-zinc-800 p-4">
+                                <h3 className="text-[13px] font-bold text-zinc-100 mb-3">📋 素材匹配预览</h3>
+                                {loadingPreview ? (
+                                    <div className="flex items-center justify-center py-6 text-zinc-500 text-[11px]">
+                                        <Loader2 size={14} className="animate-spin mr-2" /> 加载中...
+                                    </div>
+                                ) : materialPreview ? (
+                                    <div className="space-y-1">
+                                        {/* Summary bar */}
+                                        <div className="flex items-center gap-3 px-3 py-2 bg-zinc-800/60 rounded-lg mb-2 text-[10px] text-zinc-400">
+                                            <span>📦 素材库: {materialPreview.store_summary?.resumes || 0}简历 · {materialPreview.store_summary?.projects || 0}业绩 · {materialPreview.store_summary?.qualifications || 0}资质</span>
+                                            <span className="text-orange-400 font-bold">🎯 {materialPreview.matched_sections}/{materialPreview.total_sections} 章节匹配</span>
+                                        </div>
+                                        {/* Section matches */}
+                                        {materialPreview.matches?.map((m, i) => (
+                                            <div key={i} className={`flex items-center justify-between px-3 py-1.5 rounded text-[11px] ${m.match_summary ? 'bg-green-500/5 border border-green-500/20' : 'bg-zinc-800/30'}`}>
+                                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                                    <span className="text-zinc-500 w-4 text-right shrink-0">{i+1}</span>
+                                                    <span className={`truncate ${m.match_summary ? 'text-zinc-200' : 'text-zinc-500'}`}>{m.title}</span>
+                                                </div>
+                                                <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                                    {m.match_summary ? (
+                                                        <span className="text-[10px] px-2 py-0.5 rounded bg-green-500/15 text-green-400 border border-green-500/30 font-medium">
+                                                            {m.match_summary}
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-[10px] text-zinc-600">{m.type === 'narrative' ? 'AI生成' : m.type === 'form' ? '模板' : m.type === 'table' ? '表格' : '资质'}</span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="text-center py-6 text-zinc-600 text-[11px]">选择公司后查看素材匹配</div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Footer */}
+                        <div className="px-4 py-3 border-t border-zinc-800 bg-zinc-900/90 backdrop-blur space-y-2">
+                            <div className="flex gap-2">
+                                <button onClick={() => setPhase('confirming')}
+                                    className="flex-1 flex items-center justify-center px-4 py-2.5 rounded-md text-[12px] font-medium bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition-colors border border-zinc-700">
+                                    ← 返回大纲
+                                </button>
+                                <button onClick={() => {
+                                    // Update companyData with selected company
+                                    setCompanyData(prev => ({ ...prev, company_name: selectedCompany }));
+                                    startGeneration();
+                                }}
+                                    disabled={processing}
+                                    className="flex-[2] flex items-center justify-center space-x-1.5 px-6 py-2.5 rounded-md text-[12px] font-bold bg-orange-500 text-white hover:bg-orange-600 shadow-lg shadow-orange-500/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed">
+                                    <Sparkles size={14} />
+                                    <span>开始生成投标文件</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
                 ) : phase === 'generating' ? (
                     /* ══════════════════════════════════════════════════════════ */
                     /* ── STEP 3: Generation — Two-Panel Live Preview ─────── */

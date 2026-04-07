@@ -64,9 +64,21 @@ CREATE TABLE IF NOT EXISTS pending_uploads (
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS image_meta (
+    image_hash   TEXT PRIMARY KEY,
+    ocr_text     TEXT NOT NULL DEFAULT '',
+    image_type   TEXT NOT NULL DEFAULT 'unknown',
+    structured   TEXT NOT NULL DEFAULT '{}',
+    confidence   REAL DEFAULT 0.0,
+    line_count   INTEGER DEFAULT 0,
+    image_path   TEXT DEFAULT '',
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_materials_company ON materials(company_id);
 CREATE INDEX IF NOT EXISTS idx_materials_category ON materials(category);
 CREATE INDEX IF NOT EXISTS idx_narratives_company ON narrative_chunks(company_id);
+CREATE INDEX IF NOT EXISTS idx_image_meta_type ON image_meta(image_type);
 """
 
 
@@ -461,6 +473,150 @@ class MaterialStore:
         finally:
             conn.close()
 
+    # ── Image OCR Metadata ──
+
+    def save_image_meta(self, ocr_results: List[Dict]) -> int:
+        """Save batch OCR results to image_meta table.
+        
+        Args:
+            ocr_results: List of dicts from image_ocr.ocr_image()
+        
+        Returns:
+            Number of records saved
+        """
+        if not ocr_results:
+            return 0
+
+        conn = self._get_conn()
+        saved = 0
+        try:
+            for r in ocr_results:
+                if r.get("error") and not r.get("ocr_text"):
+                    continue
+                conn.execute("""
+                    INSERT OR REPLACE INTO image_meta
+                    (image_hash, ocr_text, image_type, structured,
+                     confidence, line_count, image_path)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    r.get("image_hash", ""),
+                    r.get("ocr_text", ""),
+                    r.get("image_type", "unknown"),
+                    json.dumps(r.get("structured", {}), ensure_ascii=False),
+                    r.get("confidence", 0.0),
+                    r.get("line_count", 0),
+                    r.get("image_path", ""),
+                ))
+                saved += 1
+            conn.commit()
+        finally:
+            conn.close()
+
+        logger.info(f"Saved {saved} image OCR results")
+        return saved
+
+    def get_image_meta(self, image_hash: str) -> Optional[Dict]:
+        """Get OCR metadata for a single image."""
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT * FROM image_meta WHERE image_hash = ?",
+                (image_hash,)
+            ).fetchone()
+            if not row:
+                return None
+            return {
+                "image_hash": row["image_hash"],
+                "ocr_text": row["ocr_text"],
+                "image_type": row["image_type"],
+                "structured": json.loads(row["structured"] or "{}"),
+                "confidence": row["confidence"],
+                "line_count": row["line_count"],
+                "image_path": row["image_path"],
+            }
+        finally:
+            conn.close()
+
+    def get_all_image_meta(self) -> List[Dict]:
+        """Get all image OCR metadata."""
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM image_meta ORDER BY image_type, image_hash"
+            ).fetchall()
+            return [{
+                "image_hash": r["image_hash"],
+                "ocr_text": r["ocr_text"],
+                "image_type": r["image_type"],
+                "structured": json.loads(r["structured"] or "{}"),
+                "confidence": r["confidence"],
+                "line_count": r["line_count"],
+                "image_path": r["image_path"],
+            } for r in rows]
+        finally:
+            conn.close()
+
+    def get_processed_image_hashes(self) -> set:
+        """Get set of image hashes already OCR-processed."""
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT image_hash FROM image_meta"
+            ).fetchall()
+            return {r["image_hash"] for r in rows}
+        finally:
+            conn.close()
+
+    def get_images_for_material(self, material_name: str,
+                                company: str = "") -> List[Dict]:
+        """Get image metadata for a specific material's _images.
+        
+        Looks up the material's _images field, then joins with image_meta
+        to return enriched image info (with OCR data).
+        """
+        conn = self._get_conn()
+        try:
+            if company:
+                row = conn.execute("""
+                    SELECT m.data FROM materials m
+                    JOIN companies c ON m.company_id = c.id
+                    WHERE m.name = ? AND c.name = ?
+                """, (material_name, company)).fetchone()
+            else:
+                row = conn.execute("""
+                    SELECT data FROM materials WHERE name = ?
+                """, (material_name,)).fetchone()
+
+            if not row:
+                return []
+
+            data = json.loads(row["data"] or "{}")
+            image_files = data.get("_images", [])
+            if not image_files:
+                return []
+
+            # Get OCR metadata for each image
+            results = []
+            for img_file in image_files:
+                img_hash = os.path.splitext(img_file)[0]
+                meta = self.get_image_meta(img_hash)
+                if meta:
+                    results.append(meta)
+                else:
+                    # No OCR data yet, return basic info
+                    results.append({
+                        "image_hash": img_hash,
+                        "image_path": os.path.join(
+                            self.images_dir, img_file
+                        ) if hasattr(self, 'images_dir') else img_file,
+                        "ocr_text": "",
+                        "image_type": "unknown",
+                        "structured": {},
+                    })
+            return results
+        finally:
+            conn.close()
+
     def get_default_company(self) -> str:
         """Get default company name."""
         conn = self._get_conn()
@@ -615,9 +771,16 @@ class MaterialStore:
         return results
 
     async def search_narratives(self, query: str,
-                                 top_k: int = 5) -> List[Dict]:
-        """Semantic search narrative chunks using BGE embedding."""
-        chunks = self.get_narrative_chunks()
+                                 top_k: int = 5,
+                                 company: str = "") -> List[Dict]:
+        """Semantic search narrative chunks using BGE embedding.
+
+        Args:
+            query: Search query text
+            top_k: Number of results to return
+            company: If provided, only search chunks belonging to this company
+        """
+        chunks = self.get_narrative_chunks(company=company)
         if not chunks:
             return []
 
@@ -626,12 +789,17 @@ class MaterialStore:
                 from app.core.rag.embedding_service import EmbeddingService
                 self._embedding_service = EmbeddingService()
 
+            # Rebuild vector index when chunks change (different company or new data)
+            chunks_key = tuple(c.get("content", "")[:50] for c in chunks)
             if (self._narrative_vectors is None
-                    or len(self._narrative_chunks) != len(chunks)):
+                    or len(self._narrative_chunks) != len(chunks)
+                    or getattr(self, '_narrative_chunks_key', None) != chunks_key):
                 self._narrative_chunks = chunks
+                self._narrative_chunks_key = chunks_key
                 texts = [c.get("content", "") for c in chunks]
                 self._narrative_vectors = self._embedding_service.encode(texts)
-                logger.info(f"Vectorized {len(texts)} narrative chunks")
+                logger.info(f"Vectorized {len(texts)} narrative chunks"
+                            f"{f' (company={company})' if company else ''}")
 
             query_vec = self._embedding_service.encode([query])
             scores = np.dot(self._narrative_vectors, query_vec.T).flatten()

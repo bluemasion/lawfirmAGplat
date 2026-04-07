@@ -152,9 +152,9 @@ class MaterialMatcher:
             filtered = []
             for r in all_resumes:
                 text = ' '.join([
-                    r.get('name', ''), r.get('title', ''),
-                    r.get('specialty', ''), r.get('brief_bio', ''),
-                    str(r.get('years_of_practice', '')),
+                    r.get('name', '') or '', r.get('title', '') or '',
+                    r.get('specialty', '') or '', r.get('brief_bio', '') or '',
+                    str(r.get('years_of_practice', '') or ''),
                 ])
                 if any(f in text for f in filters):
                     filtered.append(r)
@@ -175,8 +175,8 @@ class MaterialMatcher:
             filtered = []
             for p in all_projects:
                 text = ' '.join([
-                    p.get('project_name', ''), p.get('project_type', ''),
-                    p.get('description', ''), p.get('client', ''),
+                    p.get('project_name', '') or '', p.get('project_type', '') or '',
+                    p.get('description', '') or '', p.get('client', '') or '',
                 ])
                 if any(f in text for f in filters):
                     filtered.append(p)
@@ -197,8 +197,8 @@ class MaterialMatcher:
             filtered = []
             for q in all_quals:
                 text = ' '.join([
-                    q.get('name', ''), q.get('issuer', ''),
-                    q.get('type', ''),
+                    q.get('name', '') or '', q.get('issuer', '') or '',
+                    q.get('type', '') or '',
                 ])
                 if any(f in text for f in filters):
                     filtered.append(q)

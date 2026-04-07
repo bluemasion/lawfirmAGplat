@@ -147,26 +147,42 @@ class TemplateFillingSkill(BaseSkill):
 
     @staticmethod
     def get_company_info_summary(company_data: Optional[Dict] = None) -> str:
-        """Get a text summary of company info for LLM prompts."""
-        data = dict(DEFAULT_COMPANY_DATA)
-        if company_data:
-            data.update(company_data)
+        """Get a text summary of company info for LLM prompts.
+
+        Company isolation: if company_data specifies a different company_name
+        than DEFAULT_COMPANY_DATA, we do NOT merge defaults to avoid leaking
+        the default firm's info (e.g. 天元's fax/bank into 优易's prompt).
+        """
+        default_name = DEFAULT_COMPANY_DATA.get("company_name", "")
+        passed_name = (company_data or {}).get("company_name", "")
+
+        # Decide whether to use defaults as base
+        if passed_name and passed_name != default_name and not default_name.startswith("[待补充"):
+            # Different company selected — only use passed data, no defaults
+            data = dict(company_data) if company_data else {}
+            logger.info(f"[company_info] Using passed-only data for '{passed_name}' "
+                        f"(default='{default_name}', skipping defaults)")
+        else:
+            # Same company or no company specified — merge with defaults
+            data = dict(DEFAULT_COMPANY_DATA)
+            if company_data:
+                data.update(company_data)
+
+        labels = {
+            "company_name": "投标人名称",
+            "license_no": "执业许可证号",
+            "legal_rep": "法定代表人",
+            "address": "地址",
+            "phone": "电话",
+            "established_year": "成立年份",
+            "lawyer_count": "人员规模",
+            "partner_count": "合伙人人数",
+        }
 
         lines = []
         for key, value in data.items():
-            if not value.startswith("[待补充"):
-                # Convert key to Chinese label
-                labels = {
-                    "company_name": "律所名称",
-                    "license_no": "执业许可证号",
-                    "legal_rep": "法定代表人",
-                    "address": "地址",
-                    "phone": "电话",
-                    "established_year": "成立年份",
-                    "lawyer_count": "律师人数",
-                    "partner_count": "合伙人人数",
-                }
+            if isinstance(value, str) and value and not value.startswith("[待补充"):
                 label = labels.get(key, key)
                 lines.append(f"- {label}: {value}")
 
-        return "\n".join(lines) if lines else "暂无律所信息"
+        return "\n".join(lines) if lines else "暂无投标人信息"

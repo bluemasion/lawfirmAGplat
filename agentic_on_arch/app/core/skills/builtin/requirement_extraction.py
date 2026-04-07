@@ -183,12 +183,15 @@ STRUCTURE_PROMPT = """根据以下招标文件分析结果，生成完整的投�
 5. 确保招标文件中所有废标条件对应的文件都有对应章节
 6. 确保评标办法中所有评分维度都有对应的投标章节
 
-7. content_outline 规则：
-   - 每个章节必须有 3-5 个子要点，描述该章节需要写哪些具体内容
-   - narrative 类型：列出需要论述的关键主题和要点
-   - table 类型：列出表格应包含的数据列和关键内容
-   - form 类型：列出需要填写的关键项目
-   - qualification 类型：列出需要提供的具体证照文件
+7. content_outline 规则（重要！这直接影响投标内容的针对性）：
+   - 每个章节必须有 3-5 个子要点
+   - 每个子要点必须关联具体的招标要求，格式为：
+     "子要点描述 ← 招标原文：xxx"
+   - 例如：
+     "实施步骤与时间安排 ← 招标原文：服务期限为2年，每月至少巡检2次"
+     "人员配置方案 ← 招标原文：投标人须配备不少于5名专业技术人员"
+   - 如果招标原文中没有明确要求，写"← 招标原文：未明确要求，建议主动说明"
+   - 目的：让后续内容生成能够针对性回应招标方的每一条具体要求
 
 8. material_refs 规则：
    - 标注该章节在编制时需要从素材库引用的内容
@@ -603,7 +606,34 @@ class RequirementExtractionSkill(BaseSkill):
 
         # Fallback: build structure from Pass 1 analysis manually
         logger.warning("Pass 2 failed, building structure from Pass 1 analysis")
-        return self._build_from_analysis(analysis)
+        _progress("⚠️ Pass 2 大纲生成失败，降级到 Pass 1 构建模式...")
+        fallback_structure = self._build_from_analysis(analysis)
+
+        # Still run Pass 3 verification to get section_linkage (scoring/rejection)
+        if fallback_structure and fallback_structure.get("volumes"):
+            _progress("🔍 Pass 3: 对降级大纲执行废标/评分联动校验...")
+            fallback_structure["tender_analysis"] = {
+                "rejection_conditions": analysis.get("rejection_conditions", []),
+                "evaluation_criteria": analysis.get("evaluation_criteria", []),
+            }
+            verification = self._verify_structure(analysis, fallback_structure)
+            linkage = verification.get("section_linkage", {})
+            linked_count = 0
+            for vol in fallback_structure.get("volumes", []):
+                for sec in vol.get("sections", []):
+                    title = sec.get("title", "")
+                    if title in linkage:
+                        sec["linked_scoring"] = linkage[title].get("scoring_items", [])
+                        sec["linked_rejection"] = linkage[title].get("rejection_items", [])
+                        linked_count += 1
+                    else:
+                        sec["linked_scoring"] = []
+                        sec["linked_rejection"] = []
+            if linked_count:
+                logger.info(f"Fallback section linkage: {linked_count} sections linked")
+                _progress(f"✅ 降级模式联动完成: {linked_count} 个章节关联到评分/废标项")
+
+        return fallback_structure
 
     def _verify_structure(self, analysis, structure):
         # type: (Dict, Dict) -> Dict
@@ -779,13 +809,19 @@ class RequirementExtractionSkill(BaseSkill):
                         "scoring_items": [], "rejection_items": [],
                         "total_score": 0,
                     }
+                def _safe_score(v):
+                    try:
+                        return int(v) if v else 0
+                    except (ValueError, TypeError):
+                        return 0
+
                 section_linkage[matched]["scoring_items"].append({
                     "item": ei["item"],
-                    "max_score": ei.get("max_score", 0),
+                    "max_score": _safe_score(ei.get("max_score", 0)),
                     "description": ei.get("description", ""),
                     "sub_criteria": ei.get("sub_criteria", []),
                 })
-                section_linkage[matched]["total_score"] += ei.get("max_score", 0)
+                section_linkage[matched]["total_score"] += _safe_score(ei.get("max_score", 0))
 
         for ri in rejection_items:
             matched = ri.get("matched_section", "")

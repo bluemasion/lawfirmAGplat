@@ -236,6 +236,59 @@ class BidDocumentParserSkill(BaseSkill):
             if not content.strip():
                 continue
 
+            # ── OCR enrichment: replace image placeholders with OCR text ──
+            # If section content is mostly image refs, LLM can't extract anything.
+            # Inject OCR text so LLM can parse the actual certificate/document content.
+            if "[图片:" in content and section_images:
+                try:
+                    from app.core.skills.builtin.image_ocr import ocr_image
+                    from app.core.skills.builtin.material_store import get_material_store
+                    store = get_material_store()
+                    enriched_parts = []
+                    for img_info in section_images:
+                        img_file = img_info.get("filename", "")
+                        img_hash = img_info.get("hash", "")
+                        img_path = os.path.join(self.IMAGES_DIR, img_file)
+
+                        # Try DB cache first, then live OCR
+                        ocr_text = ""
+                        if store:
+                            meta = store.get_image_meta(img_hash)
+                            if meta:
+                                ocr_text = meta.get("ocr_text", "")
+
+                        if not ocr_text and os.path.exists(img_path):
+                            ocr_result = ocr_image(img_path)
+                            ocr_text = ocr_result.get("ocr_text", "")
+                            # Cache for next time
+                            if store and ocr_text:
+                                store.save_image_meta([ocr_result])
+
+                        if ocr_text:
+                            enriched_parts.append(
+                                f"[图片 {img_file} OCR 识别内容]:\n{ocr_text}"
+                            )
+
+                    if enriched_parts:
+                        # Replace original content with OCR-enriched version
+                        # Keep title context + OCR text
+                        ocr_content = "\n\n".join(enriched_parts)
+                        # Preserve any non-image text from original content
+                        non_image_text = "\n".join(
+                            line for line in content.split("\n")
+                            if not line.strip().startswith("[图片:")
+                        ).strip()
+                        if non_image_text:
+                            content = f"{non_image_text}\n\n{ocr_content}"
+                        else:
+                            content = ocr_content
+                        logger.info(
+                            f"  OCR enriched '{title}': {len(section_images)} images → "
+                            f"{len(content)} chars of text"
+                        )
+                except Exception as e:
+                    logger.warning(f"  OCR enrichment failed for '{title}': {e}")
+
             if material_type == "resume":
                 extracted = await self._extract_resumes(llm, title, content)
                 # Attach section images to each extracted item

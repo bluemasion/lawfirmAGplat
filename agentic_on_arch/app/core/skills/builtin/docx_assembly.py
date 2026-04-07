@@ -353,7 +353,26 @@ class DocxAssemblySkill(BaseSkill):
 
         # Parse and add content
         if content:
-            self._add_markdown_content(doc, content)
+            # Strip leading headings that duplicate the chapter title
+            cleaned = content.strip()
+            # Remove leading ## or # title lines that match section title
+            for prefix in ['## ', '# ']:
+                if cleaned.startswith(prefix):
+                    first_line_end = cleaned.find('\n')
+                    if first_line_end == -1:
+                        # Content is just the heading, skip entirely
+                        cleaned = ""
+                    else:
+                        first_line = cleaned[:first_line_end].strip()
+                        heading_text_in_content = first_line[len(prefix):].strip()
+                        # Only strip if the heading matches the section title
+                        if (heading_text_in_content == title or
+                                title in heading_text_in_content or
+                                heading_text_in_content in title):
+                            cleaned = cleaned[first_line_end + 1:].strip()
+                    break
+            if cleaned:
+                self._add_markdown_content(doc, cleaned)
 
     @staticmethod
     def _to_chinese_num(n):
@@ -403,6 +422,54 @@ class DocxAssemblySkill(BaseSkill):
                 self._add_table(doc, table_rows)
                 table_rows = []
                 in_table = False
+
+            # Image embedding: ![caption](path)
+            if stripped.startswith("!["):
+                img_match = re.match(r'!\[([^\]]*)\]\(([^)]+)\)', stripped)
+                if img_match:
+                    caption, img_path = img_match.groups()
+                    # Resolve relative paths from project root
+                    if not os.path.isabs(img_path):
+                        project_root = os.path.join(
+                            os.path.dirname(__file__),
+                            "..", "..", "..", ".."
+                        )
+                        img_path = os.path.normpath(
+                            os.path.join(project_root, img_path)
+                        )
+                    if os.path.exists(img_path):
+                        try:
+                            doc.add_picture(img_path, width=Cm(14))
+                            # Add centered caption
+                            if caption:
+                                cap_para = doc.add_paragraph()
+                                cap_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                                cap_run = cap_para.add_run(caption)
+                                _set_font(cap_run, '仿宋', '仿宋',
+                                          size=10.5)
+                                cap_run.font.color.rgb = RGBColor(
+                                    100, 100, 100
+                                )
+                            logger.debug(f"Embedded image: {caption or img_path}")
+                        except Exception as e:
+                            # Fallback: show as text placeholder
+                            para = doc.add_paragraph()
+                            run = para.add_run(
+                                f"[图片：{caption or '未命名'}]"
+                            )
+                            _set_font(run, '仿宋', '仿宋', size=12)
+                            run.font.color.rgb = RGBColor(200, 0, 0)
+                            logger.warning(
+                                f"Failed to embed image {img_path}: {e}"
+                            )
+                    else:
+                        para = doc.add_paragraph()
+                        run = para.add_run(
+                            f"[图片缺失：{caption or img_path}]"
+                        )
+                        _set_font(run, '仿宋', '仿宋', size=12)
+                        run.font.color.rgb = RGBColor(200, 0, 0)
+                    continue
 
             # Sub-headings within section
             if stripped.startswith("### "):

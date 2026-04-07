@@ -4,6 +4,7 @@ Phase 2 refactor: only narrative sections use LLM.
 Table/form/qualification sections use code templates + RAG data.
 """
 
+import os
 from typing import Any, Dict, List, Optional
 
 from app.core.skills.base import BaseSkill
@@ -124,6 +125,13 @@ PROMPT_SERVICE_PLAN = """请为投标文件撰写以下章节：
 - 每个招标要求项都有对应回应
 - 用序号和小标题组织内容
 - 具体措施必须可操作、可验证
+
+## ⚠️ 素材引用要求（极其重要）
+如果上面提供了【我方公司业绩数据】【我方公司团队成员】等素材信息，你**必须**在方案中引用：
+- 在"组织保障"部分引用真实的团队成员姓名和专长
+- 在论述服务经验时引用真实的项目业绩案例
+- 严禁在有真实素材的情况下仍然使用"我方拥有丰富经验"这类空泛表述
+- 正确的写法示例："我方曾为XX公司提供类似服务（项目名：XX，合同金额XX万元），积累了XX方面的实操经验"
 
 ## 参考范例
 > **一、服务目标**
@@ -279,7 +287,16 @@ NARRATIVE_PROMPT = """请为投标文件撰写以下章节的内容：
 3. 对招标要求中的每一条核心要求，都要有明确的回应段落
 4. 没有真实数据的字段用 [待补充：字段名] 标注
 5. 内容应具体、有针对性，不得使用空泛的承诺性语句
-6. 800-1500字"""
+6. 800-1500字
+
+# ⚠️ 素材引用要求（极其重要）
+如果上面提供了【我方公司业绩数据】【我方公司团队成员】【我方公司资质证书】等素材信息，
+你**必须**在正文中自然地引用这些真实数据来支撑论述。具体要求：
+- 描述服务能力、方案可行性时，引用1-2个相关的**真实项目业绩**作为佐证
+- 描述团队保障、质量控制时，引用具体的**团队成员及其专长**
+- 描述公司实力、资格条件时，引用**真实的资质证书**
+- 严禁在有真实素材的情况下仍然使用泛泛的、模板化的描述
+- 引用格式示例：'我方在其中承接了XX项目（委托方：XX，合同金额：XX万元），积累了丰富经验'"""
 
 
 # ── Prompt routing by chapter title keywords ──
@@ -613,12 +630,30 @@ class ContentGenerationSkill(BaseSkill):
         logger.info(f"Generating (stream) content for: [{sec_type}] {title}")
 
         # ── Match materials for this section ──
-        matched_materials = {}
-        if material_refs:
+        # Prefer pre-matched data from bidding pipeline's batch pre-matching
+        matched_materials = section.get("pre_matched_materials", {})
+        if not matched_materials and material_refs:
             store = _get_material_store()
             if store:
                 matcher = MaterialMatcher(store)
                 matched_materials = matcher.match_for_section(section, company=company)
+        if matched_materials.get("match_summary"):
+            logger.info(f"  Materials for '{title}': {matched_materials['match_summary']}")
+
+        # ── Type override: force data-driven narrative for misclassified sections ──
+        _NARRATIVE_FORCE_KEYWORDS = ["业绩", "项目经验", "项目案例", "成功案例",
+                                     "团队介绍", "人员简介", "公司简介", "企业概况"]
+        if sec_type in ("qualification", "table"):
+            matched_projects = matched_materials.get("projects", [])
+            matched_resumes = matched_materials.get("resumes", [])
+            if any(kw in title for kw in _NARRATIVE_FORCE_KEYWORDS):
+                if matched_projects or matched_resumes:
+                    logger.info(
+                        f"  Type override: '{title}' {sec_type} → narrative "
+                        f"(matched {len(matched_projects)} projects, "
+                        f"{len(matched_resumes)} resumes)"
+                    )
+                    sec_type = "narrative"
 
         # Non-narrative types: generate instantly, callback once
         if sec_type == "qualification":
@@ -641,13 +676,44 @@ class ContentGenerationSkill(BaseSkill):
             return self._result(title, content, missing, "template")
 
         if sec_type == "form":
-            content = self._generate_form_by_template(title, content_hints)
+            content = self._generate_form_by_template(title, content_hints, company=company)
             if chunk_callback:
                 await chunk_callback(content)
             missing = self._scan_missing(content)
             return self._result(title, content, missing, "template")
 
-        # ── narrative → LLM streaming ──
+        # ── Data-driven strategies: prefer real data over LLM ──
+        team_kws = ["团队", "人员", "律师", "成员", "拟投入", "配置", "项目组"]
+        project_kws = ["业绩", "案例", "经验", "履约", "类似项目"]
+        title_lower = title.lower()
+
+        # Strategy 1: Team narrative — use resumes directly
+        if (any(kw in title_lower for kw in team_kws)
+                and matched_materials.get("resumes")):
+            content = self._generate_team_narrative(
+                title, content_hints, matched_materials["resumes"],
+                company_info, content_outline,
+            )
+            if chunk_callback:
+                await chunk_callback(content)
+            logger.info(f"  → Data-driven team narrative: {len(matched_materials['resumes'])} resumes")
+            missing = self._scan_missing(content)
+            return self._result(title, content, missing, "data_driven")
+
+        # Strategy 2: Project narrative — use projects directly
+        if (any(kw in title_lower for kw in project_kws)
+                and matched_materials.get("projects")):
+            content = self._generate_project_narrative(
+                title, content_hints, matched_materials["projects"],
+                company_info, content_outline,
+            )
+            if chunk_callback:
+                await chunk_callback(content)
+            logger.info(f"  → Data-driven project narrative: {len(matched_materials['projects'])} projects")
+            missing = self._scan_missing(content)
+            return self._result(title, content, missing, "data_driven")
+
+        # ── narrative → LLM streaming (with enhanced prompt) ──
         content = await self._generate_narrative_section_streaming(
             title, content_hints, reference_data, company_info,
             llm_provider, skeleton, chunk_callback,
@@ -672,13 +738,24 @@ class ContentGenerationSkill(BaseSkill):
         if skeleton:
             skeleton_hint = f"\n【参考骨架（来自历史模板）】\n{skeleton}\n请参考以上骨架结构，结合本次招标要求改写。\n"
 
-        # ── content_outline injection ──
+        # ── content_outline injection (with tender requirement linkage) ──
         outline_hint = ""
         if content_outline:
-            outline_hint = "\n【本章内容大纲（必须覆盖以下要点）】\n"
+            outline_hint = "\n【本章内容大纲（必须逐条回应招标要求）】\n"
             for i, point in enumerate(content_outline, 1):
-                outline_hint += f"{i}. {point}\n"
-            outline_hint += "请确保每个要点都有对应段落内容回应。\n"
+                # Parse "topic ← 招标原文：requirement" format
+                if "← 招标原文：" in str(point):
+                    topic, req = str(point).split("← 招标原文：", 1)
+                    outline_hint += f"{i}. {topic.strip()}\n"
+                    outline_hint += f"   📌 招标方要求：{req.strip()}\n"
+                    outline_hint += f"   → 请针对以上要求给出具体、可操作的回应\n"
+                else:
+                    outline_hint += f"{i}. {point}\n"
+            outline_hint += (
+                "\n⚠️ 重要：请逐条回应以上每一个要点，"
+                "确保招标方的每条具体要求都能在对应段落中找到明确回应。"
+                "不要泛泛而谈，要有具体数据、时间节点和可执行的措施。\n"
+            )
             logger.info(f"  Content outline injected: {len(content_outline)} points for '{title}'")
 
         # ── Material injection via MaterialMatcher ──
@@ -687,8 +764,8 @@ class ContentGenerationSkill(BaseSkill):
             structured_context = format_materials_for_prompt(matched_materials)
             if structured_context:
                 logger.info(f"  MaterialMatcher injected: {matched_materials.get('match_summary', '')}")
-        else:
-            # Fallback: use MaterialMatcher with title-based matching if no pre-matched data
+        if not structured_context:
+            # Fallback 1: use MaterialMatcher with title-based matching
             store = _get_material_store()
             if store:
                 try:
@@ -701,12 +778,79 @@ class ContentGenerationSkill(BaseSkill):
                 except Exception as e:
                     logger.debug(f"MaterialMatcher auto-match failed for '{title}': {e}")
 
+        if not structured_context:
+            # Fallback 2: inject company's full material summary as background context
+            # This ensures narrative chapters like "售后服务承诺书" / "技术方案" can still
+            # reference real company data (projects, team, qualifications)
+            store = _get_material_store()
+            if store and company:
+                try:
+                    company_context_parts = []
+
+                    # Projects summary
+                    projects = store.get_projects(company=company)
+                    if projects:
+                        company_context_parts.append(
+                            f"\n【我方公司业绩数据（{len(projects)}项，请在撰写中引用真实案例）】"
+                        )
+                        for p in projects[:6]:
+                            line = f"- {p.get('project_name', '?')}"
+                            if p.get('client'):
+                                line += f"，委托方: {p['client']}"
+                            if p.get('contract_amount') or p.get('amount'):
+                                line += f"，金额: {p.get('contract_amount', p.get('amount', ''))}"
+                            if p.get('description'):
+                                line += f"，{p['description'][:50]}"
+                            company_context_parts.append(line)
+
+                    # Resumes summary
+                    resumes = store.get_resumes(company=company)
+                    if resumes:
+                        company_context_parts.append(
+                            f"\n【我方公司团队成员（{len(resumes)}人，可引用真实信息）】"
+                        )
+                        for r in resumes[:5]:
+                            line = f"- {r.get('name', '?')}"
+                            if r.get('title'):
+                                line += f"，{r['title']}"
+                            if r.get('specialty'):
+                                line += f"，擅长{r['specialty']}"
+                            company_context_parts.append(line)
+
+                    # Qualifications summary
+                    quals = store.get_qualifications(company=company)
+                    if quals:
+                        company_context_parts.append(
+                            f"\n【我方公司资质证书（{len(quals)}项，按需引用）】"
+                        )
+                        for q in quals[:5]:
+                            line = f"- {q.get('name', '?')}"
+                            if q.get('issuer'):
+                                line += f"，颁发: {q['issuer']}"
+                            company_context_parts.append(line)
+
+                    if company_context_parts:
+                        structured_context = "\n".join(company_context_parts)
+                        structured_context += (
+                            "\n\n⚠️ 重要写作指示：以上是我方公司的真实业绩、团队和资质数据。"
+                            "在撰写本章节时，请**务必引用**至少2-3项相关的真实案例或团队信息来支撑论述，"
+                            "而不是使用泛泛的承诺性语言。例如，在描述服务能力时，"
+                            "应引用具体的项目经验；在描述团队保障时，应提及具体的团队成员资质。\n"
+                        )
+                        logger.info(
+                            f"  Company material summary injected for '{title}': "
+                            f"{len(projects)} projects, {len(resumes)} resumes, "
+                            f"{len(quals)} qualifications"
+                        )
+                except Exception as e:
+                    logger.debug(f"Company material summary failed for '{title}': {e}")
+
         # ── Narrative RAG: search for relevant narrative chunks ──
         material_context = ""
         store = _get_material_store()
         if store:
             try:
-                relevant = await store.search_narratives(title, top_k=3)
+                relevant = await store.search_narratives(title, top_k=3, company=company)
                 if relevant:
                     material_context = "\n【来自历史投标文件的参考范文】\n"
                     for chunk in relevant:
@@ -716,17 +860,108 @@ class ContentGenerationSkill(BaseSkill):
             except Exception as e:
                 logger.debug(f"Material RAG failed for '{title}': {e}")
 
+        # ── Deterministic content block: pre-compose real data ──
+        # This block is injected BEFORE LLM output, guaranteeing material citation
+        deterministic_block = ""
+        if company:
+            store = _get_material_store()
+            if store:
+                det_parts = []
+
+                # Inject relevant project references
+                projects = store.get_projects(company=company)
+                if projects:
+                    det_parts.append("\n### 我方相关业绩\n")
+                    det_parts.append("我方在相关领域具有丰富的实践经验，代表性项目包括：\n")
+                    for i, p in enumerate(projects[:5], 1):
+                        line = f"{i}. **{p.get('project_name', '项目')}**"
+                        if p.get('client'):
+                            line += f"（委托方：{p['client']}"
+                        if p.get('contract_amount') or p.get('amount'):
+                            amt = p.get('contract_amount', p.get('amount', ''))
+                            line += f"，合同金额：{amt}"
+                        if p.get('client'):
+                            line += "）"
+                        if p.get('service_period') or p.get('period'):
+                            line += f"，服务期：{p.get('service_period', p.get('period', ''))}"
+                        if p.get('description'):
+                            desc = p['description'][:80]
+                            line += f"。{desc}"
+                        det_parts.append(line + "\n")
+                    det_parts.append("")
+
+                # Inject team summary
+                resumes = store.get_resumes(company=company)
+                if resumes:
+                    det_parts.append("\n### 项目团队保障\n")
+                    det_parts.append(
+                        f"我方将组建由{len(resumes)}名专业人员组成的服务团队，核心成员包括：\n"
+                    )
+                    det_parts.append("| 姓名 | 职务/职称 | 专业方向 | 从业年限 |")
+                    det_parts.append("|------|----------|---------|---------|")
+                    for r in resumes[:6]:
+                        name = r.get('name', '—')
+                        title_r = r.get('title', '—')
+                        spec = r.get('specialty', '—')
+                        yrs = r.get('years_of_practice', '—')
+                        det_parts.append(f"| {name} | {title_r} | {spec} | {yrs}年 |")
+                    det_parts.append("")
+
+                # Inject qualification summary
+                quals = store.get_qualifications(company=company)
+                if quals:
+                    det_parts.append("\n### 资质保障\n")
+                    det_parts.append("我方持有以下相关资质证书：\n")
+                    for q in quals[:5]:
+                        qname = q.get('name', '—')
+                        issuer = q.get('issuer', '')
+                        line = f"- **{qname}**"
+                        if issuer:
+                            line += f"（颁发机构：{issuer}）"
+                        det_parts.append(line)
+                    det_parts.append("")
+
+                if det_parts:
+                    deterministic_block = "\n".join(det_parts)
+                    logger.info(
+                        f"  Deterministic block for '{title}': "
+                        f"{len(projects)} projects, {len(resumes)} resumes, "
+                        f"{len(quals)} qualifications (block={len(deterministic_block)}字)"
+                    )
+
         selected_prompt = _route_prompt(title)
+
+        # If we have a deterministic block, instruct LLM to write only the
+        # analytical/response part, since company data is already composed
+        if deterministic_block:
+            llm_instruction = (
+                "\n\n⚠️ 重要：以下真实数据块将直接出现在最终文档中，你不需要重复这些内容。"
+                "\n你只需要撰写：1) 章节开头的总述段落 2) 针对招标要求的逐项回应 "
+                "3) 服务方案/措施的具体描述。"
+                "\n不要包含团队介绍表格、业绩列表或资质清单，这些已经有了。\n"
+            )
+            skeleton_hint = skeleton_hint + outline_hint + material_context + llm_instruction
+        else:
+            skeleton_hint = skeleton_hint + outline_hint + material_context + structured_context
+
         prompt = selected_prompt.format(
             section_title=title,
             content_hints=hints or "按照招标要求撰写",
             reference_data=reference,
             company_info=company_info,
-            skeleton_hint=skeleton_hint + outline_hint + material_context + structured_context,
+            skeleton_hint=skeleton_hint,
         )
 
         # Stream from LLM, accumulate full content
         full_content = []
+
+        # First: emit the deterministic block (real data, guaranteed in output)
+        if deterministic_block:
+            if chunk_callback:
+                await chunk_callback(deterministic_block + "\n\n")
+            full_content.append(deterministic_block + "\n\n")
+
+        # Then: stream LLM-generated analytical content
         try:
             async for token in llm.stream(prompt, system=SECTION_GENERATION_SYSTEM):
                 full_content.append(token)
@@ -743,29 +978,116 @@ class ContentGenerationSkill(BaseSkill):
 
     # ── Form: code templates ──
 
-    def _generate_form_by_template(self, title: str, hints: str) -> str:
+    def _build_company_profile(self, company: str = "") -> dict:
+        """Build company profile: for the selected company, prefer material store
+        data over default company_profile.json to ensure data isolation.
+        """
+        default_profile = self._data_retrieval.get_company_profile()
+        default_name = default_profile.get("company_name", "")
+
+        # If no company specified or same as default, use default profile
+        if not company or company == default_name:
+            return default_profile
+
+        # Different company selected — build profile from material store
+        store = _get_material_store()
+        if not store:
+            # No store available — return minimal profile with just the name
+            logger.info(f"  [profile] No material store, using company_name='{company}' only")
+            return {"company_name": company}
+
+        profile = {"company_name": company}
+
+        # Try to get richer info from material store
+        try:
+            resumes = store.get_resumes(company=company)
+            projects = store.get_projects(company=company)
+            quals = store.get_qualifications(company=company)
+
+            if resumes:
+                profile["lawyer_count"] = str(len(resumes))
+                # Find the most senior person as potential legal_rep
+                for r in resumes:
+                    if any(kw in (r.get('title', '') or '') for kw in ['主任', '总经理', '法人', '董事长']):
+                        profile["legal_rep"] = r.get('name', '')
+                        break
+            if projects:
+                profile["project_count"] = str(len(projects))
+            if quals:
+                profile["qualification_count"] = str(len(quals))
+
+            logger.info(
+                f"  [profile] Built profile for '{company}' from material store: "
+                f"{len(resumes)} resumes, {len(projects)} projects, {len(quals)} quals"
+            )
+        except Exception as e:
+            logger.warning(f"  [profile] Failed to build profile for '{company}': {e}")
+
+        return profile
+
+    def _generate_form_by_template(self, title: str, hints: str, company: str = "") -> str:
         """Generate form content using built-in templates."""
-        profile = self._data_retrieval.get_company_profile()
+        profile = self._build_company_profile(company)
 
-        # Find matching form template
-        for tpl_name, tpl_content in FORM_TEMPLATES.items():
-            if tpl_name in title or any(kw in title for kw in tpl_name):
-                logger.info(f"  → Form template matched: {tpl_name}")
-                return tpl_content.format(
-                    company_name=profile.get("company_name", "[待补充：律所名称]"),
-                    legal_rep=profile.get("legal_rep", "[待补充：法定代表人]"),
-                    address=profile.get("address", "[待补充：地址]"),
-                    phone=profile.get("phone", "[待补充：电话]"),
-                    fax=profile.get("fax", "[待补充：传真]"),
-                    email=profile.get("email", "[待补充：邮箱]"),
-                    total_staff=profile.get("total_staff", "[待补充：员工人数]"),
-                    招标方名称="[待补充：招标方名称]",
-                    项目名称="[待补充：项目名称]",
-                )
+        # Find matching form template (precise matching)
+        title_stripped = title.strip()
 
-        # No match → generic form template
+        # 1. Exact match
+        if title_stripped in FORM_TEMPLATES:
+            tpl_name = title_stripped
+            logger.info(f"  → Form template exact match: {tpl_name}")
+            return self._fill_form_template(FORM_TEMPLATES[tpl_name], profile)
+
+        # 2. Keyword-based match (more precise than substring)
+        FORM_MATCH_KEYWORDS = {
+            "投标函": ["投标函"],
+            "授权委托书": ["授权委托", "委托书"],
+            "企业信誉声明函": ["信誉声明", "企业信誉"],
+            "非联合体投标承诺函": ["非联合体", "不存在任何形式"],
+            "中小微企业声明函": ["中小微", "中小企业"],
+            "投标一览表": ["投标一览", "开标一览"],
+            "履约保证金承诺": ["履约保证金"],
+            "投标保证金": ["投标保证金"],
+        }
+
+        for tpl_name, keywords in FORM_MATCH_KEYWORDS.items():
+            if tpl_name in FORM_TEMPLATES:
+                # Must match specific keywords, not just any substring
+                if any(kw in title_stripped for kw in keywords):
+                    # Avoid false positives: "投标函" should not match "投标保证金说明函"
+                    # Only match if the keyword is closely tied to the title
+                    if tpl_name == "投标函" and any(
+                        excl in title_stripped
+                        for excl in ["保证金", "担保", "声明", "承诺", "一览"]
+                    ):
+                        continue
+                    if tpl_name == "投标保证金" and "凭证" in title_stripped:
+                        continue
+                    logger.info(f"  → Form template matched: {tpl_name}")
+                    return self._fill_form_template(FORM_TEMPLATES[tpl_name], profile)
+
+        # No match → generic form template with title
         logger.info(f"  → No form template match for '{title}', using generic")
         return self._generic_form(title, hints, profile)
+
+    def _fill_form_template(self, tpl_content, profile):
+        """Fill a form template with company profile data."""
+        try:
+            return tpl_content.format(
+                company_name=profile.get("company_name", "[待补充：投标人名称]"),
+                legal_rep=profile.get("legal_rep", "[待补充：法定代表人]"),
+                address=profile.get("address", "[待补充：地址]"),
+                phone=profile.get("phone", "[待补充：电话]"),
+                fax=profile.get("fax", "[待补充：传真]"),
+                email=profile.get("email", "[待补充：邮箱]"),
+                total_staff=profile.get("total_staff", profile.get("lawyer_count", "[待补充：员工人数]")),
+                招标方名称="[待补充：招标方名称]",
+                项目名称="[待补充：项目名称]",
+                fields="| [待补充] | [待补充] |",
+            )
+        except KeyError:
+            # If template has unrecognized placeholders, return with partial fill
+            return tpl_content
 
     # ── Table: code templates + data ──
 
@@ -773,7 +1095,7 @@ class ContentGenerationSkill(BaseSkill):
                                           data_fields: List[str],
                                           company: str = "") -> str:
         """Generate table section using code templates and RAG data."""
-        profile = self._data_retrieval.get_company_profile()
+        profile = self._build_company_profile(company)
 
         for tpl_name, tpl_info in TABLE_TEMPLATES.items():
             if any(kw in title for kw in tpl_info["match_keywords"]):
@@ -817,6 +1139,9 @@ class ContentGenerationSkill(BaseSkill):
 
         # S7-P1B: Inject structured materials for specific chapter types
         structured_context = ""
+        # NOTE: This is the old non-streaming path. The company parameter
+        # is not available here, so we cannot filter by company.
+        # The streaming path (execute_streaming) should be preferred.
         if store:
             title_lower = title.lower()
             try:
@@ -1098,7 +1423,7 @@ class ContentGenerationSkill(BaseSkill):
     # ── Generic fallbacks ──
 
     def _generic_form(self, title: str, hints: str, profile: Dict) -> str:
-        cn = profile.get("company_name", "[待补充：律所名称]")
+        cn = profile.get("company_name", "[待补充：投标人名称]")
         lr = profile.get("legal_rep", "[待补充：法定代表人]")
         return f"""## {title}
 
@@ -1139,7 +1464,36 @@ class ContentGenerationSkill(BaseSkill):
                 valid_until = q.get('valid_until', '-')
                 lines.append(f"| {i} | {name} | {number} | {issuer} | {valid_until} |")
             lines.append("")
-            lines.append("> 注：以上资质证书复印件可供查验。")
+
+            # ── Embed qualification images if available ──
+            images_dir = os.path.join(
+                os.path.dirname(__file__), "..", "..", "..", "..",
+                "data", "materials", "images"
+            )
+            images_dir = os.path.normpath(images_dir)
+            image_count = 0
+            for q in matched_quals:
+                q_images = q.get('_images', [])
+                if q_images:
+                    q_name = q.get('name', '资质证书')
+                    lines.append(f"\n#### {q_name} — 证书扫描件\n")
+                    for img_file in q_images:
+                        img_path = os.path.join(images_dir, img_file)
+                        if os.path.exists(img_path):
+                            lines.append(f"![{q_name}]({img_path})")
+                            image_count += 1
+                        else:
+                            lines.append(f"[图片缺失: {img_file}]")
+                    lines.append("")
+
+            if image_count:
+                logger.info(
+                    f"  → Qualification images: {image_count} images "
+                    f"for {len(matched_quals)} qualifications"
+                )
+            else:
+                lines.append("> 注：以上资质证书复印件可供查验。")
+
             logger.info(f"  → Qualification from material store: {len(matched_quals)} items")
             return "\n".join(lines) + "\n"
         # Check if we have the qualification data
@@ -1175,7 +1529,142 @@ class ContentGenerationSkill(BaseSkill):
         content_parts.append("\n*请将相关证书扫描件附在投标文件相应位置。*")
         return "\n".join(content_parts)
 
-    # ── Helpers ──
+    # ── Data-driven generation: Team & Project ──
+
+    def _generate_team_narrative(self, title: str, hints: str,
+                                  resumes: List[Dict], company_info: str,
+                                  content_outline: List = None) -> str:
+        """Generate team/personnel section from real resume data."""
+        parts = []
+
+        # Opening paragraph
+        parts.append(
+            f"为确保本项目高效、专业地推进，我方特组建了一支由 {len(resumes)} 名"
+            f"专业人员组成的项目团队，涵盖项目管理、专业技术等多个维度。"
+            f"团队成员均具备丰富的相关领域从业经验，能够为本项目提供全方位的专业服务。\n"
+        )
+
+        # Overview table
+        parts.append("### 项目团队概况\n")
+        parts.append("| 序号 | 姓名 | 职务/职称 | 学历 | 从业年限 | 项目角色 |")
+        parts.append("|------|------|----------|------|---------|---------|")
+        for i, r in enumerate(resumes, 1):
+            name = r.get("name", "")
+            title_r = r.get("title", "") or ""
+            edu = r.get("education", "") or ""
+            years = r.get("years_of_practice", "") or ""
+            role = r.get("role_in_project", "") or ""
+            parts.append(f"| {i} | {name} | {title_r} | {edu} | {years}年 | {role} |")
+        parts.append("")
+
+        # Detailed bios
+        parts.append("### 核心成员介绍\n")
+        for i, r in enumerate(resumes, 1):
+            name = r.get("name", "")
+            title_r = r.get("title", "") or ""
+            bio = r.get("brief_bio", "") or ""
+            specialty = r.get("specialty", "") or ""
+            cases = r.get("representative_cases", [])
+            license_num = r.get("license_number", "") or ""
+
+            parts.append(f"**{i}. {name}　{title_r}**\n")
+            if bio:
+                parts.append(f"{bio}\n")
+            if specialty:
+                parts.append(f"- **专业领域**：{specialty}")
+            if license_num:
+                parts.append(f"- **执业证号**：{license_num}")
+            if r.get("years_of_practice"):
+                parts.append(f"- **从业年限**：{r['years_of_practice']}年")
+            if r.get("education"):
+                parts.append(f"- **学历**：{r['education']}")
+
+            if cases:
+                parts.append(f"\n**代表性项目/案例**：")
+                for j, c in enumerate(cases[:5], 1):
+                    case_name = c.get("name", c) if isinstance(c, dict) else str(c)
+                    parts.append(f"  {j}. {case_name}")
+
+            # Image placeholder
+            images = r.get("_images", [])
+            if images:
+                parts.append(f"\n> 📎 附件：{name} 资质证书（{len(images)}份）")
+            parts.append("")
+
+        return "\n".join(parts)
+
+    def _generate_project_narrative(self, title: str, hints: str,
+                                     projects: List[Dict], company_info: str,
+                                     content_outline: List = None) -> str:
+        """Generate project history/performance section from real project data."""
+        parts = []
+
+        # Opening paragraph
+        parts.append(
+            f"我方在相关领域具有丰富的项目实施经验。"
+            f"以下为我方近年来承接的 {len(projects)} 个代表性项目，"
+            f"充分证明了我方在同类项目中的服务能力和履约实力。\n"
+        )
+
+        # Summary table
+        parts.append("### 项目业绩一览\n")
+        parts.append("| 序号 | 项目名称 | 委托方/客户 | 合同金额(元) | 服务期限 |")
+        parts.append("|------|---------|-----------|------------|---------|")
+        for i, p in enumerate(projects, 1):
+            pname = p.get("project_name", "") or ""
+            client = p.get("client", "") or ""
+            amount = p.get("amount", p.get("contract_amount", "")) or ""
+            # Format amount
+            try:
+                amount_num = float(str(amount).replace(",", ""))
+                if amount_num >= 10000:
+                    amount = f"{amount_num/10000:.1f}万"
+                else:
+                    amount = f"{amount_num:.0f}"
+            except (ValueError, TypeError):
+                pass
+            period = p.get("period", "") or ""
+            # Truncate long names
+            if len(pname) > 30:
+                pname = pname[:28] + "..."
+            parts.append(f"| {i} | {pname} | {client} | {amount} | {period} |")
+        parts.append("")
+
+        # Detailed case studies
+        parts.append("### 代表性项目详情\n")
+        for i, p in enumerate(projects, 1):
+            pname = p.get("project_name", "") or ""
+            parts.append(f"**案例{i}：{pname}**\n")
+
+            client = p.get("client", "")
+            ptype = p.get("project_type", "")
+            amount = p.get("amount", p.get("contract_amount", ""))
+            period = p.get("period", "")
+            desc = p.get("description", "")
+            outcome = p.get("outcome", "")
+
+            if client:
+                parts.append(f"- **委托方/客户**：{client}")
+            if ptype:
+                parts.append(f"- **项目类型**：{ptype}")
+            if amount:
+                parts.append(f"- **合同金额**：{amount}元")
+            if period:
+                parts.append(f"- **服务期限**：{period}")
+            if desc:
+                parts.append(f"- **项目概况**：{desc}")
+            if outcome:
+                parts.append(f"- **项目成果**：{outcome}")
+
+            # Image references
+            images = p.get("_images", [])
+            if images:
+                parts.append(f"\n> 📎 附件：项目证明材料（{len(images)}份）")
+            parts.append("")
+
+        return "\n".join(parts)
+
+
 
     @staticmethod
     def _scan_missing(content: str) -> List[str]:
