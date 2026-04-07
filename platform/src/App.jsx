@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import AppCenter from './pages/AppCenter';
 import ModelHub from './pages/ModelHub';
 import Settings from './pages/Settings';
+import TaskHistory from './pages/TaskHistory';
 import SecuritiesAgent from './agents/SecuritiesAgent';
 import LegalTranslation from './agents/LegalTranslation';
 import ConflictSearch from './agents/ConflictSearch';
@@ -51,6 +52,7 @@ export default function App() {
       case 'appcenter': return <AppCenter onSelectAgent={handleSelectAgent} />;
       case 'modelhub': return <ModelHub onSelectTest={setTestModel} />;
       case 'settings': return <Settings />;
+      case 'tasks': return <TaskHistory />;
       default: return <Dashboard />;
     }
   };

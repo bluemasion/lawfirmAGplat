@@ -1,7 +1,8 @@
-import { LayoutDashboard, Grid, Cpu, Settings, ChevronRight } from 'lucide-react';
+import { LayoutDashboard, Grid, Cpu, Settings, ChevronRight, FileText } from 'lucide-react';
 
 const navigation = [
     { id: 'workbench', label: '控制台首页', icon: LayoutDashboard },
+    { id: 'tasks', label: '任务管理', icon: FileText },
     { id: 'appcenter', label: '应用中心', icon: Grid },
     { id: 'modelhub', label: '算力实例', icon: Cpu },
     { id: 'settings', label: '平台管理', icon: Settings },
