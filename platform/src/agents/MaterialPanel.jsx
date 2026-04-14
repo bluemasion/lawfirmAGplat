@@ -582,6 +582,11 @@ export default function MaterialPanel({ onClose }) {
                                                         {item.specialty}
                                                     </span>
                                                 )}
+                                                {activeTab === 'resumes' && item.certifications?.map((cert, ci) => (
+                                                    <span key={ci} className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/25">
+                                                        🏅 {cert.replace(/ — .+$/, '')}
+                                                    </span>
+                                                ))}
                                                 {activeTab === 'projects' && item.project_type && (
                                                     <span className="text-[11px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
                                                         {item.project_type}
