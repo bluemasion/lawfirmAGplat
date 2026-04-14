@@ -381,29 +381,28 @@ export default function BiddingAgent() {
                             doneCount++;
                             completedAcc[ev.section_title] = ev.content || contentAcc[ev.section_title] || '';
                             setCompletedSections(prev => ({ ...prev, [ev.section_title]: completedAcc[ev.section_title] }));
-                            setGenProgress(p => ({
-                                ...p, done: doneCount,
-                                elapsed: ((Date.now() - genStartTime) / 1000).toFixed(0),
-                                sections: {
-                                    ...p.sections,
-                                    [ev.section_title]: {
-                                        status: ev.status === 'error' ? 'error' : 'done',
-                                        chars: ev.content_length || 0,
-                                        elapsed: ev.elapsed,
-                                    },
-                                },
-                            }));
+                            setGenProgress(p => {
+                                const newSections = { ...p.sections, [ev.section_title]: { status: ev.status === 'error' ? 'error' : 'done', chars: ev.content_length || 0, elapsed: ev.elapsed } };
+                                // Calculate ETA from non-cached section elapsed times
+                                const genElapsed = Object.values(newSections).filter(s => s.status === 'done' && s.elapsed).map(s => s.elapsed);
+                                const avgTime = genElapsed.length > 0 ? genElapsed.reduce((a, b) => a + b, 0) / genElapsed.length : 0;
+                                const remaining = p.total - doneCount;
+                                const etaSeconds = Math.round(avgTime * remaining);
+                                return { ...p, done: doneCount, elapsed: ((Date.now() - genStartTime) / 1000).toFixed(0), sections: newSections, etaSeconds, avgSectionTime: avgTime.toFixed(1) };
+                            });
                         } else if (ev.type === 'section_cached') {
                             doneCount++;
                             completedAcc[ev.section_title] = ev.content || '';
                             setCompletedSections(prev => ({ ...prev, [ev.section_title]: ev.content || '' }));
-                            setGenProgress(p => ({
-                                ...p, done: doneCount,
-                                sections: {
-                                    ...p.sections,
-                                    [ev.section_title]: { status: 'cached', chars: (ev.content || '').length, elapsed: ev.elapsed },
-                                },
-                            }));
+                            setGenProgress(p => {
+                                const newSections = { ...p.sections, [ev.section_title]: { status: 'cached', chars: (ev.content || '').length, elapsed: ev.elapsed } };
+                                const remaining = p.total - doneCount;
+                                // Recalculate ETA (cached sections don't affect avg)
+                                const genElapsed = Object.values(newSections).filter(s => s.status === 'done' && s.elapsed).map(s => s.elapsed);
+                                const avgTime = genElapsed.length > 0 ? genElapsed.reduce((a, b) => a + b, 0) / genElapsed.length : 0;
+                                const etaSeconds = Math.round(avgTime * remaining);
+                                return { ...p, done: doneCount, sections: newSections, etaSeconds, avgSectionTime: avgTime.toFixed(1) };
+                            });
                         } else if (ev.type === 'section_error') {
                             doneCount++;
                             setGenProgress(p => ({
@@ -1200,10 +1199,20 @@ export default function BiddingAgent() {
                                 <h2 className="text-sm font-bold text-zinc-100 flex items-center space-x-2">
                                     <Loader2 size={14} className="text-orange-400 animate-spin" />
                                     <span>正在生成投标文件</span>
+                                    {genProgress.total > 0 && (
+                                        <span className="text-[11px] font-normal text-zinc-400 ml-1">
+                                            {Math.round(genProgress.done / genProgress.total * 100)}%
+                                        </span>
+                                    )}
                                 </h2>
                                 <div className="flex items-center space-x-3 text-[11px]">
                                     {genProgress.elapsed && (
                                         <span className="text-zinc-500">⏱ {genProgress.elapsed}s</span>
+                                    )}
+                                    {genProgress.etaSeconds > 0 && (
+                                        <span className="text-zinc-400">
+                                            预计还需 {genProgress.etaSeconds >= 60 ? `${Math.floor(genProgress.etaSeconds / 60)}分${genProgress.etaSeconds % 60}秒` : `${genProgress.etaSeconds}秒`}
+                                        </span>
                                     )}
                                     <span className="font-bold text-orange-400">
                                         {genProgress.done} / {genProgress.total}
@@ -1214,6 +1223,11 @@ export default function BiddingAgent() {
                                 <div className="h-full bg-gradient-to-r from-orange-500 to-amber-500 rounded-full transition-all duration-500"
                                     style={{ width: `${genProgress.total ? (genProgress.done / genProgress.total * 100) : 0}%` }} />
                             </div>
+                            {genProgress.avgSectionTime > 0 && (
+                                <div className="mt-1 text-[10px] text-zinc-600">
+                                    平均每章 {genProgress.avgSectionTime}s
+                                </div>
+                            )}
                         </div>
 
                         {/* Two-panel layout */}
