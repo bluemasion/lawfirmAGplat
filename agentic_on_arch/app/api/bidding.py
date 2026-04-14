@@ -266,11 +266,7 @@ async def ocr_material_images(force: bool = False):
     if not store:
         return {"success": False, "message": "Material store not available"}
 
-    images_dir = os.path.join(
-        os.path.dirname(__file__), "..", "core", "skills", "builtin",
-        "..", "..", "..", "data", "materials", "images"
-    )
-    images_dir = os.path.normpath(images_dir)
+    images_dir = os.path.join("data", "materials", "images")
 
     if not os.path.exists(images_dir):
         return {"success": False, "message": f"Images directory not found: {images_dir}"}

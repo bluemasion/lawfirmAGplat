@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { FileText, Download, Clock, CheckCircle, Loader2, AlertTriangle, Trash2, RefreshCw, Building2, ChevronRight, Sparkles } from 'lucide-react';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = 'http://localhost:8001';
 
 const STATUS_CONFIG = {
     done: { label: '已完成', color: 'text-emerald-600 bg-emerald-50 border-emerald-200', icon: CheckCircle },

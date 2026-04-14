@@ -1,33 +1,52 @@
 # 智能投标系统 — 上下文恢复文档
 
-> 最后更新: 2026-03-30 12:00 (会话 ID: 7364042e-5457-4a94-83f3-c0b07518ee28)
+> 最后更新: 2026-04-02 01:20 (会话 ID: fee4462f)
 
 ---
 
-## 一、3/28 完成的工作
+## 一、4/1-4/2 完成的工作
 
-### 1. 技术架构全面审查 ✅
-- 对照原始设计文档 (2026-03-10 `bidding_system_architecture.md`) vs 当前实现
-- 产出 `docs/ARCHITECTURE_REVIEW.md` — 定期对照参考文件
-- 8步主流程: 6步完全实现, 2步降级/部分
-- 版本清单: 后端/前端/AI模型全量版本汇总
+### 1. 投标任务持久化 (BiddingStore) ✅
+- `bidding_store.py` → SQLite `data/bidding/bidding.db`
+- `bidding.py`: `_bidding_tasks` 内存字典 → `_bid_store` (BiddingStore)
+- 解析完 → `save_task()`, 生成完 → `update_status("done")`
+- 非序列化对象 `tender_index` 保留在 `_tender_indexes` 内存缓存
+- **已测试**: 3个任务成功持久化, 重启不丢失
 
-### 2. 两个架构偏离决策 ✅
-- **Multi-Agent 不补**: 投标是确定性流水线, 不需要自主决策Agent。bidding.py 硬编排保持。
-- **数据层等GB10**: SQLite 当前够用, PostgreSQL 跟着 GB10 硬件部署一起迁移。
+### 2. Form 模板匹配修复 ✅
+- 旧逻辑 `tpl_name in title` 导致"投标函"匹配到所有 form (残疾人声明、监狱声明等)
+- 新逻辑: 精确匹配 + 排除词机制 + `_fill_form_template()` 提取
+
+### 3. 章节号重复修复 ✅
+- `docx_assembly.py`: 内容里的 `## Title` 与 `_add_section` 的 `第X章 Title` 去重
+- 如果内容开头 heading 和章节标题匹配, 自动剥离
+
+### 4. 评分分值 int+str Bug 修复 ✅
+- `requirement_extraction.py`: LLM 可能返回 `"max_score": "15"` (字符串)
+- 新增 `_safe_score()` 确保 int 类型
+
+### 5. 素材注入集成 (前次会话完成) ✅
+- `MaterialMatcher` + `format_materials_for_prompt` 替换硬编码关键词
+- `content_outline` 注入叙述章节 Prompt
+- `company` 参数传递到生成流程
+
+### 6. 端口统一 → 8001 ✅
+- AICopilot.jsx 从 8000 → 8001
 
 ---
 
-## 二、3/30 讨论确认的下一步计划
+## 二、下一步计划
 
 ### 优先级排序
 
 | 顺序 | 任务 | 状态 |
 |------|------|------|
-| **①** | 评分细则深度提取 + 废标项提取增强 + 大纲联动 | 🔥 进行中 |
-| **②** | 素材库内容引用到投标文件 | 待讨论 |
-| **③** | 单章重生成 | 待做 |
-| **④** | 大纲页素材匹配数量展示 | 待做 |
+| **①** | 评分细则深度提取 + 废标提取增强 + 大纲联动 | ✅ 已提交 |
+| **②** | 素材库内容引用到投标文件 | ✅ 已完成 |
+| **③** | 投标任务持久化 (BiddingStore) | ✅ 已完成 |
+| **④** | 历史任务列表页面 (前端) | 🔥 下一步 |
+| **⑤** | 单章重生成 | 待做 |
+| **⑥** | 大纲页素材匹配数量展示 | 待做 |
 
 ### ① 评分/废标提取增强 — 详细设计
 
@@ -120,7 +139,7 @@
 ```bash
 # 后端
 cd agentic_on_arch && source venv/bin/activate
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
 
 # 前端
 cd platform && npm run dev

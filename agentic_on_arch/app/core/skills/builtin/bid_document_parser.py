@@ -342,12 +342,62 @@ class BidDocumentParserSkill(BaseSkill):
                      f"{len(projects)} projects, {len(qualifications)} qualifications")
 
         # Step 4: Detect company name from content
-        full_text = "\n".join(s.get("content", "")[:200] for s in sections[:5])
-        detected_company = await self._detect_company_name(
-            llm, filename, full_text[:800]
-        )
-        if detected_company:
-            logger.info(f"Detected company name: {detected_company}")
+        # Strategy: try multiple sources in priority order
+        detected_company = ""
+
+        # 4a. Try extracting from qualification holder fields (most reliable for
+        #     qualification-heavy documents where content is mostly images)
+        holder_names = []
+        for q in qualifications:
+            holder = (q.get("holder") or "").strip()
+            if holder and len(holder) >= 4:
+                holder_names.append(holder)
+        if holder_names:
+            # Pick the most common holder name
+            from collections import Counter
+            holder_counter = Counter(holder_names)
+            most_common_holder = holder_counter.most_common(1)[0][0]
+            detected_company = most_common_holder
+            logger.info(f"Detected company from qualification holders: "
+                        f"'{detected_company}' (from {len(holder_names)} holders)")
+
+        # 4b. If holder didn't work, try LLM detection with enriched content
+        #     Use the post-OCR enriched content instead of raw image placeholders
+        if not detected_company:
+            # Collect text that has actual content (not just image placeholders)
+            enriched_parts = []
+            for sec in classified:
+                content = sec.get("content", "")
+                # Skip sections that are only image placeholders
+                lines = [l for l in content.split("\n")
+                         if l.strip() and not l.strip().startswith("[图片:")]
+                if lines:
+                    enriched_parts.append("\n".join(lines[:10]))
+            # If no text content found, try using extracted item names as hints
+            if not enriched_parts:
+                hints = []
+                for r in resumes:
+                    hints.append(f"律师: {r.get('name', '')}")
+                for q in qualifications:
+                    holder = q.get("holder", "")
+                    hints.append(f"资质: {q.get('name', '')} 持有: {holder}")
+                if hints:
+                    enriched_parts = hints
+
+            enriched_text = "\n".join(enriched_parts)[:800]
+            if enriched_text.strip():
+                detected_company = await self._detect_company_name(
+                    llm, filename, enriched_text
+                )
+                if detected_company:
+                    logger.info(f"Detected company via LLM (enriched): "
+                                f"'{detected_company}'")
+                else:
+                    logger.info("Company detection: LLM returned empty "
+                                "(no company found in enriched content)")
+            else:
+                logger.info("Company detection: no text content available "
+                            "for LLM detection")
 
         return {
             "resumes": resumes,
