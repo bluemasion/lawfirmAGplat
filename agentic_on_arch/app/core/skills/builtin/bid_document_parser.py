@@ -347,8 +347,44 @@ class BidDocumentParserSkill(BaseSkill):
             return list(seen.values())
         qualifications = _dedup_quals(qualifications)
 
+        # Step 3b: Classify cert_type (company vs personal) and ensure DB-unique names
+        resume_names = {r.get("name", "").strip() for r in resumes if r.get("name")}
+        for q in qualifications:
+            holder = (q.get("holder") or "").strip()
+            cert_name = (q.get("name") or "").strip()
+
+            # Determine cert_type: personal if holder matches a resume name
+            # or holder is short (≤6 chars, likely a person name)
+            if holder and (holder in resume_names
+                           or (len(holder) <= 6 and not any(
+                               kw in holder for kw in ["公司", "有限", "集团", "院", "所", "委"]))):
+                q["cert_type"] = "personal"
+                # Make name DB-unique: append holder for personal certs
+                # e.g. "数据治理工程师证书" → "数据治理工程师证书 — 袁洋"
+                if holder and holder not in cert_name:
+                    q["name"] = f"{cert_name} — {holder}"
+                q["cert_holder_name"] = holder  # original person name for linking
+            else:
+                q["cert_type"] = "company"
+
+        # Step 3c: Link personal certs back to resumes
+        for r in resumes:
+            person_name = (r.get("name") or "").strip()
+            if not person_name:
+                continue
+            linked_certs = []
+            for q in qualifications:
+                if q.get("cert_type") == "personal" and q.get("cert_holder_name") == person_name:
+                    linked_certs.append(q.get("name", ""))
+            if linked_certs:
+                r["certifications"] = linked_certs
+
+        # Log classification
+        personal_count = sum(1 for q in qualifications if q.get("cert_type") == "personal")
+        company_count = len(qualifications) - personal_count
         logger.info(f"After dedup: {len(resumes)} resumes, "
-                     f"{len(projects)} projects, {len(qualifications)} qualifications")
+                     f"{len(projects)} projects, {len(qualifications)} qualifications "
+                     f"(company={company_count}, personal={personal_count})")
 
         # Step 4: Detect company name from content
         # Strategy: try multiple sources in priority order
