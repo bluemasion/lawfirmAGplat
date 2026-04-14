@@ -336,7 +336,16 @@ class BidDocumentParserSkill(BaseSkill):
 
         resumes = _dedup(resumes, "name")
         projects = _dedup(projects, "project_name")
-        qualifications = _dedup(qualifications, "name")
+        # Qualifications: use name+holder as key (same cert held by different people must be kept)
+        def _dedup_quals(items):
+            seen = {}
+            for item in items:
+                name = item.get("name", "")
+                holder = item.get("holder", "")
+                key = f"{name}||{holder}" if name else str(id(item))
+                seen[key] = item
+            return list(seen.values())
+        qualifications = _dedup_quals(qualifications)
 
         logger.info(f"After dedup: {len(resumes)} resumes, "
                      f"{len(projects)} projects, {len(qualifications)} qualifications")
