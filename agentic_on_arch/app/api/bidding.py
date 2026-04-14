@@ -1221,31 +1221,31 @@ async def delete_task(task_id: str):
 
     # Get task info before deleting (for file cleanup)
     task_data = _bid_store.get_task(task_id)
-    if not task_data:
-        logger.warning(f"[delete-task] Task not found in DB: {task_id}")
-        return {"success": False, "message": f"任务 {task_id} 不存在"}
 
-    # 1) Delete from SQLite
-    _bid_store.delete_task(task_id)
-    logger.info(f"[delete-task] DB record deleted")
+    if task_data:
+        # 1) Delete from SQLite
+        _bid_store.delete_task(task_id)
+        logger.info(f"[delete-task] DB record deleted")
 
-    # 2) Clear section cache
+        # 3) Delete output file
+        output_file = task_data.get("output_file", "")
+        if output_file and os.path.exists(output_file):
+            os.remove(output_file)
+            logger.info(f"[delete-task] Output file removed: {output_file}")
+
+        # 4) Delete tender file
+        tender_file = task_data.get("tender_file_path", "")
+        if tender_file and os.path.exists(tender_file):
+            os.remove(tender_file)
+            logger.info(f"[delete-task] Tender file removed: {tender_file}")
+    else:
+        logger.warning(f"[delete-task] Task not in DB (ghost task), cleaning up files only")
+
+    # 2) Clear section cache (always try, even for ghost tasks)
     cache_dir = os.path.join("data", "tasks", task_id)
     if os.path.exists(cache_dir):
         shutil.rmtree(cache_dir)
         logger.info(f"[delete-task] Cache dir removed: {cache_dir}")
-
-    # 3) Delete output file
-    output_file = task_data.get("output_file", "")
-    if output_file and os.path.exists(output_file):
-        os.remove(output_file)
-        logger.info(f"[delete-task] Output file removed: {output_file}")
-
-    # 4) Delete tender file
-    tender_file = task_data.get("tender_file_path", "")
-    if tender_file and os.path.exists(tender_file):
-        os.remove(tender_file)
-        logger.info(f"[delete-task] Tender file removed: {tender_file}")
 
     # 5) Clear from in-memory cache
     if task_id in _tender_indexes:
