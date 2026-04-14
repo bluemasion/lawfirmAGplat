@@ -1009,8 +1009,11 @@ async def regenerate_section(task_id: str, req: RegenerateSectionRequest):
 
     删除该章节的缓存，重新生成内容，更新缓存文件。
     """
+    logger.info(f"[regenerate] ▶ task={task_id}, section='{req.section_title}', "
+                f"company='{req.company_data.get('company_name', '')}', llm={req.llm_provider}")
     task = _get_task(task_id)
     if not task:
+        logger.warning(f"[regenerate] Task not found: {task_id}")
         return {"success": False, "message": f"任务 {task_id} 不存在"}
 
     requirements = task.get("requirements", {})
@@ -1169,15 +1172,20 @@ async def download_document(task_id: str):
     """下载生成的投标文件 .docx"""
     from fastapi.responses import FileResponse
 
+    logger.info(f"[download] ▶ task={task_id}")
     task = _get_task(task_id)
     if not task:
+        logger.warning(f"[download] Task not found: {task_id}")
         return {"success": False, "message": f"任务 {task_id} 不存在"}
 
     file_path = task.get("output_file")
     if not file_path or not os.path.exists(file_path):
+        logger.warning(f"[download] File missing: {file_path}")
         return {"success": False, "message": "文件尚未生成或已被删除"}
 
+    file_size = os.path.getsize(file_path)
     filename = os.path.basename(file_path)
+    logger.info(f"[download] ✅ Serving {filename} ({file_size/1024:.1f}KB)")
     return FileResponse(
         path=file_path,
         filename=filename,
@@ -1204,6 +1212,48 @@ async def list_tasks():
         })
     return {"success": True, "data": tasks}
 
+
+@router.delete("/tasks/{task_id}")
+async def delete_task(task_id: str):
+    """删除投标任务 — 从数据库删除 + 清除缓存 + 删除输出文件"""
+    import shutil
+    logger.info(f"[delete-task] ▶ task={task_id}")
+
+    # Get task info before deleting (for file cleanup)
+    task_data = _bid_store.get_task(task_id)
+    if not task_data:
+        logger.warning(f"[delete-task] Task not found in DB: {task_id}")
+        return {"success": False, "message": f"任务 {task_id} 不存在"}
+
+    # 1) Delete from SQLite
+    _bid_store.delete_task(task_id)
+    logger.info(f"[delete-task] DB record deleted")
+
+    # 2) Clear section cache
+    cache_dir = os.path.join("data", "tasks", task_id)
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir)
+        logger.info(f"[delete-task] Cache dir removed: {cache_dir}")
+
+    # 3) Delete output file
+    output_file = task_data.get("output_file", "")
+    if output_file and os.path.exists(output_file):
+        os.remove(output_file)
+        logger.info(f"[delete-task] Output file removed: {output_file}")
+
+    # 4) Delete tender file
+    tender_file = task_data.get("tender_file_path", "")
+    if tender_file and os.path.exists(tender_file):
+        os.remove(tender_file)
+        logger.info(f"[delete-task] Tender file removed: {tender_file}")
+
+    # 5) Clear from in-memory cache
+    if task_id in _tender_indexes:
+        del _tender_indexes[task_id]
+        logger.info(f"[delete-task] Memory cache cleared")
+
+    logger.info(f"[delete-task] ✅ Task {task_id} fully deleted")
+    return {"success": True, "message": f"任务 {task_id} 已删除"}
 
 # ── Template management endpoints ──
 

@@ -38,6 +38,40 @@ def create_app() -> FastAPI:
     # --- Exception handlers ---
     register_exception_handlers(app)
 
+    # --- Request Logging Middleware (bidding API) ---
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.requests import Request
+    import time as _time
+
+    class BiddingRequestLogger(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            if not request.url.path.startswith("/api/bidding"):
+                return await call_next(request)
+
+            start = _time.time()
+            method = request.method
+            path = request.url.path
+            query = str(request.query_params) if request.query_params else ""
+            logger.info(f"🔹 [{method}] {path}{' ?' + query if query else ''}")
+
+            response = await call_next(request)
+
+            elapsed = (_time.time() - start) * 1000
+            status = response.status_code
+            content_type = response.headers.get("content-type", "")
+            is_stream = "event-stream" in content_type
+
+            if status >= 400:
+                logger.warning(f"🔸 [{method}] {path} → {status} ({elapsed:.0f}ms)")
+            elif is_stream:
+                logger.info(f"🔹 [{method}] {path} → SSE stream started ({elapsed:.0f}ms)")
+            else:
+                logger.info(f"🔹 [{method}] {path} → {status} ({elapsed:.0f}ms)")
+
+            return response
+
+    app.add_middleware(BiddingRequestLogger)
+
     # --- Routers ---
     from app.api import auth, agent, chat, knowledge, file, bidding, company
     app.include_router(auth.router, prefix="/api/auth", tags=["认证"])

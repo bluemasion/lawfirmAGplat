@@ -71,16 +71,32 @@ export default function TaskHistory({ onOpenTask }) {
         document.body.removeChild(link);
     };
 
-    const handleClearCache = async (taskId) => {
-        if (!confirm(`确定要清除任务 ${taskId} 的缓存吗？清除后重新生成将重新调用 LLM。`)) return;
+    const handleDeleteTask = async (taskId) => {
+        if (!confirm(`确定要删除任务 ${taskId} 吗？将同时删除缓存、生成文件和数据库记录，不可恢复！`)) return;
         setDeletingId(taskId);
         try {
-            await fetch(`${API_BASE}/api/bidding/clear-cache/${taskId}`, { method: 'DELETE' });
-            fetchTasks();
+            const res = await fetch(`${API_BASE}/api/bidding/tasks/${taskId}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (data.success) {
+                setTasks(prev => prev.filter(t => t.task_id !== taskId));
+            } else {
+                alert(`删除失败: ${data.message}`);
+            }
         } catch (e) {
-            console.error('Clear cache failed:', e);
+            console.error('Delete task failed:', e);
+            alert('删除失败: ' + e.message);
         } finally {
             setDeletingId(null);
+        }
+    };
+
+    const handleClearCache = async (taskId) => {
+        if (!confirm(`确定要清除任务 ${taskId} 的生成缓存吗？清除后重新生成将重新调用 LLM。`)) return;
+        try {
+            await fetch(`${API_BASE}/api/bidding/clear-cache/${taskId}`, { method: 'DELETE' });
+            alert('缓存已清除');
+        } catch (e) {
+            console.error('Clear cache failed:', e);
         }
     };
 
@@ -213,11 +229,20 @@ export default function TaskHistory({ onOpenTask }) {
                                                 <span>下载 .docx</span>
                                             </button>
                                         )}
+                                        {task.has_output && (
+                                            <button
+                                                onClick={() => handleClearCache(task.task_id)}
+                                                className="flex items-center space-x-1 px-2 py-1.5 text-[11px] font-medium text-zinc-400 hover:text-blue-500 hover:bg-blue-50 border border-zinc-200 hover:border-blue-200 rounded-md transition-all"
+                                                title="清除缓存（保留任务，重新生成时调用LLM）"
+                                            >
+                                                <RefreshCw size={12} />
+                                            </button>
+                                        )}
                                         <button
-                                            onClick={() => handleClearCache(task.task_id)}
+                                            onClick={() => handleDeleteTask(task.task_id)}
                                             disabled={deletingId === task.task_id}
                                             className="flex items-center space-x-1 px-2.5 py-1.5 text-[11px] font-medium text-zinc-400 hover:text-red-500 hover:bg-red-50 border border-zinc-200 hover:border-red-200 rounded-md transition-all disabled:opacity-40"
-                                            title="清除缓存"
+                                            title="删除任务（不可恢复）"
                                         >
                                             <Trash2 size={12} />
                                         </button>
