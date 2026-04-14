@@ -597,7 +597,13 @@ export default function MaterialPanel({ onClose }) {
                                                         <>{item.client || ''}{item.contract_amount ? ` · ${item.contract_amount}` : ''}</>
                                                     )}
                                                     {activeTab === 'qualifications' && (
-                                                        <>{item.issuer || ''}{item.valid_until ? ` · 至${item.valid_until}` : ''}</>
+                                                        <>
+                                                            {item.cert_type === 'personal'
+                                                                ? <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">👤 个人</span>
+                                                                : <span className="text-[9px] px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30">🏢 企业</span>
+                                                            }
+                                                            {item.issuer || ''}{item.valid_until ? ` · 至${item.valid_until}` : ''}
+                                                        </>
                                                     )}
                                                 </div>
                                                 <button onClick={(e) => { e.stopPropagation(); setEditingItem({ mode: 'edit', data: { ...item }, originalName: item[keyField] }); }}
@@ -666,6 +672,19 @@ export default function MaterialPanel({ onClose }) {
                                                                             <span className="text-orange-400 mr-2 mt-0.5 shrink-0">▸</span>
                                                                             <span className="text-zinc-300">{typeof c === 'string' ? c : JSON.stringify(c)}</span>
                                                                         </div>
+                                                                    ))}
+                                                                </div>
+                                                            </div>
+                                                        )}
+                                                        {/* Certifications linked to this person */}
+                                                        {item.certifications?.length > 0 && (
+                                                            <div className="px-5 py-3 border-t border-zinc-700/50">
+                                                                <div className="text-[10px] text-zinc-500 uppercase tracking-wide mb-1.5">持有证书</div>
+                                                                <div className="flex flex-wrap gap-1.5">
+                                                                    {item.certifications.map((cert, ci) => (
+                                                                        <span key={ci} className="inline-flex items-center text-[10px] px-2 py-1 rounded-md bg-amber-500/10 text-amber-300 border border-amber-500/20">
+                                                                            🏅 {cert.replace(/ — .+$/, '')}
+                                                                        </span>
                                                                     ))}
                                                                 </div>
                                                             </div>
