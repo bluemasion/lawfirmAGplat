@@ -31,7 +31,7 @@ export default function Sidebar({ activeTab, activeAgent, testModel, onSelectTab
             <div className="p-4 border-t border-zinc-100 shrink-0">
                 <div className="bg-[#1a1c23] rounded-sm p-4 text-white space-y-2 relative overflow-hidden shadow-inner cursor-default">
                     <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest z-10 relative leading-none mb-1">System Edition</p>
-                    <p className="text-xs font-mono font-bold text-orange-400 z-10 relative uppercase">v2.0.8-Enterprise</p>
+                    <p className="text-xs font-mono font-bold text-orange-400 z-10 relative uppercase">v2.1.1-Enterprise</p>
                     <Cpu size={44} className="absolute -right-2 -bottom-2 text-white/5 rotate-12" />
                 </div>
             </div>

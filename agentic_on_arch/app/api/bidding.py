@@ -997,6 +997,151 @@ async def clear_section_cache(task_id: str):
     return {"success": True, "message": "无缓存需要清除"}
 
 
+class RegenerateSectionRequest(BaseModel):
+    section_title: str
+    company_data: dict = {}
+    llm_provider: str = "qwen"
+
+
+@router.post("/regenerate-section/{task_id}")
+async def regenerate_section(task_id: str, req: RegenerateSectionRequest):
+    """重新生成单个章节 — SSE 流式输出
+
+    删除该章节的缓存，重新生成内容，更新缓存文件。
+    """
+    task = _get_task(task_id)
+    if not task:
+        return {"success": False, "message": f"任务 {task_id} 不存在"}
+
+    requirements = task.get("requirements", {})
+    company_data = req.company_data or {}
+    company_info = TemplateFillingSkill.get_company_info_summary(company_data)
+
+    # Find the target section
+    target_section = None
+    target_idx = 0
+    for volume in requirements.get("volumes", []):
+        for section in volume.get("sections", []):
+            if section.get("title") == req.section_title:
+                target_section = section
+                break
+            target_idx += 1
+        if target_section:
+            break
+
+    if not target_section:
+        return {"success": False, "message": f"未找到章节: {req.section_title}"}
+
+    # Delete cache for this section
+    cache_dir = os.path.join("data", "tasks", task_id, "sections")
+    safe_title = "".join(c for c in req.section_title if c.isalnum() or c in "_ -")[:40]
+    cache_path = os.path.join(cache_dir, f"{target_idx:03d}_{safe_title}.json")
+    if os.path.exists(cache_path):
+        os.remove(cache_path)
+        logger.info(f"[regenerate] Deleted cache: {cache_path}")
+
+    # Pre-match materials for this section
+    from app.core.skills.builtin.material_store import get_material_store
+    from app.core.skills.builtin.material_matcher import MaterialMatcher
+    store = get_material_store()
+    company_name = company_data.get("company_name", "")
+    if store:
+        matcher = MaterialMatcher(store)
+        matched = matcher.match_for_section(target_section, company=company_name)
+        target_section["pre_matched_materials"] = matched
+
+    async def event_generator():
+        import asyncio
+        title = target_section.get("title", "")
+        sec_type = target_section.get("type", "narrative")
+        sec_start = time.time()
+
+        yield _sse({
+            "type": "progress",
+            "section_title": title,
+            "section_type": sec_type,
+            "status": "generating",
+        })
+
+        try:
+            # Get reference data from tender index
+            reference_data = "暂无参考资料"
+            tender_index = task.get("tender_index")
+            if sec_type == "narrative" and tender_index and tender_index.is_built:
+                query = f"{title} {target_section.get('content_hints', '')}"
+                relevant_chunks = tender_index.search(query, top_k=5)
+                if relevant_chunks:
+                    reference_data = "\n\n---\n\n".join(relevant_chunks)
+
+            # Template matching
+            match_result = _template_store.match_template({"requirements": requirements})
+            matched_skeletons = match_result.get("skeletons", {}) if match_result.get("matched") else {}
+            skeleton_info = matched_skeletons.get(title, {})
+            skeleton_text = skeleton_info.get("skeleton") if skeleton_info else None
+
+            # Streaming callback
+            accumulated = []
+
+            async def on_chunk(chunk):
+                accumulated.append(chunk)
+                await asyncio.sleep(0)  # yield control
+
+            result = await _generator.execute_streaming({
+                "section": target_section,
+                "company_info": company_info,
+                "reference_data": reference_data,
+                "llm_provider": req.llm_provider,
+                "skeleton": skeleton_text,
+                "company": company_name,
+            }, chunk_callback=on_chunk)
+
+            # Stream accumulated chunks
+            for chunk in accumulated:
+                yield _sse({
+                    "type": "content_chunk",
+                    "section_title": title,
+                    "chunk": chunk,
+                })
+
+            result["order"] = target_section.get("order", target_idx + 1)
+            result["type"] = sec_type
+            result["level"] = 2
+
+            # Save to cache
+            os.makedirs(cache_dir, exist_ok=True)
+            try:
+                with open(cache_path, "w", encoding="utf-8") as f:
+                    json.dump(result, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.warning(f"Failed to save regen cache: {e}")
+
+            elapsed = time.time() - sec_start
+            logger.info(f"[regenerate] DONE: {title} ({len(result.get('content', ''))}字, {elapsed:.1f}s)")
+
+            yield _sse({
+                "type": "section_done",
+                "section_title": title,
+                "status": "generated",
+                "content": result.get("content", ""),
+                "content_length": len(result.get("content", "")),
+                "elapsed": round(elapsed, 1),
+            })
+
+        except Exception as e:
+            elapsed = time.time() - sec_start
+            logger.error(f"[regenerate] Error: {title}: {e} ({elapsed:.1f}s)")
+            yield _sse({
+                "type": "section_error",
+                "section_title": title,
+                "error": str(e),
+                "elapsed": round(elapsed, 1),
+            })
+
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
 @router.post("/verify/{task_id}")
 async def verify_document(task_id: str):
     """对已生成的投标文件重新运行校验"""

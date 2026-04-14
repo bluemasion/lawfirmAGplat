@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { FileText, Loader2, CheckCircle, Download, Upload, Sparkles, RotateCcw, Send, AlertTriangle, ChevronDown, Eye, X, Package } from 'lucide-react';
+import { FileText, Loader2, CheckCircle, Download, Upload, Sparkles, RotateCcw, Send, AlertTriangle, ChevronDown, Eye, X, Package, Lock, Unlock, RefreshCw } from 'lucide-react';
 import MaterialPanel from './MaterialPanel';
 
 const API_BASE = 'http://localhost:8001';
@@ -20,6 +20,9 @@ export default function BiddingAgent() {
     const [liveContent, setLiveContent] = useState({ title: '', text: '', index: 0 }); // streaming content preview
     const [completedSections, setCompletedSections] = useState({}); // { title: content } for review
     const [viewingSection, setViewingSection] = useState(null); // title of section user is viewing
+    const [lockedSections, setLockedSections] = useState({}); // { title: true } - locked sections won't be regenerated
+    const [regenerating, setRegenerating] = useState(null); // title of section being regenerated
+    const [expandedDoneSection, setExpandedDoneSection] = useState(null); // which section is expanded in done page
 
     // Material selection state
     const [selectedCompany, setSelectedCompany] = useState('');
@@ -427,6 +430,63 @@ export default function BiddingAgent() {
             setPhase('confirming');
         } finally {
             setProcessing(false);
+        }
+    };
+
+    // ── Regenerate single section ──
+    const regenerateSection = async (sectionTitle) => {
+        if (!taskId || regenerating) return;
+        setRegenerating(sectionTitle);
+        try {
+            const effectiveCompanyData = { ...companyData, company_name: selectedCompany || companyData.company_name };
+            const res = await fetch(`${API_BASE}/api/bidding/regenerate-section/${taskId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    section_title: sectionTitle,
+                    company_data: effectiveCompanyData,
+                    llm_provider: 'qwen',
+                }),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let accumulated = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    const ds = line.slice(6);
+                    if (ds === '[DONE]') break;
+                    try {
+                        const ev = JSON.parse(ds);
+                        if (ev.type === 'content_chunk') {
+                            accumulated += ev.chunk;
+                            setCompletedSections(prev => ({ ...prev, [sectionTitle]: accumulated }));
+                        } else if (ev.type === 'section_done') {
+                            const finalContent = ev.content || accumulated;
+                            setCompletedSections(prev => ({ ...prev, [sectionTitle]: finalContent }));
+                            setGenProgress(p => ({
+                                ...p,
+                                sections: {
+                                    ...p.sections,
+                                    [sectionTitle]: { ...p.sections[sectionTitle], status: 'done', chars: finalContent.length },
+                                },
+                            }));
+                        }
+                    } catch {}
+                }
+            }
+        } catch (err) {
+            addMsg('ai', `❌ 重新生成失败: ${err.message}`);
+        } finally {
+            setRegenerating(null);
         }
     };
 
@@ -906,6 +966,11 @@ export default function BiddingAgent() {
                                                         <span className={`text-[8px] px-1 py-0.5 rounded border shrink-0 ml-1 ${typeColor[sec.type] || 'bg-zinc-800 text-zinc-500 border-zinc-700'}`}>
                                                             {typeLabel[sec.type] || sec.type}
                                                         </span>
+                                                        {matRefs.length > 0 && (
+                                                            <span className="text-[8px] px-1 py-0.5 rounded bg-green-500/10 text-green-400 border border-green-500/20 shrink-0 ml-1">
+                                                                📎{matRefs.length}
+                                                            </span>
+                                                        )}
                                                     </label>
 
                                                     {/* Expandable content_outline + material_refs */}
@@ -1235,10 +1300,10 @@ export default function BiddingAgent() {
                     </div>
                 ) : phase === 'done' ? (
                     /* ══════════════════════════════════════════════════════════ */
-                    /* ── STEP 4: Completion Page with Preview ─────────────── */
+                    /* ── STEP 4: Completion Page with Preview + Regen ─────── */
                     /* ══════════════════════════════════════════════════════════ */
                     <div className="flex-1 flex overflow-hidden">
-                        {/* Left: Document Preview */}
+                        {/* Left: Full Document Preview */}
                         <div className="flex-1 overflow-y-auto p-6 bg-zinc-800/30">
                             <div className="max-w-[600px] mx-auto bg-white rounded shadow-2xl shadow-black/40 text-black"
                                 style={{ aspectRatio: 'auto', minHeight: '800px' }}>
@@ -1251,7 +1316,7 @@ export default function BiddingAgent() {
                                     <p className="text-center text-gray-500 text-[12px] mb-12">（商务技术部分）</p>
                                     <div className="w-48 mx-auto border-t border-gray-300 my-6"></div>
                                     <div className="text-center space-y-2 mt-8">
-                                        <p className="text-gray-600 text-[12px]">投标人：{requirements?.company_name || '投标人'}</p>
+                                        <p className="text-gray-600 text-[12px]">投标人：{selectedCompany || requirements?.company_name || '投标人'}</p>
                                         <p className="text-gray-600 text-[12px]">日期：{new Date().toLocaleDateString('zh-CN')}</p>
                                     </div>
                                 </div>
@@ -1261,14 +1326,17 @@ export default function BiddingAgent() {
                                     <h2 className="text-center text-[14px] font-bold text-gray-800 tracking-[0.5em] mb-6">目    录</h2>
                                     <div className="space-y-1.5">
                                         {Object.entries(genProgress.sections)
-                                            .filter(([, s]) => s.status === 'done')
-                                            .sort(([, a], [, b]) => (a.order || 0) - (b.order || 0))
-                                            .map(([key, sec], i) => (
-                                                <div key={key} className="flex items-baseline text-[11px]">
+                                            .filter(([, s]) => s.status === 'done' || s.status === 'cached')
+                                            .map(([key], i) => (
+                                                <div key={key} className="flex items-baseline text-[11px] cursor-pointer hover:bg-gray-50 px-2 py-0.5 -mx-2 rounded transition-colors"
+                                                    onClick={() => {
+                                                        const el = document.getElementById(`done-section-${i}`);
+                                                        el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                                    }}>
                                                     <span className="text-gray-800 font-medium shrink-0">
-                                                        第{'一二三四五六七八九十'[i + 1] || i + 1}章
+                                                        第{'一二三四五六七八九十'[i + 1] || (i + 2)}章
                                                     </span>
-                                                    <span className="text-gray-700 ml-2 flex-1">{sec.title}</span>
+                                                    <span className="text-gray-700 ml-2 flex-1">{key}</span>
                                                     <span className="border-b border-dotted border-gray-300 flex-1 mx-2 min-w-[40px]"></span>
                                                     <span className="text-gray-400 text-[10px] shrink-0">{i + 3}</span>
                                                 </div>
@@ -1277,75 +1345,157 @@ export default function BiddingAgent() {
                                     </div>
                                 </div>
 
-                                {/* Content preview */}
-                                <div className="px-12 py-6 space-y-6">
+                                {/* Full content preview — using completedSections for complete text */}
+                                <div className="px-12 py-6 space-y-8">
                                     {Object.entries(genProgress.sections)
-                                        .filter(([, s]) => s.status === 'done' && s.content)
-                                        .sort(([, a], [, b]) => (a.order || 0) - (b.order || 0))
-                                        .map(([key, sec], i) => (
-                                            <div key={key} className="mb-6">
-                                                <h3 className="text-[14px] font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200">
-                                                    第{'一二三四五六七八九十'[i + 1] || i + 1}章  {sec.title}
-                                                </h3>
-                                                <div className="text-[11px] text-gray-700 leading-relaxed whitespace-pre-wrap"
-                                                    style={{ textIndent: '2em' }}>
-                                                    {(sec.content || '').slice(0, 600)}
-                                                    {(sec.content || '').length > 600 && (
-                                                        <span className="text-gray-400 italic">... (下载完整文件查看全文)</span>
-                                                    )}
+                                        .filter(([, s]) => s.status === 'done' || s.status === 'cached')
+                                        .map(([title], i) => {
+                                            const content = completedSections[title] || '';
+                                            const isLocked = lockedSections[title];
+                                            const isRegen = regenerating === title;
+                                            return (
+                                                <div key={title} id={`done-section-${i}`} className="mb-6 scroll-mt-6">
+                                                    <div className="flex items-center justify-between mb-3 pb-1 border-b border-gray-200">
+                                                        <h3 className="text-[14px] font-bold text-gray-900">
+                                                            第{'一二三四五六七八九十'[i + 1] || (i + 2)}章  {title}
+                                                        </h3>
+                                                        <div className="flex items-center gap-1.5">
+                                                            {isLocked && (
+                                                                <span className="text-[8px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-500 border border-blue-200">已锁定</span>
+                                                            )}
+                                                            {isRegen && (
+                                                                <span className="text-[8px] px-1.5 py-0.5 rounded bg-orange-50 text-orange-500 border border-orange-200 flex items-center gap-1">
+                                                                    <Loader2 size={8} className="animate-spin" /> 重新生成中
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-[11px] text-gray-700 leading-relaxed whitespace-pre-wrap"
+                                                        style={{ textIndent: '2em' }}>
+                                                        {content || <span className="text-gray-400 italic">内容未生成</span>}
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        ))
+                                            );
+                                        })
                                     }
                                 </div>
                             </div>
                         </div>
 
-                        {/* Right: Stats & Actions */}
-                        <div className="w-[280px] shrink-0 border-l border-zinc-800 p-6 flex flex-col items-center justify-center space-y-6">
-                            <div className="w-16 h-16 bg-emerald-500/10 rounded-2xl flex items-center justify-center">
-                                <CheckCircle size={32} className="text-emerald-400" />
-                            </div>
-                            <div className="text-center">
-                                <h3 className="text-lg font-bold text-zinc-100">生成完成</h3>
-                                <p className="text-[11px] text-zinc-400 mt-1">
-                                    {genProgress.done} 个章节 · {Object.values(genProgress.sections).reduce((s, x) => s + (x.chars || 0), 0).toLocaleString()} 字
-                                </p>
-                            </div>
-
-                            {/* Stats */}
-                            <div className="w-full space-y-2 py-3 border-y border-zinc-800">
-                                {Object.entries(genProgress.sections)
-                                    .filter(([, s]) => s.status === 'done')
-                                    .sort(([, a], [, b]) => (a.order || 0) - (b.order || 0))
-                                    .map(([key, sec]) => (
-                                        <div key={key} className="flex items-center text-[10px]">
-                                            <span className="text-emerald-400 mr-1.5">✓</span>
-                                            <span className="text-zinc-400 flex-1 truncate">{sec.title}</span>
-                                            <span className="text-zinc-600 shrink-0">{sec.chars || 0}字</span>
-                                        </div>
-                                    ))
-                                }
-                                {Object.entries(genProgress.sections)
-                                    .filter(([, s]) => s.status === 'error')
-                                    .map(([key, sec]) => (
-                                        <div key={key} className="flex items-center text-[10px]">
-                                            <span className="text-red-400 mr-1.5">✗</span>
-                                            <span className="text-red-400/70 flex-1 truncate">{sec.title}</span>
-                                            <span className="text-red-500/50 shrink-0">失败</span>
-                                        </div>
-                                    ))
-                                }
+                        {/* Right: Stats & Actions with Regen/Lock */}
+                        <div className="w-[300px] shrink-0 border-l border-zinc-800 flex flex-col overflow-hidden bg-zinc-900/80">
+                            {/* Header */}
+                            <div className="px-5 py-4 border-b border-zinc-800 flex flex-col items-center space-y-3">
+                                <div className="w-14 h-14 bg-emerald-500/10 rounded-2xl flex items-center justify-center">
+                                    <CheckCircle size={28} className="text-emerald-400" />
+                                </div>
+                                <div className="text-center">
+                                    <h3 className="text-[15px] font-bold text-zinc-100">生成完成</h3>
+                                    <p className="text-[11px] text-zinc-400 mt-1">
+                                        {genProgress.done} 个章节 · {Object.values(genProgress.sections).reduce((s, x) => s + (x.chars || 0), 0).toLocaleString()} 字
+                                    </p>
+                                </div>
+                                {/* Download */}
+                                <button onClick={handleDownload}
+                                    className="w-full flex items-center justify-center space-x-2 px-5 py-2.5 rounded-lg text-[12px] font-bold bg-emerald-500 text-white hover:bg-emerald-600 shadow-lg shadow-emerald-500/20 transition-all">
+                                    <Download size={14} />
+                                    <span>下载 Word 文件</span>
+                                </button>
                             </div>
 
-                            {/* Download */}
-                            <button onClick={handleDownload}
-                                className="w-full flex items-center justify-center space-x-2 px-6 py-3 rounded-lg text-[13px] font-bold bg-emerald-500 text-white hover:bg-emerald-600 shadow-lg shadow-emerald-500/20 transition-all">
-                                <Download size={16} />
-                                <span>下载 Word 文件</span>
-                            </button>
+                            {/* Section list with lock/regen */}
+                            <div className="flex-1 overflow-y-auto">
+                                <div className="px-3 py-2">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">章节管理</span>
+                                        <span className="text-[9px] text-zinc-600">
+                                            {Object.values(lockedSections).filter(Boolean).length} 已锁定
+                                        </span>
+                                    </div>
+                                    {Object.entries(genProgress.sections)
+                                        .map(([title, info], idx) => {
+                                            const isLocked = lockedSections[title];
+                                            const isRegen = regenerating === title;
+                                            const isExpanded = expandedDoneSection === title;
+                                            const isDone = info.status === 'done' || info.status === 'cached';
+                                            const isError = info.status === 'error';
+                                            return (
+                                                <div key={title} className={`rounded-lg mb-1 border transition-all ${
+                                                    isRegen ? 'border-orange-500/30 bg-orange-500/5' :
+                                                    isLocked ? 'border-blue-500/20 bg-blue-500/5' :
+                                                    isExpanded ? 'border-zinc-600 bg-zinc-800/80' :
+                                                    'border-zinc-800/50 hover:border-zinc-700 hover:bg-zinc-800/40'
+                                                }`}>
+                                                    <div className="flex items-center py-2 px-2.5 cursor-pointer"
+                                                        onClick={() => setExpandedDoneSection(isExpanded ? null : title)}>
+                                                        <span className="w-4 shrink-0 text-center text-[10px]">
+                                                            {isError ? <AlertTriangle size={11} className="text-red-400" /> :
+                                                             isRegen ? <Loader2 size={11} className="text-orange-400 animate-spin" /> :
+                                                             isDone ? <CheckCircle size={11} className="text-emerald-400" /> :
+                                                             <span className="text-zinc-600">○</span>}
+                                                        </span>
+                                                        <span className={`flex-1 ml-1.5 text-[11px] truncate ${
+                                                            isError ? 'text-red-300' :
+                                                            isRegen ? 'text-orange-200 font-bold' :
+                                                            'text-zinc-300'
+                                                        }`}>{title}</span>
+                                                        <span className="text-[9px] text-zinc-600 shrink-0 ml-1">{info.chars || 0}字</span>
+                                                        {isLocked && <Lock size={10} className="text-blue-400 ml-1 shrink-0" />}
+                                                    </div>
+                                                    {/* Expanded actions */}
+                                                    {isExpanded && isDone && (
+                                                        <div className="px-2.5 pb-2 flex items-center gap-1.5">
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    setLockedSections(prev => ({ ...prev, [title]: !prev[title] }));
+                                                                }}
+                                                                className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded transition-all ${
+                                                                    isLocked
+                                                                        ? 'bg-blue-500/15 border border-blue-500/30 text-blue-300 hover:bg-blue-500/25'
+                                                                        : 'bg-zinc-700/50 border border-zinc-600 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'
+                                                                }`}>
+                                                                {isLocked ? <Lock size={10} /> : <Unlock size={10} />}
+                                                                <span>{isLocked ? '解锁' : '锁定'}</span>
+                                                            </button>
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    if (isLocked) { alert('该章节已锁定，请先解锁再重新生成'); return; }
+                                                                    if (!confirm(`确认重新生成「${title}」？`)) return;
+                                                                    regenerateSection(title);
+                                                                }}
+                                                                disabled={isLocked || isRegen}
+                                                                className="flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-orange-500/10 border border-orange-500/30 text-orange-300 hover:bg-orange-500/20 transition-all disabled:opacity-30 disabled:cursor-not-allowed">
+                                                                <RefreshCw size={10} className={isRegen ? 'animate-spin' : ''} />
+                                                                <span>{isRegen ? '生成中...' : '重新生成'}</span>
+                                                            </button>
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    const el = document.getElementById(`done-section-${idx}`);
+                                                                    el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                                                }}
+                                                                className="flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-zinc-700/50 border border-zinc-600 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200 transition-all">
+                                                                <Eye size={10} />
+                                                                <span>查看</span>
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })
+                                    }
+                                </div>
+                            </div>
 
-                            <div className="flex items-center space-x-3">
+                            {/* Footer */}
+                            <div className="px-4 py-3 border-t border-zinc-800 flex items-center justify-center space-x-3">
+                                <button onClick={() => setShowMaterialPanel(true)}
+                                    className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1">
+                                    <Package size={10} /> 素材库
+                                </button>
+                                <span className="text-zinc-800">|</span>
                                 <button onClick={() => setShowStructure(true)}
                                     className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors">
                                     📋 大纲
