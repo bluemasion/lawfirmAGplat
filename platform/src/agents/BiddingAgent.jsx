@@ -16,6 +16,7 @@ export default function BiddingAgent() {
     const [showStructure, setShowStructure] = useState(false);
     const [showMaterialPanel, setShowMaterialPanel] = useState(false);
     const [sectionChecked, setSectionChecked] = useState({}); // { "vi-si": true/false }
+    const [parseProgress, setParseProgress] = useState({ step: 0, startTime: null }); // parsing phase progress
     const [genProgress, setGenProgress] = useState({ total: 0, done: 0, current: '', sections: {} }); // per-section status
     const [liveContent, setLiveContent] = useState({ title: '', text: '', index: 0 }); // streaming content preview
     const [completedSections, setCompletedSections] = useState({}); // { title: content } for review
@@ -52,6 +53,14 @@ export default function BiddingAgent() {
     useEffect(() => {
         contentEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [liveContent.text, viewingSection]);
+
+    // Tick timer during parsing phase for live elapsed display
+    const [, setTick] = useState(0);
+    useEffect(() => {
+        if (phase !== 'parsing') return;
+        const t = setInterval(() => setTick(n => n + 1), 1000);
+        return () => clearInterval(t);
+    }, [phase]);
 
     // ── Helpers ──
     const addMsg = (role, content, type = 'text') => {
@@ -95,6 +104,7 @@ export default function BiddingAgent() {
         addMsg('user', `📄 上传招标文件: ${file.name} (${(file.size / 1024).toFixed(1)}KB)`);
         setProcessing(true);
         setPhase('parsing');
+        setParseProgress({ step: 0, startTime: Date.now() });
 
         // Start streaming AI log
         setMessages(prev => [...prev, { role: 'ai', content: '', type: 'stream', time: new Date() }]);
@@ -129,8 +139,13 @@ export default function BiddingAgent() {
                         const ev = JSON.parse(line.slice(6));
                         if (ev.type === 'log') {
                             updateLastAiMsg(ev.message);
+                            // Track steps based on log content
+                            if (ev.message?.includes('文件已保存')) setParseProgress(p => ({ ...p, step: 1 }));
+                            if (ev.message?.includes('文档解析完成')) setParseProgress(p => ({ ...p, step: 2 }));
+                            if (ev.message?.includes('分析完成')) setParseProgress(p => ({ ...p, step: 3 }));
                         } else if (ev.type === 'phase') {
                             updateLastAiMsg(ev.message);
+                            if (ev.phase === 'analyzing') setParseProgress(p => ({ ...p, step: 2 }));
                         } else if (ev.type === 'heartbeat') {
                             // SSE keep-alive, ignore
                         } else if (ev.type === 'section') {
@@ -1575,9 +1590,45 @@ export default function BiddingAgent() {
                         </div>
                         {/* Bottom hint during parsing */}
                         <div className="shrink-0 border-t border-zinc-800 bg-zinc-900/90 backdrop-blur px-4 py-3">
-                            <p className="text-[10px] text-zinc-600 text-center">
-                                AI 正在解析招标文件结构... 完成后将自动进入确认页面
-                            </p>
+                            {/* Step progress indicator */}
+                            {(() => {
+                                const steps = [
+                                    { label: '上传文件', icon: '📄' },
+                                    { label: '文档解析', icon: '🔍' },
+                                    { label: 'AI 深度分析', icon: '🤖' },
+                                    { label: '构建索引', icon: '📊' },
+                                ];
+                                const currentStep = parseProgress.step || 0;
+                                const elapsed = parseProgress.startTime ? Math.round((Date.now() - parseProgress.startTime) / 1000) : 0;
+                                return (
+                                    <div>
+                                        <div className="flex items-center justify-between mb-2">
+                                            <div className="flex items-center space-x-1">
+                                                {steps.map((s, i) => (
+                                                    <div key={i} className="flex items-center">
+                                                        <div className={`flex items-center space-x-1 px-2 py-1 rounded-md text-[10px] font-medium transition-all duration-300 ${
+                                                            i < currentStep ? 'bg-emerald-500/20 text-emerald-400' :
+                                                            i === currentStep ? 'bg-orange-500/20 text-orange-300 animate-pulse' :
+                                                            'bg-zinc-800 text-zinc-600'
+                                                        }`}>
+                                                            <span>{i < currentStep ? '✓' : s.icon}</span>
+                                                            <span>{s.label}</span>
+                                                        </div>
+                                                        {i < steps.length - 1 && (
+                                                            <div className={`w-4 h-px mx-0.5 ${i < currentStep ? 'bg-emerald-500/40' : 'bg-zinc-700'}`} />
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                            <span className="text-[10px] text-zinc-500">⏱ {elapsed}s</span>
+                                        </div>
+                                        <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
+                                            <div className="h-full bg-gradient-to-r from-orange-500 to-amber-500 rounded-full transition-all duration-700"
+                                                style={{ width: `${Math.min((currentStep / 3) * 100, 100)}%` }} />
+                                        </div>
+                                    </div>
+                                );
+                            })()}
                         </div>
                     </>
                 )}
