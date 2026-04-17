@@ -2,7 +2,9 @@
 
 > **用途**：每次开新会话时先读此文档，获取项目完整上下文。开发过程中定期回写重要决策和进展。
 >
-> **最后更新**：2026-03-20 10:30
+> **最后更新**：2026-04-16
+>
+> ⚠️ 环境配置（端口/路径/启动命令）的权威来源是 `PROJECT_ENV.md`，本文件侧重产品和架构上下文。
 
 ---
 
@@ -126,8 +128,8 @@ lawfirmAGplat/
 **启动命令**：
 ```bash
 cd platform
-export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"
-npm run dev  # → http://localhost:5173
+export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+npx --yes vite --port 5173 --host 0.0.0.0  # → http://192.168.31.6:5173
 ```
 
 **API 层设计原则**：`services.js` 导出所有接口函数，当前内部调用 `mock.js`，后续只需将 mock 调用改为 `fetch('/api/xxx')` 即可切换真实后端，页面组件无需修改。
@@ -197,8 +199,9 @@ agentic_on_arch/
 ```bash
 cd agentic_on_arch
 source venv/bin/activate
-uvicorn app.main:app --reload --port 8000
-# → http://localhost:8000/docs (Swagger UI)
+python3.8 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+# → http://192.168.31.6:8001/docs (Swagger UI)
+# ⚠️ 端口必须是 8001（前端硬编码），必须 --host 0.0.0.0（局域网访问）
 ```
 
 ---
@@ -372,8 +375,8 @@ uvicorn app.main:app --reload --port 8000
 | React | 19.x |
 | 前端路径 | lawfirmAGplat/platform/ |
 | 后端路径 | lawfirmAGplat/agentic_on_arch/ |
-| 前端 Dev | localhost:5173 |
-| 后端 Dev | localhost:8000 |
+| 前端 Dev | **0.0.0.0:5173** → `http://192.168.31.6:5173` |
+| 后端 Dev | **0.0.0.0:8001** → `http://192.168.31.6:8001` |
 | Git 仓库 | github.com/bluemasion/lawfirmAGplat |
 
 ---
@@ -448,3 +451,30 @@ uvicorn app.main:app --reload --port 8000
 8. 法定代表人授权委托书
 
 **需人工提供**：营业执照扫描件、财务审计报告、业绩合同、银行保函、增值税证明
+
+---
+
+## 14. AI 助手持久化记忆 (Knowledge Items)
+
+> 2026-04-16 建立。解决每次新会话都要重复沟通环境配置的问题。
+
+### 机制说明
+
+- **Knowledge Items (KI)** 存储在 `~/.gemini/antigravity/knowledge/` 下
+- 每次新对话开始时，AI 助手**自动接收** KI 摘要，无需用户手动提供
+- 结合 `PROJECT_ENV.md`（环境配置）和 `PROJECT_CONTEXT.md`（产品上下文），AI 可快速恢复完整项目理解
+
+### 已建立的 KI
+
+| KI ID | 内容 | 解决什么问题 |
+|-------|------|-------------|
+| `lawfirm-project-env` | 端口/版本/路径/启动命令/常犯错误 | 不再重复沟通"用哪个端口""怎么启动" |
+| `lawfirm-bidding-architecture` | 架构设计/生成管线/文件清单/设计决策 | 不再每次重新读所有代码文件 |
+
+### 维护规则
+
+1. **环境调整**（改端口/改路径/加依赖）→ 更新 `PROJECT_ENV.md` + 对应 KI
+2. **架构变更**（加模块/改链路/新决策）→ 更新 `PROJECT_CONTEXT.md` + 对应 KI
+3. **KI 文件位置**：
+   - `~/.gemini/antigravity/knowledge/lawfirm-project-env/artifacts/quick_reference.md`
+   - `~/.gemini/antigravity/knowledge/lawfirm-bidding-architecture/artifacts/architecture_reference.md`

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Send, X, MessageSquare, Sparkles, Command, Loader2 } from 'lucide-react';
 
 // 后端 API 地址
-const API_BASE = 'http://localhost:8001';
+const API_BASE = `http://${window.location.hostname}:8001`;
 
 export default function AICopilot() {
     const [isOpen, setIsOpen] = useState(false);

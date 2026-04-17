@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { FileText, Loader2, CheckCircle, Download, Upload, Sparkles, RotateCcw, Send, AlertTriangle, ChevronDown, Eye, X, Package, Lock, Unlock, RefreshCw } from 'lucide-react';
 import MaterialPanel from './MaterialPanel';
 
-const API_BASE = 'http://localhost:8001';
+const API_BASE = `http://${window.location.hostname}:8001`;
 
 export default function BiddingAgent() {
     const [messages, setMessages] = useState([
