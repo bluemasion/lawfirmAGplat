@@ -1517,6 +1517,542 @@ async def confirm_materials(req: ConfirmMaterialsRequest):
     }
 
 
+# ── Archive (ZIP) Upload Flow ──
+
+# Auto-category rules: folder/filename keywords → category
+_ARCHIVE_CATEGORY_RULES = [
+    {"category": "resume",        "keywords": ["简历", "人员", "律师", "团队", "合伙人", "resume"]},
+    {"category": "project",       "keywords": ["业绩", "项目", "案例", "合同", "project", "performance"]},
+    {"category": "qualification", "keywords": ["资质", "证书", "荣誉", "执业", "认证", "ISO", "cert"]},
+    {"category": "company_intro", "keywords": ["介绍", "简介", "概况", "公司", "律所", "事务所"]},
+]
+
+_SUPPORTED_EXTENSIONS = {".docx", ".jpg", ".jpeg", ".png", ".pdf"}
+_ARCHIVE_MAX_SIZE = 500 * 1024 * 1024  # 500MB
+_ARCHIVE_MAX_FILES = 200
+
+
+def _auto_categorize(rel_path: str, filename: str) -> str:
+    """Guess category from full relative path and filename."""
+    text = f"{rel_path} {filename}".lower()
+    for rule in _ARCHIVE_CATEGORY_RULES:
+        for kw in rule["keywords"]:
+            if kw.lower() in text:
+                return rule["category"]
+    return "general"
+
+
+def _human_size(size_bytes: int) -> str:
+    if size_bytes < 1024:
+        return f"{size_bytes}B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.0f}KB"
+    else:
+        return f"{size_bytes / (1024*1024):.1f}MB"
+
+
+@router.post("/upload-archive")
+async def upload_archive(
+    file: UploadFile = File(...),
+    company: str = Form(""),
+):
+    """上传 ZIP 压缩包 → 解压 → 返回文件清单（不做 LLM 解析）
+
+    Step 1 of 3-step archive flow:
+    1. upload-archive → decompress, list files (this endpoint)
+    2. parse-archive  → per-file parsing with SSE progress
+    3. confirm-materials → save to store (reuse existing)
+    """
+    import time as _time
+    import shutil
+
+    # Validate file type
+    if not file.filename.lower().endswith(".zip"):
+        return {"success": False, "message": "仅支持 .zip 格式的压缩包"}
+
+    # Read and validate size
+    content = await file.read()
+    if len(content) > _ARCHIVE_MAX_SIZE:
+        return {"success": False, "message": f"文件过大，最大支持 {_ARCHIVE_MAX_SIZE // (1024*1024)}MB"}
+
+    # Create temp directory
+    archive_id = f"arc_{int(_time.time())}"
+    temp_dir = os.path.join("uploads", archive_id)
+    os.makedirs(temp_dir, exist_ok=True)
+
+    # Save ZIP
+    zip_path = os.path.join(temp_dir, file.filename)
+    with open(zip_path, "wb") as f:
+        f.write(content)
+
+    logger.info(f"[archive] ZIP uploaded: {zip_path} ({len(content)} bytes)")
+
+    try:
+        # Extract with Chinese filename fix
+        import zipfile as _zipfile
+        with _zipfile.ZipFile(zip_path, "r") as zf:
+            # Security: filter out dangerous paths
+            safe_members = [
+                m for m in zf.infolist()
+                if not m.filename.startswith("/")
+                and ".." not in m.filename
+                and not m.filename.startswith("__MACOSX")
+            ]
+            # Fix Chinese filenames (non-UTF8 flag)
+            # macOS ZIP: UTF-8 bytes stored as CP437 → decode back to UTF-8
+            # Windows ZIP: GBK bytes stored as CP437 → decode back to GBK
+            for m in safe_members:
+                try:
+                    if not (m.flag_bits & 0x800):
+                        raw = m.filename.encode('cp437')
+                        # Try UTF-8 first (macOS), then GBK (Windows)
+                        try:
+                            m.filename = raw.decode('utf-8')
+                        except UnicodeDecodeError:
+                            m.filename = raw.decode('gbk')
+                except (UnicodeDecodeError, UnicodeEncodeError):
+                    pass  # keep original
+            zf.extractall(temp_dir, members=safe_members)
+
+        # Walk extracted files and build file tree
+        file_tree = []
+        skipped_files = []
+
+        for root, dirs, files in os.walk(temp_dir):
+            # Skip __MACOSX and hidden dirs
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d != "__MACOSX"]
+            for fname in sorted(files):
+                if fname.startswith(".") or fname == file.filename:
+                    continue  # skip hidden files and the zip itself
+
+                fpath = os.path.join(root, fname)
+                rel_path = os.path.relpath(fpath, temp_dir)
+                ext = os.path.splitext(fname)[1].lower()
+                fsize = os.path.getsize(fpath)
+
+                # Determine folder name (first level)
+                parts = rel_path.replace("\\", "/").split("/")
+                folder = parts[0] if len(parts) > 1 else ""
+
+                if ext in _SUPPORTED_EXTENSIONS:
+                    if ext in {".jpg", ".jpeg", ".png"}:
+                        file_type = "image"
+                    elif ext == ".pdf":
+                        file_type = "pdf"
+                    else:
+                        file_type = "docx"
+                    auto_cat = _auto_categorize(rel_path, fname)
+                    file_tree.append({
+                        "path": rel_path.replace("\\", "/"),
+                        "filename": fname,
+                        "folder": folder,
+                        "type": file_type,
+                        "size": fsize,
+                        "size_display": _human_size(fsize),
+                        "auto_category": auto_cat,
+                        "selected": True,
+                    })
+                else:
+                    skipped_files.append({
+                        "path": rel_path.replace("\\", "/"),
+                        "filename": fname,
+                        "reason": f"不支持的格式 ({ext})",
+                    })
+
+        if len(file_tree) > _ARCHIVE_MAX_FILES:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return {"success": False, "message": f"文件过多，最大支持 {_ARCHIVE_MAX_FILES} 个文件"}
+
+        # Count by type
+        docx_count = sum(1 for f in file_tree if f["type"] == "docx")
+        image_count = sum(1 for f in file_tree if f["type"] == "image")
+        pdf_count = sum(1 for f in file_tree if f["type"] == "pdf")
+
+        logger.info(f"[archive] Extracted: {len(file_tree)} files "
+                    f"({docx_count} docx, {image_count} images, {pdf_count} pdf, "
+                    f"{len(skipped_files)} skipped)")
+
+        return {
+            "success": True,
+            "data": {
+                "archive_id": archive_id,
+                "company": company,
+                "file_tree": file_tree,
+                "summary": {
+                    "total_files": len(file_tree),
+                    "docx_count": docx_count,
+                    "image_count": image_count,
+                    "pdf_count": pdf_count,
+                    "skipped_count": len(skipped_files),
+                    "skipped_files": skipped_files,
+                },
+            },
+        }
+
+    except _zipfile.BadZipFile:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return {"success": False, "message": "无效的 ZIP 文件，请检查压缩包是否完整"}
+    except Exception as e:
+        logger.error(f"[archive] Extract failed: {e}")
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return {"success": False, "message": f"解压失败: {str(e)}"}
+
+
+class ParseArchiveRequest(BaseModel):
+    archive_id: str
+    company: str = ""
+    selected_files: list  # list of relative paths to parse
+    llm_provider: str = "qwen"
+
+
+@router.post("/parse-archive")
+async def parse_archive(req: ParseArchiveRequest):
+    """逐文件解析压缩包中的素材（SSE 流式返回进度）
+
+    Step 2 of 3-step archive flow.
+    Returns SSE stream with per-file progress and final merged result.
+    """
+    import asyncio
+    import time as _time
+
+    temp_dir = os.path.join("uploads", req.archive_id)
+    if not os.path.isdir(temp_dir):
+        return {"success": False, "message": f"压缩包 {req.archive_id} 不存在或已过期"}
+
+    selected = req.selected_files
+    if not selected:
+        return {"success": False, "message": "未选择要解析的文件"}
+
+    async def _stream():
+        from app.core.skills.builtin.bid_document_parser import BidDocumentParserSkill
+        from app.core.skills.builtin.material_store import get_material_store
+
+        parser = BidDocumentParserSkill()
+        store = get_material_store()
+
+        # Merged results
+        all_materials = {
+            "resumes": [],
+            "projects": [],
+            "qualifications": [],
+            "narrative_chunks": [],
+        }
+
+        total = len(selected)
+        for idx, rel_path in enumerate(selected, 1):
+            fname = os.path.basename(rel_path)
+            fpath = os.path.join(temp_dir, rel_path)
+
+            if not os.path.isfile(fpath):
+                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total, 'file': fname, 'status': 'error', 'message': '文件不存在'}, ensure_ascii=False)}\n\n"
+                continue
+
+            # Send "parsing" event
+            yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total, 'file': fname, 'status': 'parsing'}, ensure_ascii=False)}\n\n"
+            await asyncio.sleep(0.1)  # flush
+
+            ext = os.path.splitext(fname)[1].lower()
+            result = {}
+
+            # Determine category from full path
+            auto_cat = _auto_categorize(rel_path, fname)
+
+            try:
+                # ── Project category: always create project entry from filename ──
+                # (业绩合同文件通常是扫描件，文字不可提取，文件名本身就是关键信息)
+                if auto_cat == "project":
+                    title = fname.rsplit(".", 1)[0]
+                    project_entry = {
+                        "project_name": title,
+                        "client": "",
+                        "project_type": "常年法律顾问" if ("常年" in fname or "法律顾问" in fname) else "",
+                        "contract_amount": "",
+                        "period": "",
+                        "description": "",
+                        "_source_file": fname,
+                        "_source_path": fpath,
+                        "_source_section": "业绩合同",
+                    }
+
+                    # Try to extract text (direct text or OCR from images)
+                    extracted_text = ""
+
+                    if ext == ".docx":
+                        # 1) Try direct text extraction
+                        try:
+                            from docx import Document as _Document
+                            doc = _Document(fpath)
+                            direct_text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+                            if len(direct_text.strip()) > 20:
+                                extracted_text = direct_text
+                        except Exception:
+                            pass
+
+                        # 2) If no text, extract images from docx and OCR
+                        if not extracted_text.strip():
+                            try:
+                                from app.core.skills.builtin.image_ocr import ocr_image
+                                import zipfile as _zf2
+                                with _zf2.ZipFile(fpath) as doczip:
+                                    img_names = [n for n in doczip.namelist()
+                                                 if n.startswith("word/media/")
+                                                 and any(n.lower().endswith(e) for e in (".png", ".jpg", ".jpeg"))]
+                                    for img_name in img_names[:3]:  # OCR first 3 images max
+                                        import tempfile as _tmp
+                                        with _tmp.NamedTemporaryFile(suffix=os.path.splitext(img_name)[1], delete=False) as tf:
+                                            tf.write(doczip.read(img_name))
+                                            tf_path = tf.name
+                                        try:
+                                            ocr_res = ocr_image(tf_path)
+                                            extracted_text += (ocr_res.get("ocr_text", "") or "") + "\n"
+                                        except Exception:
+                                            pass
+                                        finally:
+                                            os.unlink(tf_path)
+                            except Exception as e:
+                                logger.debug(f"[archive] Docx image OCR failed for {fname}: {e}")
+
+                    elif ext == ".pdf":
+                        # 1) Try direct text
+                        try:
+                            import pdfplumber
+                            with pdfplumber.open(fpath) as pdf:
+                                for page in pdf.pages:
+                                    extracted_text += (page.extract_text() or "") + "\n"
+                        except Exception:
+                            pass
+
+                        # 2) If no text, extract images from PDF and OCR
+                        if not extracted_text.strip():
+                            try:
+                                import pdfplumber
+                                from app.core.skills.builtin.image_ocr import ocr_image
+                                with pdfplumber.open(fpath) as pdf:
+                                    for page in pdf.pages[:3]:  # first 3 pages max
+                                        page_img = page.to_image(resolution=200)
+                                        import tempfile as _tmp
+                                        with _tmp.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+                                            page_img.save(tf.name)
+                                            tf_path = tf.name
+                                        try:
+                                            ocr_res = ocr_image(tf_path)
+                                            extracted_text += (ocr_res.get("ocr_text", "") or "") + "\n"
+                                        except Exception:
+                                            pass
+                                        finally:
+                                            os.unlink(tf_path)
+                            except Exception as e:
+                                logger.debug(f"[archive] PDF image OCR failed for {fname}: {e}")
+
+                    elif ext in (".jpg", ".jpeg", ".png"):
+                        # Direct OCR on image
+                        try:
+                            from app.core.skills.builtin.image_ocr import ocr_image
+                            ocr_res = ocr_image(fpath)
+                            extracted_text = ocr_res.get("ocr_text", "") or ""
+                        except Exception:
+                            pass
+
+                    # Enrich project entry with extracted text
+                    if extracted_text.strip():
+                        project_entry["description"] = extracted_text[:500].strip()
+                        # Try to extract client from text
+                        for line in extracted_text.split("\n")[:30]:
+                            line = line.strip()
+                            if "甲方" in line or "委托方" in line or "采购人" in line:
+                                client = line.split("：")[-1].split(":")[-1].strip()
+                                if client and len(client) < 50:
+                                    project_entry["client"] = client
+                                    break
+                        logger.info(f"[archive] Project OCR enriched: {fname} → {len(extracted_text)} chars")
+
+                    # Copy image to materials/images for preview
+                    if ext in (".jpg", ".jpeg", ".png"):
+                        import hashlib, shutil as _shutil
+                        with open(fpath, "rb") as imgf:
+                            img_hash = hashlib.md5(imgf.read()).hexdigest()[:12]
+                        img_filename = f"{img_hash}.{ext.lstrip('.')}"
+                        images_dir = os.path.normpath(os.path.join(
+                            os.path.dirname(os.path.abspath(__file__)),
+                            "..", "..", "data", "materials", "images"
+                        ))
+                        os.makedirs(images_dir, exist_ok=True)
+                        dest = os.path.join(images_dir, img_filename)
+                        if not os.path.exists(dest):
+                            _shutil.copy2(fpath, dest)
+                        project_entry["_images"] = [img_filename]
+
+                    all_materials["projects"].append(project_entry)
+                    result = {"projects": 1}
+                    logger.info(f"[archive] Project from filename: {fname} → '{title}'")
+
+                # ── Non-project: use normal parsing logic ──
+                elif ext == ".docx":
+                    # Reuse existing parser
+                    materials = await parser.execute({
+                        "file_path": fpath,
+                        "llm_provider": req.llm_provider,
+                    })
+                    # Tag source file
+                    for cat in ("resumes", "projects", "qualifications", "narrative_chunks"):
+                        for item in materials.get(cat, []):
+                            item["_source_file"] = fname
+                            item["_source_path"] = fpath
+                    result = {
+                        cat: len(materials.get(cat, []))
+                        for cat in ("resumes", "projects", "qualifications")
+                        if materials.get(cat)
+                    }
+                    # Merge into all_materials
+                    for cat in all_materials:
+                        all_materials[cat].extend(materials.get(cat, []))
+
+                elif ext in (".jpg", ".jpeg", ".png"):
+                    # Image: OCR and classify
+                    try:
+                        from app.core.skills.builtin.image_ocr import ocr_image
+                        ocr_result = ocr_image(fpath)
+                        ocr_text = ocr_result.get("ocr_text", "")
+
+                        # Copy image to materials/images for serving
+                        import hashlib
+                        with open(fpath, "rb") as imgf:
+                            img_hash = hashlib.md5(imgf.read()).hexdigest()[:12]
+                        img_ext = ext.lstrip(".")
+                        img_filename = f"{img_hash}.{img_ext}"
+
+                        images_dir = os.path.normpath(os.path.join(
+                            os.path.dirname(os.path.abspath(__file__)),
+                            "..", "..", "data", "materials", "images"
+                        ))
+                        os.makedirs(images_dir, exist_ok=True)
+                        import shutil
+                        dest_path = os.path.join(images_dir, img_filename)
+                        if not os.path.exists(dest_path):
+                            shutil.copy2(fpath, dest_path)
+
+                        # Classify as qualification
+                        qual_entry = {
+                            "name": fname.rsplit(".", 1)[0],
+                            "issuer": "",
+                            "cert_type": "enterprise",
+                            "_images": [img_filename],
+                            "_source_file": fname,
+                            "_source_path": fpath,
+                        }
+                        if ocr_text and len(ocr_text) > 5:
+                            lines = [l.strip() for l in ocr_text.split("\n") if l.strip()]
+                            if lines:
+                                qual_entry["name"] = lines[0][:50]
+
+                        all_materials["qualifications"].append(qual_entry)
+                        result = {"qualifications": 1}
+                        store.save_image_meta([ocr_result])
+
+                    except Exception as ocr_err:
+                        logger.warning(f"[archive] OCR failed for {fname}: {ocr_err}")
+                        result = {"error": str(ocr_err)}
+
+                elif ext == ".pdf":
+                    # PDF: extract text with pdfplumber
+                    try:
+                        import pdfplumber
+                        pdf_text = ""
+                        with pdfplumber.open(fpath) as pdf:
+                            for page in pdf.pages:
+                                page_text = page.extract_text() or ""
+                                pdf_text += page_text + "\n"
+
+                        if pdf_text.strip():
+                            auto_cat_pdf = _auto_categorize(rel_path, fname)
+                            title = fname.rsplit(".", 1)[0]
+
+                            if auto_cat_pdf == "resume":
+                                resume_entry = {
+                                    "name": title,
+                                    "title": "",
+                                    "brief_bio": pdf_text[:300].strip(),
+                                    "_source_file": fname,
+                                    "_source_path": fpath,
+                                }
+                                all_materials["resumes"].append(resume_entry)
+                                result = {"resumes": 1}
+                            elif auto_cat_pdf == "qualification":
+                                qual_entry = {
+                                    "name": title,
+                                    "issuer": "",
+                                    "cert_type": "enterprise",
+                                    "_source_file": fname,
+                                }
+                                all_materials["qualifications"].append(qual_entry)
+                                result = {"qualifications": 1}
+                            else:
+                                all_materials["narrative_chunks"].append({
+                                    "title": title,
+                                    "content": pdf_text[:5000],
+                                    "_source_file": fname,
+                                })
+                                result = {"narrative_chunks": 1}
+
+                            logger.info(f"[archive] PDF parsed: {fname} → {auto_cat_pdf}, {len(pdf_text)} chars")
+                        else:
+                            result = {"message": "PDF 无文字内容（扫描件）"}
+                            logger.info(f"[archive] PDF no text: {fname} (image-based)")
+
+                    except ImportError:
+                        logger.warning("[archive] pdfplumber not installed")
+                        result = {"error": "PDF 解析依赖未安装 (pdfplumber)"}
+                    except Exception as pdf_err:
+                        logger.warning(f"[archive] PDF parse failed for {fname}: {pdf_err}")
+                        result = {"error": str(pdf_err)}
+
+            except Exception as parse_err:
+                logger.error(f"[archive] Parse failed for {fname}: {parse_err}")
+                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total, 'file': fname, 'status': 'error', 'message': str(parse_err)}, ensure_ascii=False)}\n\n"
+                continue
+
+            # Send "done" event for this file
+            yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total, 'file': fname, 'status': 'done', 'result': result}, ensure_ascii=False)}\n\n"
+
+        # All files parsed — build diff and save pending
+        diff = store.diff_materials(all_materials)
+
+        upload_id = f"upload_{int(_time.time())}"
+        resolved_company = req.company or store.get_default_company() or ""
+        store.save_pending(upload_id, {
+            "materials": all_materials,
+            "company": resolved_company,
+        })
+
+        # Send final "complete" event
+        complete_data = {
+            "type": "complete",
+            "upload_id": upload_id,
+            "company": resolved_company,
+            "extracted": {
+                cat: len(all_materials.get(cat, []))
+                for cat in ("resumes", "projects", "qualifications", "narrative_chunks")
+            },
+            "diff": diff,
+            "materials": {
+                "resumes": all_materials.get("resumes", []),
+                "projects": all_materials.get("projects", []),
+                "qualifications": all_materials.get("qualifications", []),
+            },
+        }
+        yield f"data: {json.dumps(complete_data, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get("/materials/images/{filename}")
 async def serve_material_image(filename: str):
     """Serve an extracted material image file."""

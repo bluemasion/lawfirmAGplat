@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { X, Plus, Trash2, Edit3, Users, Briefcase, Award, ArrowLeft, Save, Loader2, ChevronDown, ChevronRight, FileText, File, ExternalLink, Upload, CheckCircle2, AlertCircle, RefreshCw, ImageIcon, Building2 } from 'lucide-react';
+import { X, Plus, Trash2, Edit3, Users, Briefcase, Award, ArrowLeft, Save, Loader2, ChevronDown, ChevronRight, FileText, File, ExternalLink, Upload, CheckCircle2, AlertCircle, RefreshCw, ImageIcon, Building2, Archive, FolderOpen, Check, Square, CheckSquare } from 'lucide-react';
 
 const API_BASE = `http://${window.location.hostname}:8001`;
 
@@ -173,6 +173,11 @@ export default function MaterialPanel({ onClose }) {
     const [uploadFileName, setUploadFileName] = useState('');
     const [diffReview, setDiffReview] = useState(null); // { upload_id, diff, extracted, selected }
 
+    // ── Archive (ZIP) upload state ──
+    const [archiveData, setArchiveData] = useState(null); // { archive_id, file_tree, summary }
+    const [archiveStep, setArchiveStep] = useState(0); // 0=idle, 1=uploading, 2=file_list, 3=parsing, 4=done
+    const [parseProgress, setParseProgress] = useState([]); // [{file, status, result}]
+
     const UPLOAD_STEPS = [
         { label: '上传文件', icon: '📤', desc: '正在上传文件到服务器...' },
         { label: 'AI 智能提取', icon: '🤖', desc: '大语言模型正在识别简历、业绩、资质...' },
@@ -180,12 +185,182 @@ export default function MaterialPanel({ onClose }) {
         { label: '提取完成', icon: '✅', desc: '提取与对比已完成，请确认入库' },
     ];
 
-    // ── File Upload Handler ──
+    // ── File Upload Handler (auto-routes .docx vs .zip) ──
     const handleFileUpload = async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
         e.target.value = ''; // reset input
 
+        // Route by file extension
+        if (file.name.toLowerCase().endsWith('.zip')) {
+            return handleArchiveUpload(file);
+        }
+        // Default: .docx flow (existing)
+        return handleDocxUpload(file);
+    };
+
+    // ── Archive (ZIP) Upload Handler ──
+    const handleArchiveUpload = async (file) => {
+        setUploading(true);
+        setUploadFileName(file.name);
+        setArchiveStep(1); // uploading
+
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            if (selectedCompany) formData.append('company', selectedCompany);
+
+            const res = await fetch(`${API_BASE}/api/bidding/upload-archive`, {
+                method: 'POST',
+                body: formData,
+            });
+            const result = await res.json();
+
+            if (!result.success) {
+                alert(`解压失败: ${result.message}`);
+                setUploading(false);
+                setArchiveStep(0);
+                return;
+            }
+
+            setArchiveData(result.data);
+            setArchiveStep(2); // show file list
+            setUploading(false);
+        } catch (err) {
+            alert(`上传失败: ${err.message}`);
+            setUploading(false);
+            setArchiveStep(0);
+        }
+    };
+
+    // ── Archive: toggle file selection ──
+    const toggleArchiveFile = (path) => {
+        setArchiveData(prev => ({
+            ...prev,
+            file_tree: prev.file_tree.map(f =>
+                f.path === path ? { ...f, selected: !f.selected } : f
+            ),
+        }));
+    };
+
+    // ── Archive: start parsing selected files (SSE) ──
+    const handleArchiveParse = async () => {
+        if (!archiveData) return;
+        const selectedFiles = archiveData.file_tree.filter(f => f.selected).map(f => f.path);
+        if (selectedFiles.length === 0) {
+            alert('请至少选择一个文件');
+            return;
+        }
+
+        setArchiveStep(3); // parsing
+        setParseProgress(selectedFiles.map(p => ({ file: p.split('/').pop(), status: 'pending' })));
+
+        try {
+            const res = await fetch(`${API_BASE}/api/bidding/parse-archive`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    archive_id: archiveData.archive_id,
+                    company: archiveData.company || selectedCompany || '',
+                    selected_files: selectedFiles,
+                }),
+            });
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    try {
+                        const evt = JSON.parse(line.slice(6));
+
+                        if (evt.type === 'progress') {
+                            setParseProgress(prev => {
+                                const updated = [...prev];
+                                const idx = evt.current - 1;
+                                if (idx >= 0 && idx < updated.length) {
+                                    updated[idx] = {
+                                        file: evt.file,
+                                        status: evt.status,
+                                        result: evt.result || null,
+                                        message: evt.message || '',
+                                    };
+                                }
+                                return updated;
+                            });
+                        }
+
+                        if (evt.type === 'complete') {
+                            // Build diff review from complete event (reuse existing confirm flow)
+                            let diff = evt.diff || {};
+                            const materials = evt.materials || {};
+                            const hasDiffItems = Object.values(diff).some(arr => Array.isArray(arr) && arr.length > 0);
+                            const hasMaterials = ['resumes', 'projects', 'qualifications'].some(
+                                cat => Array.isArray(materials[cat]) && materials[cat].length > 0
+                            );
+
+                            if (!hasDiffItems && hasMaterials) {
+                                diff = {};
+                                for (const cat of ['resumes', 'projects', 'qualifications']) {
+                                    const items = materials[cat];
+                                    if (Array.isArray(items) && items.length > 0) {
+                                        diff[cat] = items.map(item => ({
+                                            action: 'new',
+                                            name: item.name || item.project_name || item.title || '未知',
+                                            data: item,
+                                        }));
+                                    }
+                                }
+                            }
+
+                            const selected = {};
+                            for (const [category, items] of Object.entries(diff)) {
+                                if (!Array.isArray(items)) continue;
+                                selected[category] = {};
+                                for (let i = 0; i < items.length; i++) {
+                                    const item = items[i];
+                                    const key = item.name || item.project_name || item.title
+                                        || (item.data && (item.data.name || item.data.project_name))
+                                        || `idx:${i}`;
+                                    selected[category][key] = true;
+                                }
+                            }
+
+                            setArchiveStep(4);
+                            setTimeout(() => {
+                                setDiffReview({
+                                    upload_id: evt.upload_id,
+                                    diff, extracted: evt.extracted, selected,
+                                    source_file: uploadFileName,
+                                    company: evt.company || selectedCompany || '',
+                                });
+                                setArchiveStep(0);
+                                setArchiveData(null);
+                                setParseProgress([]);
+                            }, 1000);
+                        }
+                    } catch (parseErr) {
+                        console.warn('[archive] SSE parse error:', parseErr);
+                    }
+                }
+            }
+        } catch (err) {
+            alert(`解析失败: ${err.message}`);
+            setArchiveStep(2);
+        }
+    };
+
+    // ── DOCX Upload Handler (existing logic) ──
+    const handleDocxUpload = async (file) => {
         setUploading(true);
         setUploadFileName(file.name);
         setUploadStep(1); // uploading
@@ -193,9 +368,7 @@ export default function MaterialPanel({ onClose }) {
         try {
             const formData = new FormData();
             formData.append('file', file);
-            // Don't send company in upload — let AI detect from content first
 
-            // Step 2: AI extraction (happens server-side)
             setTimeout(() => setUploadStep(2), 800);
 
             const res = await fetch(`${API_BASE}/api/bidding/upload-historical`, {
@@ -211,17 +384,12 @@ export default function MaterialPanel({ onClose }) {
                 return;
             }
 
-            // Step 3: Comparing
             setUploadStep(3);
 
             const { upload_id, extracted } = result.data;
             const docType = result.data.doc_type || {};
             let diff = result.data.diff || {};
 
-            console.log('[MaterialPanel] doc_type:', JSON.stringify(docType));
-            console.log('[MaterialPanel] extracted:', JSON.stringify(extracted));
-
-            // Handle tender file warning
             if (docType.doc_type === 'tender') {
                 const proceed = confirm(
                     `⚠️ ${result.data.message || '检测到招标文件'}\n\n点击"确定"仍然尝试提取素材，点击"取消"返回。`
@@ -233,7 +401,6 @@ export default function MaterialPanel({ onClose }) {
                 }
             }
 
-            // Fallback: if diff is empty but materials has items, build diff from materials
             const materials = result.data.materials || {};
             const hasDiffItems = Object.values(diff).some(arr => Array.isArray(arr) && arr.length > 0);
             const hasMaterials = ['resumes', 'projects', 'qualifications'].some(
@@ -241,7 +408,6 @@ export default function MaterialPanel({ onClose }) {
             );
 
             if (!hasDiffItems && hasMaterials) {
-                console.log('[MaterialPanel] diff empty but materials found, building synthetic diff');
                 diff = {};
                 for (const cat of ['resumes', 'projects', 'qualifications']) {
                     const items = materials[cat];
@@ -255,18 +421,16 @@ export default function MaterialPanel({ onClose }) {
                 }
             }
 
-            // Check if we have anything to show
             const totalItems = Object.values(diff).reduce(
                 (sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0), 0
             );
             if (totalItems === 0) {
-                alert('⚠️ 未从文件中提取到可入库的素材（简历/业绩/资质）。\n可能原因：文件格式不支持、内容无法识别、或 AI 服务暂时不可用。');
+                alert('⚠️ 未从文件中提取到可入库的素材（简历/业绩/资质）。');
                 setUploading(false);
                 setUploadStep(0);
                 return;
             }
 
-            // Build selection map
             const selected = {};
             for (const [category, items] of Object.entries(diff)) {
                 if (!Array.isArray(items)) continue;
@@ -280,7 +444,6 @@ export default function MaterialPanel({ onClose }) {
                 }
             }
 
-            // Step 4: Done
             await new Promise(r => setTimeout(r, 600));
             setUploadStep(4);
             await new Promise(r => setTimeout(r, 500));
@@ -1300,13 +1463,13 @@ export default function MaterialPanel({ onClose }) {
                     <input
                         type="file"
                         id="material-upload-input"
-                        accept=".docx,.doc,.pdf"
+                        accept=".docx,.doc,.pdf,.zip"
                         className="hidden"
                         onChange={handleFileUpload}
                     />
                     <button
                         onClick={() => document.getElementById('material-upload-input').click()}
-                        disabled={uploading}
+                        disabled={uploading || archiveStep > 0}
                         className="flex items-center space-x-1.5 px-3 py-1.5 rounded-md text-[11px] font-bold bg-blue-500/15 border border-blue-500/30 text-blue-300 hover:bg-blue-500/25 transition-all disabled:opacity-40">
                         {uploading
                             ? <><Loader2 size={12} className="animate-spin" /><span>处理中...</span></>
@@ -1322,6 +1485,117 @@ export default function MaterialPanel({ onClose }) {
                     )}
                 </div>
             </div>
+
+            {/* ── Archive File Tree Panel ── */}
+            {archiveStep === 2 && archiveData && (
+                <div className="border-b border-zinc-800 bg-zinc-900/80">
+                    <div className="px-4 py-3 border-b border-zinc-700/50 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <Archive size={14} className="text-orange-400" />
+                            <span className="text-[13px] font-bold text-zinc-100">压缩包内容</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-400">
+                                {archiveData.file_tree.filter(f => f.selected).length}/{archiveData.file_tree.length} 已选
+                            </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <button onClick={() => { setArchiveStep(0); setArchiveData(null); }}
+                                className="text-[11px] text-zinc-500 hover:text-zinc-300 px-2 py-1 rounded hover:bg-zinc-700/50 transition-colors">取消</button>
+                            <button onClick={handleArchiveParse}
+                                className="flex items-center gap-1.5 text-[11px] font-bold px-3 py-1.5 rounded-md bg-orange-500/20 border border-orange-500/40 text-orange-300 hover:bg-orange-500/30 transition-all">
+                                <CheckCircle2 size={12} />
+                                <span>开始解析</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div className="max-h-[400px] overflow-y-auto divide-y divide-zinc-800/50">
+                        {(() => {
+                            const grouped = {};
+                            archiveData.file_tree.forEach(f => {
+                                const folder = f.folder || '根目录';
+                                if (!grouped[folder]) grouped[folder] = [];
+                                grouped[folder].push(f);
+                            });
+                            const catLabels = { resume: '简历', project: '业绩', qualification: '资质', company_intro: '介绍', general: '其他' };
+                            const catColors = { resume: 'bg-blue-500/20 text-blue-300 border-blue-500/30', project: 'bg-purple-500/20 text-purple-300 border-purple-500/30', qualification: 'bg-amber-500/20 text-amber-300 border-amber-500/30', company_intro: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30', general: 'bg-zinc-700 text-zinc-400 border-zinc-600' };
+                            return Object.entries(grouped).map(([folder, files]) => (
+                                <div key={folder}>
+                                    <div className="px-4 py-2 bg-zinc-800/60 flex items-center gap-2">
+                                        <FolderOpen size={12} className="text-zinc-500" />
+                                        <span className="text-[11px] font-medium text-zinc-400">{folder}</span>
+                                        <span className="text-[10px] text-zinc-600">({files.length})</span>
+                                    </div>
+                                    {files.map(f => (
+                                        <div key={f.path} className="flex items-center px-4 py-2.5 hover:bg-zinc-800/40 cursor-pointer transition-colors"
+                                            onClick={() => toggleArchiveFile(f.path)}>
+                                            <div className="mr-3">
+                                                {f.selected
+                                                    ? <CheckSquare size={14} className="text-orange-400" />
+                                                    : <Square size={14} className="text-zinc-600" />}
+                                            </div>
+                                            <span className="mr-2 text-sm">{f.type === 'image' ? '🖼️' : f.type === 'pdf' ? '📕' : '📄'}</span>
+                                            <span className="text-[12px] text-zinc-200 flex-1 truncate">{f.filename}</span>
+                                            <span className={`text-[9px] px-1.5 py-0.5 rounded border mr-2 ${catColors[f.auto_category] || catColors.general}`}>
+                                                {catLabels[f.auto_category] || f.auto_category}
+                                            </span>
+                                            <span className="text-[10px] text-zinc-600">{f.size_display}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            ));
+                        })()}
+                        {archiveData.summary.skipped_count > 0 && (
+                            <div className="px-4 py-2 bg-zinc-900/80">
+                                <div className="text-[10px] text-zinc-600 mb-1">跳过的文件 ({archiveData.summary.skipped_count})</div>
+                                {archiveData.summary.skipped_files.map((f, i) => (
+                                    <div key={i} className="text-[11px] text-zinc-600 pl-3">• {f.filename} — {f.reason}</div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* ── Archive Parse Progress ── */}
+            {archiveStep >= 3 && parseProgress.length > 0 && (
+                <div className="border-b border-zinc-800 bg-zinc-900/80">
+                    <div className="px-4 py-3 border-b border-zinc-700/50">
+                        <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                                <Loader2 size={14} className={archiveStep === 3 ? 'animate-spin text-orange-400' : 'text-green-400'} />
+                                <span className="text-[13px] font-bold text-zinc-100">
+                                    {archiveStep === 4 ? '解析完成' : `解析中 (${parseProgress.filter(p => p.status === 'done').length}/${parseProgress.length})`}
+                                </span>
+                            </div>
+                        </div>
+                        {/* Progress bar */}
+                        <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                            <div className="h-full bg-gradient-to-r from-orange-500 to-amber-500 rounded-full transition-all duration-500"
+                                style={{ width: `${(parseProgress.filter(p => p.status === 'done' || p.status === 'error').length / parseProgress.length) * 100}%` }} />
+                        </div>
+                    </div>
+                    <div className="max-h-[300px] overflow-y-auto">
+                        {parseProgress.map((p, i) => (
+                            <div key={i} className="flex items-center px-4 py-2 text-[12px] border-b border-zinc-800/30">
+                                <span className="w-5 mr-2">
+                                    {p.status === 'done' && '✅'}
+                                    {p.status === 'parsing' && <Loader2 size={12} className="animate-spin text-orange-400" />}
+                                    {p.status === 'error' && '❌'}
+                                    {p.status === 'pending' && <span className="text-zinc-600">⏳</span>}
+                                </span>
+                                <span className={`flex-1 truncate ${p.status === 'done' ? 'text-zinc-300' : p.status === 'parsing' ? 'text-orange-300' : 'text-zinc-500'}`}>
+                                    {p.file}
+                                </span>
+                                {p.result && (
+                                    <span className="text-[10px] text-zinc-500 ml-2">
+                                        {Object.entries(p.result).map(([k, v]) => `${k === 'resumes' ? '简历' : k === 'projects' ? '项目' : k === 'qualifications' ? '资质' : k}×${v}`).join(' ')}
+                                    </span>
+                                )}
+                                {p.message && <span className="text-[10px] text-red-400/70 ml-2">{p.message}</span>}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {viewMode === 'companies' ? (
                 /* ── Level 1: Company List ── */

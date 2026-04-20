@@ -1,0 +1,29 @@
+# Python
+agentic_on_arch/venv/
+agentic_on_arch/__pycache__/
+agentic_on_arch/app/__pycache__/
+**/__pycache__/
+*.pyc
+
+# Node
+platform/node_modules/
+platform/dist/
+
+# Data (use volumes instead)
+prod-data/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Docker
+docker-compose.override.yml
+
+# Docs (not needed in images)
+*.md
+!agentic_on_arch/templates/*.md

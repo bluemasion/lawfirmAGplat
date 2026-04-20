@@ -1,0 +1,17 @@
+# Stage 1: Build
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY platform/package.json platform/package-lock.json* ./
+RUN npm install
+COPY platform/ ./
+RUN npm run build
+
+# Stage 2: Serve
+FROM node:20-alpine
+WORKDIR /app
+RUN npm install -g serve@14
+COPY --from=builder /app/dist ./dist
+
+EXPOSE 80
+
+CMD ["serve", "dist", "-l", "80", "--no-clipboard"]

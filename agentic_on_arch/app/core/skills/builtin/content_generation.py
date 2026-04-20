@@ -642,7 +642,8 @@ class ContentGenerationSkill(BaseSkill):
 
         # ── Type override: force data-driven narrative for misclassified sections ──
         _NARRATIVE_FORCE_KEYWORDS = ["业绩", "项目经验", "项目案例", "成功案例",
-                                     "团队介绍", "人员简介", "公司简介", "企业概况"]
+                                     "团队介绍", "人员简介", "公司简介", "企业概况",
+                                     "资格审查", "资格"]
         if sec_type in ("qualification", "table"):
             matched_projects = matched_materials.get("projects", [])
             matched_resumes = matched_materials.get("resumes", [])
