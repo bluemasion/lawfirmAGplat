@@ -454,11 +454,19 @@ class MaterialStore:
         return results
 
     def _get_materials(self, category: str,
-                       company: str = "") -> List[Dict]:
-        """Get materials by category, optionally filtered by company."""
+                       company: str = "",
+                       project_id: int = None) -> List[Dict]:
+        """Get materials by category, optionally filtered by company or project."""
         conn = self._get_conn()
         try:
-            if company:
+            if project_id:
+                rows = conn.execute("""
+                    SELECT m.*, c.name as company_name
+                    FROM materials m JOIN companies c ON m.company_id = c.id
+                    WHERE m.category = ? AND m.project_id = ?
+                    ORDER BY m.name
+                """, (category, project_id)).fetchall()
+            elif company:
                 rows = conn.execute("""
                     SELECT m.*, c.name as company_name
                     FROM materials m JOIN companies c ON m.company_id = c.id
@@ -476,17 +484,17 @@ class MaterialStore:
         finally:
             conn.close()
 
-    def get_resumes(self, company: str = "") -> List[Dict]:
-        """Get stored resumes, optionally filtered by company."""
-        return self._get_materials("resumes", company)
+    def get_resumes(self, company: str = "", project_id: int = None) -> List[Dict]:
+        """Get stored resumes, optionally filtered by company or project."""
+        return self._get_materials("resumes", company, project_id)
 
-    def get_projects(self, company: str = "") -> List[Dict]:
-        """Get stored projects, optionally filtered by company."""
-        return self._get_materials("projects", company)
+    def get_projects(self, company: str = "", project_id: int = None) -> List[Dict]:
+        """Get stored projects, optionally filtered by company or project."""
+        return self._get_materials("projects", company, project_id)
 
-    def get_qualifications(self, company: str = "") -> List[Dict]:
-        """Get stored qualifications, optionally filtered by company."""
-        return self._get_materials("qualifications", company)
+    def get_qualifications(self, company: str = "", project_id: int = None) -> List[Dict]:
+        """Get stored qualifications, optionally filtered by company or project."""
+        return self._get_materials("qualifications", company, project_id)
 
     def get_narrative_chunks(self, company: str = "") -> List[Dict]:
         """Get stored narrative chunks, optionally filtered by company."""
@@ -514,22 +522,35 @@ class MaterialStore:
         finally:
             conn.close()
 
-    def get_all_materials(self, company: str = "") -> Dict[str, Any]:
-        """Get all materials as a dict, optionally filtered by company."""
+    def get_all_materials(self, company: str = "",
+                          project_id: int = None) -> Dict[str, Any]:
+        """Get all materials as a dict, optionally filtered by company or project."""
         return {
-            "resumes": self.get_resumes(company),
-            "projects": self.get_projects(company),
-            "qualifications": self.get_qualifications(company),
+            "resumes": self.get_resumes(company, project_id),
+            "projects": self.get_projects(company, project_id),
+            "qualifications": self.get_qualifications(company, project_id),
             "narrative_chunks": self.get_narrative_chunks(company),
         }
 
-    def get_summary(self, company: str = "") -> Dict[str, int]:
-        """Get count summary, optionally filtered by company."""
+    def get_summary(self, company: str = "",
+                    project_id: int = None) -> Dict[str, int]:
+        """Get count summary, optionally filtered by company or project."""
         conn = self._get_conn()
         try:
             result = {"resumes": 0, "projects": 0, "qualifications": 0,
                       "narrative_chunks": 0}
-            if company:
+            if project_id:
+                rows = conn.execute("""
+                    SELECT m.category, COUNT(*) as cnt
+                    FROM materials m
+                    WHERE m.project_id = ?
+                    GROUP BY m.category
+                """, (project_id,)).fetchall()
+                nc = conn.execute("""
+                    SELECT COUNT(*) FROM narrative_chunks
+                    WHERE project_id = ?
+                """, (project_id,)).fetchone()[0]
+            elif company:
                 rows = conn.execute("""
                     SELECT m.category, COUNT(*) as cnt
                     FROM materials m JOIN companies c ON m.company_id = c.id

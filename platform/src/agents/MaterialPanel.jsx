@@ -162,13 +162,14 @@ export default function MaterialPanel({ onClose }) {
     // ── Company state ──
     const [companies, setCompanies] = useState([]); // [{name, total, resumes, projects, qualifications}]
     const [selectedCompany, setSelectedCompany] = useState(''); // '' = all
-    const [viewMode, setViewMode] = useState('companies'); // 'companies' | 'detail'
+    const [viewMode, setViewMode] = useState('companies'); // 'companies' | 'projects' | 'detail'
     const [addingCompany, setAddingCompany] = useState(false);
     const [newCompanyName, setNewCompanyName] = useState('');
     const [deletingCompany, setDeletingCompany] = useState(null); // company object to delete
 
     // ── Bid Projects state ──
     const [bidProjects, setBidProjects] = useState([]); // [{id, name, description, material_count}]
+    const [selectedProject, setSelectedProject] = useState(null); // {id, name}
     const [addingProject, setAddingProject] = useState(false);
     const [newProjectName, setNewProjectName] = useState('');
 
@@ -560,14 +561,15 @@ export default function MaterialPanel({ onClose }) {
         }
     }, [selectedCompany]);
 
-    // ── Load materials (company-filtered) ──
+    // ── Load materials (project-filtered when project selected) ──
     const loadMaterials = useCallback(async () => {
+        if (!selectedProject) { setMaterials({ resumes: [], projects: [], qualifications: [] }); setSummary({ resumes: 0, projects: 0, qualifications: 0, narrative_chunks: 0 }); setLoading(false); return; }
         setLoading(true);
         try {
-            const companyParam = selectedCompany ? `?company=${encodeURIComponent(selectedCompany)}` : '';
+            const params = `?project_id=${selectedProject.id}`;
             const [matRes, sumRes] = await Promise.all([
-                fetch(`${API_BASE}/api/bidding/materials${companyParam}`),
-                fetch(`${API_BASE}/api/bidding/materials/summary${companyParam}`),
+                fetch(`${API_BASE}/api/bidding/materials${params}`),
+                fetch(`${API_BASE}/api/bidding/materials/summary${params}`),
             ]);
             const matData = await matRes.json();
             const sumData = await sumRes.json();
@@ -578,7 +580,7 @@ export default function MaterialPanel({ onClose }) {
         } finally {
             setLoading(false);
         }
-    }, [selectedCompany]);
+    }, [selectedProject]);
 
     // ── Load bid projects for selected company ──
     const loadBidProjects = useCallback(async () => {
@@ -597,11 +599,15 @@ export default function MaterialPanel({ onClose }) {
         loadCompanies();
     }, []);
 
-    // Reload materials and projects when company changes
+    // Reload projects when company changes
+    useEffect(() => {
+        loadBidProjects();
+    }, [selectedCompany, loadBidProjects]);
+
+    // Reload materials when project changes
     useEffect(() => {
         loadMaterials();
-        loadBidProjects();
-    }, [selectedCompany, loadMaterials, loadBidProjects]);
+    }, [selectedProject, loadMaterials]);
 
     // ── Delete ──
     const handleDelete = async (tab, item) => {
@@ -1282,9 +1288,17 @@ export default function MaterialPanel({ onClose }) {
         );
     };
 
-    // ── Enter company detail ──
+    // ── Enter company → show project list ──
     const enterCompanyDetail = (companyName) => {
         setSelectedCompany(companyName);
+        setSelectedProject(null);
+        setViewMode('projects');
+        setExpandedIdx(null);
+    };
+
+    // ── Enter project → show materials ──
+    const enterProjectDetail = (project) => {
+        setSelectedProject(project);
         setViewMode('detail');
         setExpandedIdx(null);
     };
@@ -1456,20 +1470,32 @@ export default function MaterialPanel({ onClose }) {
                             <h2 className="text-sm font-bold text-zinc-100">📦 素材库</h2>
                             <span className="text-[10px] text-zinc-500">{companies.length} 家公司</span>
                         </>
-                    ) : (
-                        /* Company detail header — breadcrumb style */
+                    ) : viewMode === 'projects' ? (
+                        /* Project list header */
                         <>
-                            <button onClick={() => setViewMode('companies')}
+                            <button onClick={() => { setViewMode('companies'); setSelectedCompany(''); }}
                                 className="flex items-center space-x-1 text-[11px] text-zinc-400 hover:text-zinc-200 transition-colors">
                                 <ArrowLeft size={14} />
                                 <span>素材库</span>
                             </button>
                             <span className="text-zinc-600">/</span>
                             <h2 className="text-sm font-bold text-zinc-100">{selectedCompany}</h2>
+                            <span className="text-[10px] text-zinc-500">{bidProjects.length} 个项目</span>
+                        </>
+                    ) : (
+                        /* Material detail header — full breadcrumb */
+                        <>
+                            <button onClick={() => { setViewMode('projects'); setSelectedProject(null); }}
+                                className="flex items-center space-x-1 text-[11px] text-zinc-400 hover:text-zinc-200 transition-colors">
+                                <ArrowLeft size={14} />
+                                <span>{selectedCompany}</span>
+                            </button>
+                            <span className="text-zinc-600">/</span>
+                            <h2 className="text-sm font-bold text-zinc-100">{selectedProject?.name}</h2>
                             <div className="flex items-center space-x-2 text-[10px] text-zinc-500">
                                 <span>{summary.resumes}人</span>
                                 <span>·</span>
-                                <span>{summary.projects}项目</span>
+                                <span>{summary.projects}业绩</span>
                                 <span>·</span>
                                 <span>{summary.qualifications}资质</span>
                             </div>
@@ -1618,60 +1644,66 @@ export default function MaterialPanel({ onClose }) {
             {viewMode === 'companies' ? (
                 /* ── Level 1: Company List ── */
                 renderCompanyList()
-            ) : (
-                /* ── Level 2: Company Detail ── */
-                <>
-                    {/* ── Bid Projects Section ── */}
-                    {bidProjects.length > 0 || addingProject ? (
-                        <div className="border-b border-zinc-800 bg-zinc-900/40">
-                            <div className="px-4 py-2.5 flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                    <span className="text-[12px] font-bold text-zinc-300">📁 投标项目</span>
-                                    <span className="text-[10px] text-zinc-600">{bidProjects.length} 个</span>
-                                </div>
-                                <button onClick={() => setAddingProject(true)}
-                                    className="text-[10px] text-orange-400 hover:text-orange-300 flex items-center gap-1 transition-colors">
-                                    <Plus size={10} />新建项目
-                                </button>
-                            </div>
-                            {addingProject && (
-                                <div className="px-4 pb-2 flex items-center gap-2">
-                                    <input
-                                        type="text"
-                                        value={newProjectName}
-                                        onChange={e => setNewProjectName(e.target.value)}
-                                        placeholder="输入项目名称（如：天元律所14）"
-                                        className="flex-1 bg-zinc-800 border border-zinc-600 rounded px-2 py-1 text-[11px] text-zinc-200 focus:border-orange-500 outline-none"
-                                        autoFocus
-                                        onKeyDown={e => {
-                                            if (e.key === 'Enter' && newProjectName.trim()) {
-                                                fetch(`${API_BASE}/api/bidding/bid-projects`, {
-                                                    method: 'POST',
-                                                    headers: { 'Content-Type': 'application/json' },
-                                                    body: JSON.stringify({ company: selectedCompany, project_name: newProjectName.trim() }),
-                                                }).then(() => { loadBidProjects(); setAddingProject(false); setNewProjectName(''); });
-                                            }
-                                            if (e.key === 'Escape') { setAddingProject(false); setNewProjectName(''); }
-                                        }}
-                                    />
-                                    <button onClick={() => { setAddingProject(false); setNewProjectName(''); }}
-                                        className="text-zinc-500 hover:text-zinc-300 text-[10px]">取消</button>
-                                </div>
-                            )}
-                            <div className="px-4 pb-2.5 flex flex-wrap gap-2">
-                                {bidProjects.map(p => (
-                                    <div key={p.id}
-                                        className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-800/80 border border-zinc-700/50 hover:border-purple-500/40 transition-all group cursor-default">
-                                        <span className="text-[11px] font-medium text-zinc-200">{p.name}</span>
-                                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/20">
-                                            {p.material_count} 素材
-                                        </span>
+            ) : viewMode === 'projects' ? (
+                /* ── Level 2: Project List ── */
+                <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                    {bidProjects.map(p => (
+                        <div
+                            key={p.id}
+                            onClick={() => enterProjectDetail(p)}
+                            className="rounded-xl border border-zinc-700/50 bg-gradient-to-r from-zinc-800/80 to-zinc-900/80 p-4 cursor-pointer hover:border-purple-500/40 hover:shadow-lg hover:shadow-purple-500/5 transition-all group"
+                        >
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white text-lg font-bold shadow-lg shadow-purple-500/20">
+                                        📁
                                     </div>
-                                ))}
+                                    <div>
+                                        <h3 className="text-[14px] font-bold text-zinc-100 group-hover:text-purple-300 transition-colors">{p.name}</h3>
+                                        <div className="flex items-center gap-2 mt-0.5">
+                                            <span className="text-[11px] text-zinc-500">{p.material_count} 条素材</span>
+                                            {p.description && <span className="text-[10px] text-zinc-600">· {p.description}</span>}
+                                        </div>
+                                    </div>
+                                </div>
+                                <span className="text-zinc-600 group-hover:text-purple-400 transition-colors">›</span>
                             </div>
                         </div>
-                    ) : null}
-
+                    ))}
+                    {/* Add new project */}
+                    {addingProject ? (
+                        <div className="rounded-xl border border-dashed border-purple-500/30 bg-zinc-900/60 p-4">
+                            <input
+                                type="text"
+                                value={newProjectName}
+                                onChange={e => setNewProjectName(e.target.value)}
+                                placeholder="输入项目名称（如：天元律所14）"
+                                className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-[12px] text-zinc-200 focus:border-purple-500 outline-none"
+                                autoFocus
+                                onKeyDown={e => {
+                                    if (e.key === 'Enter' && newProjectName.trim()) {
+                                        fetch(`${API_BASE}/api/bidding/bid-projects`, {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ company: selectedCompany, project_name: newProjectName.trim() }),
+                                        }).then(() => { loadBidProjects(); setAddingProject(false); setNewProjectName(''); });
+                                    }
+                                    if (e.key === 'Escape') { setAddingProject(false); setNewProjectName(''); }
+                                }}
+                            />
+                        </div>
+                    ) : (
+                        <div
+                            onClick={() => setAddingProject(true)}
+                            className="rounded-xl border border-dashed border-zinc-700/50 p-4 text-center cursor-pointer hover:border-purple-500/40 transition-all"
+                        >
+                            <span className="text-[12px] text-zinc-500 hover:text-purple-300">+ 新建投标项目</span>
+                        </div>
+                    )}
+                </div>
+            ) : (
+                /* ── Level 3: Material Detail ── */
+                <>
                     {/* Tabs */}
                     <div className="flex border-b border-zinc-800">
                         {TABS.map(tab => {

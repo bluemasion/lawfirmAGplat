@@ -2077,19 +2077,19 @@ async def serve_material_image(filename: str):
 
 
 @router.get("/materials")
-async def get_materials(company: str = ""):
-    """获取所有已提取的素材（可按公司过滤）"""
+async def get_materials(company: str = "", project_id: int = None):
+    """获取所有已提取的素材（可按公司或项目过滤）"""
     from app.core.skills.builtin.material_store import get_material_store
     store = get_material_store()
-    return {"success": True, "data": store.get_all_materials(company=company)}
+    return {"success": True, "data": store.get_all_materials(company=company, project_id=project_id)}
 
 
 @router.get("/materials/summary")
-async def get_materials_summary(company: str = ""):
-    """获取素材库概要统计（可按公司过滤）"""
+async def get_materials_summary(company: str = "", project_id: int = None):
+    """获取素材库概要统计（可按公司或项目过滤）"""
     from app.core.skills.builtin.material_store import get_material_store
     store = get_material_store()
-    return {"success": True, "data": store.get_summary(company=company)}
+    return {"success": True, "data": store.get_summary(company=company, project_id=project_id)}
 
 
 @router.get("/materials/companies")
