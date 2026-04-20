@@ -69,7 +69,8 @@ class MaterialMatcher:
         """
         self.store = store
 
-    def match_for_section(self, section: dict, company: str = "") -> dict:
+    def match_for_section(self, section: dict, company: str = "",
+                          project_id: int = None) -> dict:
         """Match materials for a single bid section.
 
         Args:
@@ -108,13 +109,13 @@ class MaterialMatcher:
             filters = _extract_filter_keywords(ref)
 
             if mat_type == 'resume':
-                matched = self._match_resumes(ref, filters, count, company)
+                matched = self._match_resumes(ref, filters, count, company, project_id)
                 result["resumes"].extend(matched)
             elif mat_type == 'project':
-                matched = self._match_projects(ref, filters, count, company)
+                matched = self._match_projects(ref, filters, count, company, project_id)
                 result["projects"].extend(matched)
             elif mat_type == 'qualification':
-                matched = self._match_qualifications(ref, filters, count, company)
+                matched = self._match_qualifications(ref, filters, count, company, project_id)
                 result["qualifications"].extend(matched)
             elif mat_type == 'narrative':
                 # narrative refs are informational, no direct material match
@@ -141,9 +142,10 @@ class MaterialMatcher:
         return result
 
     def _match_resumes(self, ref: str, filters: List[str],
-                       count: Optional[int], company: str) -> List[dict]:
+                       count: Optional[int], company: str,
+                       project_id: int = None) -> List[dict]:
         """Match resumes from store."""
-        all_resumes = self.store.get_resumes(company=company)
+        all_resumes = self.store.get_resumes(company=company, project_id=project_id)
         if not all_resumes:
             return []
 
@@ -165,9 +167,10 @@ class MaterialMatcher:
         return all_resumes[:limit]
 
     def _match_projects(self, ref: str, filters: List[str],
-                        count: Optional[int], company: str) -> List[dict]:
+                        count: Optional[int], company: str,
+                        project_id: int = None) -> List[dict]:
         """Match projects from store."""
-        all_projects = self.store.get_projects(company=company)
+        all_projects = self.store.get_projects(company=company, project_id=project_id)
         if not all_projects:
             return []
 
@@ -187,9 +190,10 @@ class MaterialMatcher:
         return all_projects[:limit]
 
     def _match_qualifications(self, ref: str, filters: List[str],
-                              count: Optional[int], company: str) -> List[dict]:
+                              count: Optional[int], company: str,
+                              project_id: int = None) -> List[dict]:
         """Match qualifications from store."""
-        all_quals = self.store.get_qualifications(company=company)
+        all_quals = self.store.get_qualifications(company=company, project_id=project_id)
         if not all_quals:
             return []
 

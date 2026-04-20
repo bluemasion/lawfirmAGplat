@@ -28,6 +28,8 @@ export default function BiddingAgent() {
     // Material selection state
     const [selectedCompany, setSelectedCompany] = useState('');
     const [companies, setCompanies] = useState([]);
+    const [bidProjectList, setBidProjectList] = useState([]); // projects under selected company
+    const [selectedProjectId, setSelectedProjectId] = useState(null); // selected project id
     const [materialPreview, setMaterialPreview] = useState(null);
     const [loadingPreview, setLoadingPreview] = useState(false);
 
@@ -345,13 +347,12 @@ export default function BiddingAgent() {
         let genStartTime = Date.now();
 
         try {
-            // Use selectedCompany directly (not from companyData state which may be stale
-            // due to React's async setState)
+            // Use selectedCompany and selectedProjectId directly
             const effectiveCompanyData = { ...companyData, company_name: selectedCompany || companyData.company_name };
             const res = await fetch(`${API_BASE}/api/bidding/generate-full/${taskId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ company_data: effectiveCompanyData, llm_provider: 'qwen' }),
+                body: JSON.stringify({ company_data: effectiveCompanyData, llm_provider: 'qwen', project_id: selectedProjectId }),
             });
 
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -460,6 +461,7 @@ export default function BiddingAgent() {
                     section_title: sectionTitle,
                     company_data: effectiveCompanyData,
                     llm_provider: 'qwen',
+                    project_id: selectedProjectId,
                 }),
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1069,31 +1071,32 @@ export default function BiddingAgent() {
                                 <button onClick={async () => {
                                     // Fetch companies list and go to material_selection phase
                                     try {
-                                        console.log('[MaterialSelection] Starting..., taskId=', taskId);
                                         const res = await fetch(`${API_BASE}/api/bidding/materials/companies`);
                                         const data = await res.json();
-                                        console.log('[MaterialSelection] Companies API response:', JSON.stringify(data).substring(0, 500));
                                         const companyList = data.data?.companies || [];
-                                        console.log('[MaterialSelection] companyList:', companyList.length, companyList.map(c => c.name));
                                         setCompanies(companyList);
-                                        // Auto-select first company if any
+                                        // Auto-select first company and load its projects
                                         if (companyList.length > 0) {
                                             const first = companyList[0].name;
                                             setSelectedCompany(first);
-                                            console.log('[MaterialSelection] Loading preview for:', first);
-                                            // Load preview for first company
-                                            setLoadingPreview(true);
-                                            const previewRes = await fetch(`${API_BASE}/api/bidding/preview-materials/${taskId}?company=${encodeURIComponent(first)}`);
-                                            const previewData = await previewRes.json();
-                                            console.log('[MaterialSelection] Preview result:', JSON.stringify(previewData).substring(0, 500));
-                                            setMaterialPreview(previewData.data);
-                                            setLoadingPreview(false);
+                                            // Load projects
+                                            const projRes = await fetch(`${API_BASE}/api/bidding/bid-projects?company=${encodeURIComponent(first)}`);
+                                            const projData = await projRes.json();
+                                            const projects = projData.data?.projects || [];
+                                            setBidProjectList(projects);
+                                            // Auto-select first project and load preview
+                                            if (projects.length > 0) {
+                                                setSelectedProjectId(projects[0].id);
+                                                setLoadingPreview(true);
+                                                const previewRes = await fetch(`${API_BASE}/api/bidding/preview-materials/${taskId}?company=${encodeURIComponent(first)}&project_id=${projects[0].id}`);
+                                                const previewData = await previewRes.json();
+                                                setMaterialPreview(previewData.data);
+                                                setLoadingPreview(false);
+                                            }
                                         }
-                                        console.log('[MaterialSelection] Setting phase to material_selection');
                                         setPhase('material_selection');
                                     } catch (e) {
                                         console.error('[MaterialSelection] FAILED:', e);
-                                        // Fallback: skip material selection, go directly to generation
                                         startGeneration();
                                     }
                                 }}
@@ -1111,36 +1114,78 @@ export default function BiddingAgent() {
                     /* ══════════════════════════════════════════════════════════ */
                     <div className="flex-1 flex flex-col overflow-hidden">
                         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                            {/* Company Selector */}
+                            {/* Company + Project Selector */}
                             <div className="bg-zinc-900/80 backdrop-blur rounded-xl border border-zinc-800 p-4">
                                 <h3 className="text-[13px] font-bold text-zinc-100 mb-3 flex items-center">
                                     <Package size={14} className="mr-2 text-orange-400" />
                                     选择投标主体
                                 </h3>
+                                {/* Company selector */}
                                 <select
                                     value={selectedCompany}
                                     onChange={async (e) => {
                                         const company = e.target.value;
                                         setSelectedCompany(company);
-                                        setLoadingPreview(true);
+                                        setSelectedProjectId(null);
+                                        setBidProjectList([]);
+                                        setMaterialPreview(null);
+                                        if (!company) return;
+                                        // Load projects for this company
                                         try {
-                                            const res = await fetch(`${API_BASE}/api/bidding/preview-materials/${taskId}?company=${encodeURIComponent(company)}`);
+                                            const res = await fetch(`${API_BASE}/api/bidding/bid-projects?company=${encodeURIComponent(company)}`);
                                             const data = await res.json();
-                                            setMaterialPreview(data.data);
+                                            const projects = data.data?.projects || [];
+                                            setBidProjectList(projects);
+                                            // Auto-select if only one project
+                                            if (projects.length === 1) {
+                                                setSelectedProjectId(projects[0].id);
+                                                setLoadingPreview(true);
+                                                const previewRes = await fetch(`${API_BASE}/api/bidding/preview-materials/${taskId}?company=${encodeURIComponent(company)}&project_id=${projects[0].id}`);
+                                                const previewData = await previewRes.json();
+                                                setMaterialPreview(previewData.data);
+                                                setLoadingPreview(false);
+                                            }
                                         } catch (err) {
-                                            console.error('Preview failed:', err);
+                                            console.error('Load projects failed:', err);
                                         }
-                                        setLoadingPreview(false);
                                     }}
-                                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2.5 text-[12px] text-zinc-100 focus:outline-none focus:border-orange-500 transition-colors"
+                                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2.5 text-[12px] text-zinc-100 focus:outline-none focus:border-orange-500 transition-colors mb-2"
                                 >
-                                    <option value="">全部公司素材（不限）</option>
+                                    <option value="">选择公司 / 律所</option>
                                     {companies.map((c, i) => (
                                         <option key={i} value={c.name}>
-                                            {c.name} ({c.resumes}简历 · {c.projects}业绩 · {c.qualifications}资质)
+                                            {c.name} ({c.total}素材)
                                         </option>
                                     ))}
                                 </select>
+                                {/* Project selector */}
+                                {bidProjectList.length > 0 && (
+                                    <select
+                                        value={selectedProjectId || ''}
+                                        onChange={async (e) => {
+                                            const pid = parseInt(e.target.value) || null;
+                                            setSelectedProjectId(pid);
+                                            if (!pid) { setMaterialPreview(null); return; }
+                                            setLoadingPreview(true);
+                                            try {
+                                                const res = await fetch(`${API_BASE}/api/bidding/preview-materials/${taskId}?company=${encodeURIComponent(selectedCompany)}&project_id=${pid}`);
+                                                const data = await res.json();
+                                                setMaterialPreview(data.data);
+                                            } catch (err) {
+                                                console.error('Preview failed:', err);
+                                            }
+                                            setLoadingPreview(false);
+                                        }}
+                                        className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2.5 text-[12px] text-zinc-100 focus:outline-none focus:border-purple-500 transition-colors"
+                                    >
+                                        <option value="">选择投标项目</option>
+                                        {bidProjectList.map(p => (
+                                            <option key={p.id} value={p.id}>
+                                                📁 {p.name} ({p.material_count}素材)
+                                            </option>
+                                        ))}
+                                    </select>
+                                )}
                             </div>
 
                             {/* Material Preview */}
@@ -1190,14 +1235,14 @@ export default function BiddingAgent() {
                                     ← 返回大纲
                                 </button>
                                 <button onClick={() => {
-                                    // Update companyData with selected company
-                                    setCompanyData(prev => ({ ...prev, company_name: selectedCompany }));
+                                    // Update companyData with selected company + project
+                                    setCompanyData(prev => ({ ...prev, company_name: selectedCompany, _project_id: selectedProjectId }));
                                     startGeneration();
                                 }}
-                                    disabled={processing}
+                                    disabled={processing || !selectedProjectId}
                                     className="flex-[2] flex items-center justify-center space-x-1.5 px-6 py-2.5 rounded-md text-[12px] font-bold bg-orange-500 text-white hover:bg-orange-600 shadow-lg shadow-orange-500/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed">
                                     <Sparkles size={14} />
-                                    <span>开始生成投标文件</span>
+                                    <span>{selectedProjectId ? '开始生成投标文件' : '请先选择项目'}</span>
                                 </button>
                             </div>
                         </div>

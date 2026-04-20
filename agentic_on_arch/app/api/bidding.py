@@ -392,6 +392,7 @@ class FullBiddingRequest(BaseModel):
     """Request for full bidding pipeline."""
     company_data: Optional[Dict[str, str]] = None
     llm_provider: str = "qwen"
+    project_id: Optional[int] = None
 
 
 @router.post("/parse-structure")
@@ -596,7 +597,8 @@ async def parse_tender_structure(file: UploadFile = File(...),
 
 
 @router.get("/preview-materials/{task_id}")
-async def preview_materials(task_id: str, company: str = ""):
+async def preview_materials(task_id: str, company: str = "",
+                            project_id: int = None):
     """预览素材匹配 — 返回每个章节能匹配到的素材摘要。
 
     用于前端在 '选择投标主体' 步骤展示匹配结果。
@@ -622,11 +624,12 @@ async def preview_materials(task_id: str, company: str = ""):
         return {"success": True, "data": {"matches": [], "summary": {"error": "素材库不可用"}}}
 
     matcher = MaterialMatcher(store)
-    mat_summary = store.get_summary(company=company)
+    mat_summary = store.get_summary(company=company, project_id=project_id)
 
     matches = []
     for sec in all_sections:
-        matched = matcher.match_for_section(sec, company=company)
+        matched = matcher.match_for_section(sec, company=company,
+                                             project_id=project_id)
         matches.append({
             "title": sec.get("title", ""),
             "type": sec.get("type", ""),
@@ -640,6 +643,7 @@ async def preview_materials(task_id: str, company: str = ""):
         "success": True,
         "data": {
             "company": company,
+            "project_id": project_id,
             "store_summary": mat_summary,
             "matches": matches,
             "matched_sections": sum(1 for m in matches if m["match_summary"]),
@@ -744,12 +748,14 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
         from app.core.skills.builtin.material_matcher import MaterialMatcher, format_materials_for_prompt
         store = get_material_store()
         company_name = company_data.get("company_name", "")
-        logger.info(f"[generate-full] company_data keys={list(company_data.keys())}, "
-                    f"company_name='{company_name}'")
+        project_id = req.project_id
+        logger.info(f"[generate-full] company_name='{company_name}', "
+                    f"project_id={project_id}")
         material_summary_parts = []
         if store:
             matcher = MaterialMatcher(store)
-            mat_summary = store.get_summary(company=company_name)
+            mat_summary = store.get_summary(company=company_name,
+                                             project_id=project_id)
             yield _sse({
                 "type": "log",
                 "message": f"📦 素材库: {mat_summary.get('resumes',0)}份简历, "
@@ -758,7 +764,8 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
             })
             matched_count = 0
             for sec in all_sections:
-                matched = matcher.match_for_section(sec, company=company_name)
+                matched = matcher.match_for_section(sec, company=company_name,
+                                                     project_id=project_id)
                 sec["pre_matched_materials"] = matched
                 summary = matched.get("match_summary", "")
                 if summary:
