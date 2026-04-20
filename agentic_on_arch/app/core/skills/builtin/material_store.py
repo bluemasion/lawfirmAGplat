@@ -992,18 +992,30 @@ class MaterialStore:
         finally:
             conn.close()
 
-    def delete_resume(self, name: str) -> bool:
-        """Delete a resume by name."""
+    def delete_material(self, category: str, name: str,
+                        company: str = "") -> bool:
+        """Delete a material by category and name, optionally scoped to company."""
         conn = self._get_conn()
         try:
-            cur = conn.execute("""
-                DELETE FROM materials
-                WHERE category = 'resumes' AND name = ?
-            """, (name,))
+            if company:
+                cur = conn.execute("""
+                    DELETE FROM materials
+                    WHERE category = ? AND name = ?
+                      AND company_id = (SELECT id FROM companies WHERE name = ?)
+                """, (category, name, company))
+            else:
+                cur = conn.execute("""
+                    DELETE FROM materials
+                    WHERE category = ? AND name = ?
+                """, (category, name))
             conn.commit()
             return cur.rowcount > 0
         finally:
             conn.close()
+
+    def delete_resume(self, name: str) -> bool:
+        """Delete a resume by name (legacy compat)."""
+        return self.delete_material("resumes", name)
 
     def clear_all(self):
         """Clear all materials."""

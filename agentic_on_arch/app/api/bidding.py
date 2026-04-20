@@ -2230,11 +2230,11 @@ async def update_resume(name: str, req: MaterialUpdateRequest):
 
 
 @router.delete("/materials/resumes/{name}")
-async def delete_resume(name: str):
+async def delete_resume(name: str, company: str = ""):
     """删除律师简历"""
     from app.core.skills.builtin.material_store import get_material_store
     store = get_material_store()
-    ok = store.delete_resume(name)
+    ok = store.delete_material("resumes", name, company)
     if ok:
         return {"success": True}
     return {"success": False, "message": f"简历 '{name}' 未找到"}
@@ -2252,27 +2252,23 @@ async def update_project(project_name: str, req: MaterialUpdateRequest):
 
 
 @router.delete("/materials/projects/{project_name}")
-async def delete_project(project_name: str):
+async def delete_project(project_name: str, company: str = ""):
     """删除项目业绩"""
     from app.core.skills.builtin.material_store import get_material_store
     store = get_material_store()
-    projects = store.get_projects()
-    new_projects = [p for p in projects if p.get("project_name") != project_name]
-    if len(new_projects) < len(projects):
-        store._save_json(store.projects_file, new_projects)
+    ok = store.delete_material("projects", project_name, company)
+    if ok:
         return {"success": True}
     return {"success": False, "message": f"项目 '{project_name}' 未找到"}
 
 
 @router.delete("/materials/qualifications/{name}")
-async def delete_qualification(name: str):
+async def delete_qualification(name: str, company: str = ""):
     """删除资质证书"""
     from app.core.skills.builtin.material_store import get_material_store
     store = get_material_store()
-    quals = store.get_qualifications()
-    new_quals = [q for q in quals if q.get("name") != name]
-    if len(new_quals) < len(quals):
-        store._save_json(store.qualifications_file, new_quals)
+    ok = store.delete_material("qualifications", name, company)
+    if ok:
         return {"success": True}
     return {"success": False, "message": f"资质 '{name}' 未找到"}
 

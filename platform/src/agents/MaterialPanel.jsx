@@ -615,17 +615,19 @@ export default function MaterialPanel({ onClose }) {
         const name = item[keyField];
         if (!confirm(`确定删除 "${name}"？`)) return;
 
+        const companyParam = selectedCompany ? `?company=${encodeURIComponent(selectedCompany)}` : '';
         const endpoint = tab === 'projects'
-            ? `${API_BASE}/api/bidding/materials/projects/${encodeURIComponent(name)}`
+            ? `${API_BASE}/api/bidding/materials/projects/${encodeURIComponent(name)}${companyParam}`
             : tab === 'resumes'
-                ? `${API_BASE}/api/bidding/materials/resumes/${encodeURIComponent(name)}`
-                : `${API_BASE}/api/bidding/materials/qualifications/${encodeURIComponent(name)}`;
+                ? `${API_BASE}/api/bidding/materials/resumes/${encodeURIComponent(name)}${companyParam}`
+                : `${API_BASE}/api/bidding/materials/qualifications/${encodeURIComponent(name)}${companyParam}`;
 
         try {
             const res = await fetch(endpoint, { method: 'DELETE' });
             const result = await res.json();
             if (result.success) {
                 loadMaterials();
+                loadBidProjects(); // refresh project counts
             }
         } catch (e) {
             console.error('Delete failed:', e);
