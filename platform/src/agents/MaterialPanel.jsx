@@ -1668,7 +1668,22 @@ export default function MaterialPanel({ onClose }) {
                                         </div>
                                     </div>
                                 </div>
-                                <span className="text-zinc-600 group-hover:text-purple-400 transition-colors">›</span>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (!confirm(`确定删除项目 "${p.name}"？\n⚠️ 该项目下的 ${p.material_count} 条素材将一并删除！`)) return;
+                                            fetch(`${API_BASE}/api/bidding/bid-projects/${encodeURIComponent(selectedCompany)}/${encodeURIComponent(p.name)}`, {
+                                                method: 'DELETE',
+                                            }).then(() => { loadBidProjects(); loadCompanies(); });
+                                        }}
+                                        className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 transition-all p-1 rounded hover:bg-red-500/10"
+                                        title="删除项目"
+                                    >
+                                        <Trash2 size={14} />
+                                    </button>
+                                    <span className="text-zinc-600 group-hover:text-purple-400 transition-colors">›</span>
+                                </div>
                             </div>
                         </div>
                     ))}

@@ -222,14 +222,22 @@ class MaterialStore:
             conn.close()
 
     def delete_project(self, company: str, project_name: str) -> bool:
-        """Delete a bid project (materials get project_id set to NULL)."""
+        """Delete a bid project and all its materials."""
         conn = self._get_conn()
         try:
-            conn.execute("""
-                DELETE FROM bid_projects
-                WHERE company_id = (SELECT id FROM companies WHERE name = ?)
-                  AND name = ?
-            """, (company, project_name))
+            # Find the project id
+            row = conn.execute("""
+                SELECT p.id FROM bid_projects p
+                JOIN companies c ON p.company_id = c.id
+                WHERE c.name = ? AND p.name = ?
+            """, (company, project_name)).fetchone()
+            if not row:
+                return False
+            pid = row[0]
+            # Delete all materials under this project
+            conn.execute("DELETE FROM materials WHERE project_id = ?", (pid,))
+            conn.execute("DELETE FROM narrative_chunks WHERE project_id = ?", (pid,))
+            conn.execute("DELETE FROM bid_projects WHERE id = ?", (pid,))
             conn.commit()
             return True
         finally:
