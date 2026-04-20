@@ -2138,6 +2138,46 @@ async def delete_company(name: str):
     return {"success": True, "data": {"deleted": deleted, "total": total, "company": name}}
 
 
+# ── Bid Project APIs ──
+
+@router.get("/bid-projects")
+async def list_bid_projects(company: str = ""):
+    """列出公司下的投标项目"""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    if not company:
+        return {"success": False, "message": "缺少 company 参数"}
+    projects = store.get_projects_for_company(company)
+    return {"success": True, "data": {"projects": projects, "company": company}}
+
+
+class CreateProjectRequest(BaseModel):
+    company: str
+    project_name: str
+    description: str = ""
+
+
+@router.post("/bid-projects")
+async def create_bid_project(req: CreateProjectRequest):
+    """在公司下创建投标项目"""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    try:
+        result = store.create_project(req.company, req.project_name,
+                                       req.description)
+        return {"success": True, "data": result}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
+@router.delete("/bid-projects/{company}/{project_name}")
+async def delete_bid_project(company: str, project_name: str):
+    """删除投标项目（素材不删除，只解除项目关联）"""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    store.delete_project(company, project_name)
+    return {"success": True, "data": {"company": company, "project": project_name}}
+
 @router.get("/materials/search")
 async def search_materials(
     q: str = "",

@@ -36,9 +36,19 @@ CREATE TABLE IF NOT EXISTS companies (
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS bid_projects (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(company_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS materials (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     company_id   INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    project_id   INTEGER REFERENCES bid_projects(id) ON DELETE SET NULL,
     category     TEXT NOT NULL,
     name         TEXT NOT NULL,
     data         TEXT NOT NULL DEFAULT '{}',
@@ -52,6 +62,7 @@ CREATE TABLE IF NOT EXISTS materials (
 CREATE TABLE IF NOT EXISTS narrative_chunks (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    project_id  INTEGER REFERENCES bid_projects(id) ON DELETE SET NULL,
     title       TEXT NOT NULL,
     content     TEXT NOT NULL,
     source_file TEXT DEFAULT '',
@@ -76,10 +87,26 @@ CREATE TABLE IF NOT EXISTS image_meta (
 );
 
 CREATE INDEX IF NOT EXISTS idx_materials_company ON materials(company_id);
+CREATE INDEX IF NOT EXISTS idx_materials_project ON materials(project_id);
 CREATE INDEX IF NOT EXISTS idx_materials_category ON materials(category);
 CREATE INDEX IF NOT EXISTS idx_narratives_company ON narrative_chunks(company_id);
 CREATE INDEX IF NOT EXISTS idx_image_meta_type ON image_meta(image_type);
 """
+
+# Migration SQL for existing databases (adds new columns/tables)
+_MIGRATION_SQL = [
+    "CREATE TABLE IF NOT EXISTS bid_projects (id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE, name TEXT NOT NULL, description TEXT DEFAULT '', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(company_id, name))",
+    # project_id columns (safe to run multiple times — ignored if exists)
+]
+
+def _safe_add_column(conn, table, column, col_type, default=""):
+    """Add column if it doesn't exist (SQLite has no IF NOT EXISTS for ALTER)."""
+    try:
+        default_clause = f" DEFAULT {default}" if default else ""
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}{default_clause}")
+        logger.info(f"[migration] Added {table}.{column}")
+    except sqlite3.OperationalError:
+        pass  # column already exists
 
 
 class MaterialStore:
@@ -113,10 +140,20 @@ class MaterialStore:
         return conn
 
     def _init_db(self):
-        """Create tables if they don't exist."""
+        """Create tables if they don't exist, run migrations."""
         conn = self._get_conn()
         try:
             conn.executescript(_SCHEMA_SQL)
+            # Run migrations for existing databases
+            for sql in _MIGRATION_SQL:
+                try:
+                    conn.execute(sql)
+                except sqlite3.OperationalError:
+                    pass
+            _safe_add_column(conn, "materials", "project_id",
+                            "INTEGER REFERENCES bid_projects(id) ON DELETE SET NULL")
+            _safe_add_column(conn, "narrative_chunks", "project_id",
+                            "INTEGER REFERENCES bid_projects(id) ON DELETE SET NULL")
             conn.commit()
         finally:
             conn.close()
@@ -133,6 +170,70 @@ class MaterialStore:
             "INSERT INTO companies (name) VALUES (?)", (company_name,)
         )
         return cur.lastrowid
+
+    def _get_or_create_project(self, conn: sqlite3.Connection,
+                                company_id: int, project_name: str) -> int:
+        """Get project id by name under a company, creating if needed."""
+        row = conn.execute(
+            "SELECT id FROM bid_projects WHERE company_id = ? AND name = ?",
+            (company_id, project_name)
+        ).fetchone()
+        if row:
+            return row[0]
+        cur = conn.execute(
+            "INSERT INTO bid_projects (company_id, name) VALUES (?, ?)",
+            (company_id, project_name)
+        )
+        return cur.lastrowid
+
+    # ── Project CRUD ──
+
+    def get_projects_for_company(self, company: str) -> List[Dict]:
+        """List all bid projects under a company."""
+        conn = self._get_conn()
+        try:
+            rows = conn.execute("""
+                SELECT p.id, p.name, p.description, p.created_at,
+                       (SELECT COUNT(*) FROM materials m
+                        WHERE m.project_id = p.id) as material_count
+                FROM bid_projects p
+                JOIN companies c ON p.company_id = c.id
+                WHERE c.name = ?
+                ORDER BY p.created_at DESC
+            """, (company,)).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def create_project(self, company: str, project_name: str,
+                       description: str = "") -> Dict:
+        """Create a new bid project under a company."""
+        conn = self._get_conn()
+        try:
+            company_id = self._get_or_create_company(conn, company)
+            cur = conn.execute("""
+                INSERT INTO bid_projects (company_id, name, description)
+                VALUES (?, ?, ?)
+            """, (company_id, project_name, description))
+            conn.commit()
+            return {"id": cur.lastrowid, "name": project_name,
+                    "company": company}
+        finally:
+            conn.close()
+
+    def delete_project(self, company: str, project_name: str) -> bool:
+        """Delete a bid project (materials get project_id set to NULL)."""
+        conn = self._get_conn()
+        try:
+            conn.execute("""
+                DELETE FROM bid_projects
+                WHERE company_id = (SELECT id FROM companies WHERE name = ?)
+                  AND name = ?
+            """, (company, project_name))
+            conn.commit()
+            return True
+        finally:
+            conn.close()
 
     # ── JSON Migration ──
 
@@ -256,12 +357,14 @@ class MaterialStore:
     # ── Save Methods ──
 
     def save_materials(self, materials: Dict[str, Any],
-                       company: str = "") -> Dict[str, int]:
+                       company: str = "",
+                       project: str = "") -> Dict[str, int]:
         """Save extracted materials to SQLite, merging with existing data.
 
         Args:
             materials: Dict with resumes, projects, qualifications, narrative_chunks
             company: Company name to tag on every item (uses default if empty)
+            project: Optional bid project name (if set, materials are project-level)
 
         Returns dict with counts of items saved per type.
         """
@@ -271,6 +374,10 @@ class MaterialStore:
         conn = self._get_conn()
         try:
             company_id = self._get_or_create_company(conn, company)
+            project_id = None
+            if project:
+                project_id = self._get_or_create_project(
+                    conn, company_id, project)
 
             for category in ["resumes", "projects", "qualifications"]:
                 items = materials.get(category, [])
@@ -296,10 +403,10 @@ class MaterialStore:
                     source_path = item.get("_source_path", "")
                     conn.execute("""
                         INSERT OR REPLACE INTO materials
-                        (company_id, category, name, data, source_file, source_path,
-                         updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                    """, (company_id, category, name,
+                        (company_id, project_id, category, name, data,
+                         source_file, source_path, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """, (company_id, project_id, category, name,
                           json.dumps(clean, ensure_ascii=False),
                           source_file, source_path))
                     saved += 1
@@ -312,9 +419,9 @@ class MaterialStore:
                 for chunk in chunks:
                     conn.execute("""
                         INSERT INTO narrative_chunks
-                        (company_id, title, content, source_file)
-                        VALUES (?, ?, ?, ?)
-                    """, (company_id,
+                        (company_id, project_id, title, content, source_file)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (company_id, project_id,
                           chunk.get("title", ""),
                           chunk.get("content", ""),
                           chunk.get("_source_file", "")))
@@ -325,7 +432,8 @@ class MaterialStore:
         finally:
             conn.close()
 
-        logger.info(f"Materials saved: {counts} (company={company})")
+        project_info = f", project={project}" if project else ""
+        logger.info(f"Materials saved: {counts} (company={company}{project_info})")
         return counts
 
     # ── Load Methods ──

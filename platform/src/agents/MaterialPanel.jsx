@@ -167,6 +167,11 @@ export default function MaterialPanel({ onClose }) {
     const [newCompanyName, setNewCompanyName] = useState('');
     const [deletingCompany, setDeletingCompany] = useState(null); // company object to delete
 
+    // ── Bid Projects state ──
+    const [bidProjects, setBidProjects] = useState([]); // [{id, name, description, material_count}]
+    const [addingProject, setAddingProject] = useState(false);
+    const [newProjectName, setNewProjectName] = useState('');
+
     // ── Upload + Diff Review state ──
     const [uploading, setUploading] = useState(false);
     const [uploadStep, setUploadStep] = useState(0); // 0=idle, 1=uploading, 2=extracting, 3=comparing, 4=done
@@ -575,15 +580,28 @@ export default function MaterialPanel({ onClose }) {
         }
     }, [selectedCompany]);
 
+    // ── Load bid projects for selected company ──
+    const loadBidProjects = useCallback(async () => {
+        if (!selectedCompany) { setBidProjects([]); return; }
+        try {
+            const res = await fetch(`${API_BASE}/api/bidding/bid-projects?company=${encodeURIComponent(selectedCompany)}`);
+            const data = await res.json();
+            if (data.success) setBidProjects(data.data.projects || []);
+        } catch (e) {
+            console.error('Failed to load bid projects:', e);
+        }
+    }, [selectedCompany]);
+
     // Initial load
     useEffect(() => {
         loadCompanies();
     }, []);
 
-    // Reload materials when company changes
+    // Reload materials and projects when company changes
     useEffect(() => {
         loadMaterials();
-    }, [selectedCompany, loadMaterials]);
+        loadBidProjects();
+    }, [selectedCompany, loadMaterials, loadBidProjects]);
 
     // ── Delete ──
     const handleDelete = async (tab, item) => {
@@ -1603,6 +1621,57 @@ export default function MaterialPanel({ onClose }) {
             ) : (
                 /* ── Level 2: Company Detail ── */
                 <>
+                    {/* ── Bid Projects Section ── */}
+                    {bidProjects.length > 0 || addingProject ? (
+                        <div className="border-b border-zinc-800 bg-zinc-900/40">
+                            <div className="px-4 py-2.5 flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <span className="text-[12px] font-bold text-zinc-300">📁 投标项目</span>
+                                    <span className="text-[10px] text-zinc-600">{bidProjects.length} 个</span>
+                                </div>
+                                <button onClick={() => setAddingProject(true)}
+                                    className="text-[10px] text-orange-400 hover:text-orange-300 flex items-center gap-1 transition-colors">
+                                    <Plus size={10} />新建项目
+                                </button>
+                            </div>
+                            {addingProject && (
+                                <div className="px-4 pb-2 flex items-center gap-2">
+                                    <input
+                                        type="text"
+                                        value={newProjectName}
+                                        onChange={e => setNewProjectName(e.target.value)}
+                                        placeholder="输入项目名称（如：天元律所14）"
+                                        className="flex-1 bg-zinc-800 border border-zinc-600 rounded px-2 py-1 text-[11px] text-zinc-200 focus:border-orange-500 outline-none"
+                                        autoFocus
+                                        onKeyDown={e => {
+                                            if (e.key === 'Enter' && newProjectName.trim()) {
+                                                fetch(`${API_BASE}/api/bidding/bid-projects`, {
+                                                    method: 'POST',
+                                                    headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify({ company: selectedCompany, project_name: newProjectName.trim() }),
+                                                }).then(() => { loadBidProjects(); setAddingProject(false); setNewProjectName(''); });
+                                            }
+                                            if (e.key === 'Escape') { setAddingProject(false); setNewProjectName(''); }
+                                        }}
+                                    />
+                                    <button onClick={() => { setAddingProject(false); setNewProjectName(''); }}
+                                        className="text-zinc-500 hover:text-zinc-300 text-[10px]">取消</button>
+                                </div>
+                            )}
+                            <div className="px-4 pb-2.5 flex flex-wrap gap-2">
+                                {bidProjects.map(p => (
+                                    <div key={p.id}
+                                        className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-800/80 border border-zinc-700/50 hover:border-purple-500/40 transition-all group cursor-default">
+                                        <span className="text-[11px] font-medium text-zinc-200">{p.name}</span>
+                                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/20">
+                                            {p.material_count} 素材
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ) : null}
+
                     {/* Tabs */}
                     <div className="flex border-b border-zinc-800">
                         {TABS.map(tab => {
