@@ -496,6 +496,7 @@ export default function MaterialPanel({ onClose }) {
             const payload = {
                 upload_id: diffReview.upload_id,
                 company: diffReview.company || selectedCompany || '',
+                project_name: selectedProject?.name || '',
                 selected_resumes: selectedResumes,
                 selected_projects: selectedProjects,
                 selected_qualifications: selectedQuals,

@@ -294,7 +294,10 @@ export default function BiddingAgent() {
             const res = await fetch(`${API_BASE}/api/bidding/confirm-materials`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ upload_id: uploadId }),
+                body: JSON.stringify({
+                    upload_id: uploadId,
+                    company: selectedCompany || '',
+                }),
             });
             const result = await res.json();
             if (result.success) {

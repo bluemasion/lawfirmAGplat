@@ -1437,6 +1437,7 @@ async def upload_historical_bid(
 class ConfirmMaterialsRequest(BaseModel):
     upload_id: str
     company: str = ""
+    project_name: str = ""  # target bid project name
     # Optional: subset of items to save (if user deselects some)
     # If empty, save all extracted materials
     selected_resumes: Optional[list] = None
@@ -1512,7 +1513,15 @@ async def confirm_materials(req: ConfirmMaterialsRequest):
             filtered = orig
         materials[cat] = filtered
 
-    save_counts = store.save_materials(materials, company=company)
+    # Determine project name: from request, or auto-create default
+    project_name = req.project_name
+    if not project_name:
+        # Auto-create a default project named after the company
+        project_name = f"{company}"
+    logger.info(f"[confirm] Target project: '{project_name}'")
+
+    save_counts = store.save_materials(materials, company=company,
+                                       project=project_name)
     logger.info(f"[confirm] ✅ Save complete: {save_counts}")
 
     return {
