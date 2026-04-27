@@ -1233,12 +1233,36 @@ class RequirementExtractionSkill(BaseSkill):
             # Skip if a section with similar title already exists
             if sec_title in existing_titles:
                 continue
-            # Check fuzzy: if any existing title contains core words
-            core_words = [w for w in sec_title if len(w.encode('utf-8')) > 1]
-            if any(
-                sum(1 for c in sec_title if c in t) >= len(sec_title) * 0.5
-                for t in existing_titles if t
-            ):
+            # Check semantic overlap: if the new section's topic area
+            # is already covered by an existing section
+            _topic_overlap = False
+            # Build keyword sets for overlap detection
+            new_keywords = set()
+            for key, (mapped_title, _, _) in self.EVAL_TO_SECTION_MAP.items():
+                if mapped_title == sec_title:
+                    new_keywords.add(key)
+            new_keywords.add(sec_title)
+
+            for existing_title in existing_titles:
+                if not existing_title:
+                    continue
+                # Direct containment
+                if sec_title in existing_title or existing_title in sec_title:
+                    _topic_overlap = True
+                    break
+                # Keyword overlap: if existing title contains keywords
+                # that map to the same section
+                for kw in new_keywords:
+                    if kw in existing_title:
+                        _topic_overlap = True
+                        break
+                if _topic_overlap:
+                    break
+
+            if _topic_overlap:
+                logger.debug(
+                    f"  Skip auto-add '{sec_title}': overlaps with existing section"
+                )
                 continue
 
             max_order += 1

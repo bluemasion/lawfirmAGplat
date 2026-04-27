@@ -141,6 +141,29 @@ class MaterialMatcher:
 
         return result
 
+    # Keywords indicating a record is a document/file, not a real person
+    _NON_PERSON_KEYWORDS = [
+        '身份证', '学历', '毕业证', '学位证', '实习证', '执业证', '资格证',
+        '社保', '证书', '许可证', '平台', '律师事务所', '副本', '扫描件',
+        '法律职业', '信息公示',
+    ]
+
+    @classmethod
+    def _is_person_name(cls, name):
+        """Check if a material name looks like a real person name."""
+        if not name or len(name) < 2:
+            return False
+        # Names starting with digits are file names like "1. 身份证-钟雨"
+        if name[0].isdigit():
+            return False
+        # Names containing document keywords
+        if any(kw in name for kw in cls._NON_PERSON_KEYWORDS):
+            return False
+        # Real Chinese names are typically 2-4 chars
+        if len(name) > 6:
+            return False
+        return True
+
     def _match_resumes(self, ref: str, filters: List[str],
                        count: Optional[int], company: str,
                        project_id: int = None) -> List[dict]:
@@ -148,6 +171,9 @@ class MaterialMatcher:
         all_resumes = self.store.get_resumes(company=company, project_id=project_id)
         if not all_resumes:
             return []
+
+        # Filter out non-person records (file names like "身份证扫描件-钟雨")
+        all_resumes = [r for r in all_resumes if self._is_person_name(r.get('name', ''))]
 
         # Apply keyword filters
         if filters:
@@ -164,7 +190,52 @@ class MaterialMatcher:
                 all_resumes = filtered
 
         limit = count or 8
-        return all_resumes[:limit]
+        matched = all_resumes[:limit]
+
+        # ── Enrich: merge images from separate named records ──
+        # Some images live in separate records like "身份证扫描件-钟雨"
+        # rather than on the resume "钟雨" itself. Find and merge them.
+        self._enrich_resume_images(matched, company, project_id)
+
+        return matched
+
+    def _enrich_resume_images(self, resumes, company, project_id=None):
+        """Find images from other material records that contain the person's
+        name and merge them into the resume's _images list."""
+        # Get ALL materials (resumes + qualifications) to search for name matches
+        all_resumes = self.store.get_resumes(company=company, project_id=project_id)
+        all_quals = self.store.get_qualifications(company=company, project_id=project_id)
+        all_records = list(all_resumes or []) + list(all_quals or [])
+
+        for resume in resumes:
+            person_name = (resume.get('name') or '').strip()
+            if not person_name or len(person_name) < 2:
+                continue
+
+            existing_images = set(resume.get('_images', []))
+            added = []
+
+            # Search all records for ones containing this person's name
+            for record in all_records:
+                record_name = (record.get('name') or '').strip()
+                if not record_name or record_name == person_name:
+                    continue
+
+                # Check if person's name appears in the record name
+                if person_name in record_name:
+                    for img in record.get('_images', []):
+                        if img not in existing_images:
+                            existing_images.add(img)
+                            added.append(img)
+
+            if added:
+                current = list(resume.get('_images', []))
+                current.extend(added)
+                resume['_images'] = current
+                logger.info(
+                    f"  Enriched '{person_name}': +{len(added)} images "
+                    f"from related records → {len(current)} total"
+                )
 
     def _match_projects(self, ref: str, filters: List[str],
                         count: Optional[int], company: str,
