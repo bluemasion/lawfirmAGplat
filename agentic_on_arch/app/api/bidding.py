@@ -869,6 +869,7 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
                         "llm_provider": llm_provider,
                         "skeleton": skeleton_text,
                         "company": company_data.get("company_name", ""),
+                        "project_id": project_id,
                     }, chunk_callback=on_chunk)
 
                     result["order"] = section.get("order", idx + 1)
@@ -1103,6 +1104,7 @@ async def regenerate_section(task_id: str, req: RegenerateSectionRequest):
                 "llm_provider": req.llm_provider,
                 "skeleton": skeleton_text,
                 "company": company_name,
+                "project_id": project_id,
             }, chunk_callback=on_chunk)
 
             # Stream accumulated chunks

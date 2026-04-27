@@ -619,6 +619,7 @@ class ContentGenerationSkill(BaseSkill):
         llm_provider = params.get("llm_provider", "qwen")
         skeleton = params.get("skeleton", None)
         company = params.get("company", "")  # company name for material filtering
+        project_id = params.get("project_id", None)  # project id for material filtering
 
         title = section.get("title", "未知章节")
         sec_type = section.get("type", "narrative")
@@ -636,7 +637,7 @@ class ContentGenerationSkill(BaseSkill):
             store = _get_material_store()
             if store:
                 matcher = MaterialMatcher(store)
-                matched_materials = matcher.match_for_section(section, company=company)
+                matched_materials = matcher.match_for_section(section, company=company, project_id=project_id)
         if matched_materials.get("match_summary"):
             logger.info(f"  Materials for '{title}': {matched_materials['match_summary']}")
 
@@ -669,7 +670,7 @@ class ContentGenerationSkill(BaseSkill):
         if sec_type == "table":
             content = await self._generate_table_by_template(
                 title, content_hints, data_fields,
-                company=company
+                company=company, project_id=project_id
             )
             if chunk_callback:
                 await chunk_callback(content)
@@ -677,7 +678,7 @@ class ContentGenerationSkill(BaseSkill):
             return self._result(title, content, missing, "template")
 
         if sec_type == "form":
-            content = self._generate_form_by_template(title, content_hints, company=company)
+            content = self._generate_form_by_template(title, content_hints, company=company, project_id=project_id)
             if chunk_callback:
                 await chunk_callback(content)
             missing = self._scan_missing(content)
@@ -772,7 +773,7 @@ class ContentGenerationSkill(BaseSkill):
                 try:
                     matcher = MaterialMatcher(store)
                     fallback_section = {"title": title, "type": "narrative", "material_refs": [title]}
-                    auto_matched = matcher.match_for_section(fallback_section, company=company)
+                    auto_matched = matcher.match_for_section(fallback_section, company=company, project_id=project_id)
                     structured_context = format_materials_for_prompt(auto_matched)
                     if structured_context:
                         logger.info(f"  MaterialMatcher (auto): {auto_matched.get('match_summary', '')}")
@@ -789,7 +790,7 @@ class ContentGenerationSkill(BaseSkill):
                     company_context_parts = []
 
                     # Projects summary
-                    projects = store.get_projects(company=company)
+                    projects = store.get_projects(company=company, project_id=project_id)
                     if projects:
                         company_context_parts.append(
                             f"\n【我方公司业绩数据（{len(projects)}项，请在撰写中引用真实案例）】"
@@ -805,7 +806,7 @@ class ContentGenerationSkill(BaseSkill):
                             company_context_parts.append(line)
 
                     # Resumes summary
-                    resumes = store.get_resumes(company=company)
+                    resumes = store.get_resumes(company=company, project_id=project_id)
                     if resumes:
                         company_context_parts.append(
                             f"\n【我方公司团队成员（{len(resumes)}人，可引用真实信息）】"
@@ -819,7 +820,7 @@ class ContentGenerationSkill(BaseSkill):
                             company_context_parts.append(line)
 
                     # Qualifications summary
-                    quals = store.get_qualifications(company=company)
+                    quals = store.get_qualifications(company=company, project_id=project_id)
                     if quals:
                         company_context_parts.append(
                             f"\n【我方公司资质证书（{len(quals)}项，按需引用）】"
@@ -979,7 +980,8 @@ class ContentGenerationSkill(BaseSkill):
 
     # ── Form: code templates ──
 
-    def _build_company_profile(self, company: str = "") -> dict:
+    def _build_company_profile(self, company: str = "",
+                               project_id: int = None) -> dict:
         """Build company profile: for the selected company, prefer material store
         data over default company_profile.json to ensure data isolation.
         """
@@ -1001,9 +1003,9 @@ class ContentGenerationSkill(BaseSkill):
 
         # Try to get richer info from material store
         try:
-            resumes = store.get_resumes(company=company)
-            projects = store.get_projects(company=company)
-            quals = store.get_qualifications(company=company)
+            resumes = store.get_resumes(company=company, project_id=project_id)
+            projects = store.get_projects(company=company, project_id=project_id)
+            quals = store.get_qualifications(company=company, project_id=project_id)
 
             if resumes:
                 profile["lawyer_count"] = str(len(resumes))
@@ -1026,9 +1028,11 @@ class ContentGenerationSkill(BaseSkill):
 
         return profile
 
-    def _generate_form_by_template(self, title: str, hints: str, company: str = "") -> str:
+    def _generate_form_by_template(self, title: str, hints: str,
+                                   company: str = "",
+                                   project_id: int = None) -> str:
         """Generate form content using built-in templates."""
-        profile = self._build_company_profile(company)
+        profile = self._build_company_profile(company, project_id=project_id)
 
         # Find matching form template (precise matching)
         title_stripped = title.strip()
@@ -1094,9 +1098,10 @@ class ContentGenerationSkill(BaseSkill):
 
     async def _generate_table_by_template(self, title: str, hints: str,
                                           data_fields: List[str],
-                                          company: str = "") -> str:
+                                          company: str = "",
+                                          project_id: int = None) -> str:
         """Generate table section using code templates and RAG data."""
-        profile = self._build_company_profile(company)
+        profile = self._build_company_profile(company, project_id=project_id)
 
         for tpl_name, tpl_info in TABLE_TEMPLATES.items():
             if any(kw in title for kw in tpl_info["match_keywords"]):
