@@ -1282,7 +1282,7 @@ export default function BiddingAgent() {
                                 </button>
                                 <button onClick={() => {
                                     // Update companyData with selected company + project
-                                    setCompanyData(prev => ({ ...prev, company_name: selectedCompany, _project_id: selectedProjectId }));
+                                    setCompanyData(prev => ({ ...prev, company_name: selectedCompany }));
                                     startGeneration();
                                 }}
                                     disabled={processing || !selectedProjectId}
