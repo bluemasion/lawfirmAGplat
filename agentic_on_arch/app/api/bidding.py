@@ -1539,10 +1539,15 @@ async def confirm_materials(req: ConfirmMaterialsRequest):
 
 # Auto-category rules: folder/filename keywords → category
 _ARCHIVE_CATEGORY_RULES = [
-    {"category": "resume",        "keywords": ["简历", "人员", "律师", "团队", "合伙人", "resume"]},
+    {"category": "resume",        "keywords": ["简历", "人员", "律师", "团队", "合伙人", "resume",
+                                                "身份证明", "身份资料", "身份信息"]},
     {"category": "project",       "keywords": ["业绩", "项目", "案例", "合同", "project", "performance"]},
-    {"category": "qualification", "keywords": ["资质", "证书", "荣誉", "执业", "认证", "ISO", "cert"]},
+    {"category": "qualification", "keywords": ["资质", "证书", "荣誉", "执业", "认证", "ISO", "cert",
+                                                "执照", "许可证", "许可", "排名", "排名证明",
+                                                "学历", "学位", "毕业", "社保", "实习证",
+                                                "执照年检", "法律职业资格"]},
     {"category": "company_intro", "keywords": ["介绍", "简介", "概况", "公司", "律所", "事务所"]},
+    {"category": "financial",     "keywords": ["审计", "审计报告", "财务", "财务状况", "营业"]},
 ]
 
 _SUPPORTED_EXTENSIONS = {".docx", ".jpg", ".jpeg", ".png", ".pdf"}
@@ -1831,36 +1836,57 @@ async def parse_archive(req: ParseArchiveRequest):
                                 logger.debug(f"[archive] Docx image OCR failed for {fname}: {e}")
 
                     elif ext == ".pdf":
-                        # 1) Try direct text
+                        # PDF project: extract text + save page images
                         try:
                             import pdfplumber
+                            import hashlib as _hl2
+                            import shutil as _sh2
+
+                            proj_images_dir = os.path.normpath(os.path.join(
+                                os.path.dirname(os.path.abspath(__file__)),
+                                "..", "..", "data", "materials", "images"
+                            ))
+                            os.makedirs(proj_images_dir, exist_ok=True)
+                            proj_page_imgs = []
+
                             with pdfplumber.open(fpath) as pdf:
                                 for page in pdf.pages:
                                     extracted_text += (page.extract_text() or "") + "\n"
-                        except Exception:
-                            pass
-
-                        # 2) If no text, extract images from PDF and OCR
-                        if not extracted_text.strip():
-                            try:
-                                import pdfplumber
-                                from app.core.skills.builtin.image_ocr import ocr_image
-                                with pdfplumber.open(fpath) as pdf:
-                                    for page in pdf.pages[:3]:  # first 3 pages max
+                                    # Save page as image
+                                    try:
                                         page_img = page.to_image(resolution=200)
                                         import tempfile as _tmp
                                         with _tmp.NamedTemporaryFile(suffix=".png", delete=False) as tf:
                                             page_img.save(tf.name)
                                             tf_path = tf.name
-                                        try:
-                                            ocr_res = ocr_image(tf_path)
-                                            extracted_text += (ocr_res.get("ocr_text", "") or "") + "\n"
-                                        except Exception:
-                                            pass
-                                        finally:
+                                        with open(tf_path, "rb") as _imgf:
+                                            img_hash = _hl2.md5(_imgf.read()).hexdigest()[:12]
+                                        img_filename = f"{img_hash}.png"
+                                        dest = os.path.join(proj_images_dir, img_filename)
+                                        if not os.path.exists(dest):
+                                            _sh2.move(tf_path, dest)
+                                        else:
                                             os.unlink(tf_path)
-                            except Exception as e:
-                                logger.debug(f"[archive] PDF image OCR failed for {fname}: {e}")
+                                        proj_page_imgs.append(img_filename)
+                                    except Exception:
+                                        pass
+
+                            # OCR for scan PDFs
+                            if not extracted_text.strip() and proj_page_imgs:
+                                try:
+                                    from app.core.skills.builtin.image_ocr import ocr_image
+                                    for img_f in proj_page_imgs[:3]:
+                                        img_p = os.path.join(proj_images_dir, img_f)
+                                        ocr_res = ocr_image(img_p)
+                                        extracted_text += (ocr_res.get("ocr_text", "") or "") + "\n"
+                                except Exception:
+                                    pass
+
+                            if proj_page_imgs:
+                                project_entry["_images"] = proj_page_imgs
+
+                        except Exception as e:
+                            logger.debug(f"[archive] PDF project parse failed for {fname}: {e}")
 
                     elif ext in (".jpg", ".jpeg", ".png"):
                         # Direct OCR on image
@@ -1972,50 +1998,110 @@ async def parse_archive(req: ParseArchiveRequest):
                         result = {"error": str(ocr_err)}
 
                 elif ext == ".pdf":
-                    # PDF: extract text with pdfplumber
+                    # PDF: extract text + save page images
                     try:
                         import pdfplumber
+                        import hashlib as _hl
+                        import shutil as _sh
+
+                        images_dir = os.path.normpath(os.path.join(
+                            os.path.dirname(os.path.abspath(__file__)),
+                            "..", "..", "data", "materials", "images"
+                        ))
+                        os.makedirs(images_dir, exist_ok=True)
+
                         pdf_text = ""
+                        page_image_files = []  # saved page images
+
                         with pdfplumber.open(fpath) as pdf:
-                            for page in pdf.pages:
+                            for pi, page in enumerate(pdf.pages):
+                                # Extract text
                                 page_text = page.extract_text() or ""
                                 pdf_text += page_text + "\n"
 
-                        if pdf_text.strip():
-                            auto_cat_pdf = _auto_categorize(rel_path, fname)
-                            title = fname.rsplit(".", 1)[0]
+                                # Convert page to image and save
+                                try:
+                                    page_img = page.to_image(resolution=200)
+                                    import tempfile as _tmp
+                                    with _tmp.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+                                        page_img.save(tf.name)
+                                        tf_path = tf.name
+                                    # Hash for dedup
+                                    with open(tf_path, "rb") as _imgf:
+                                        img_hash = _hl.md5(_imgf.read()).hexdigest()[:12]
+                                    img_filename = f"{img_hash}.png"
+                                    dest = os.path.join(images_dir, img_filename)
+                                    if not os.path.exists(dest):
+                                        _sh.move(tf_path, dest)
+                                    else:
+                                        os.unlink(tf_path)
+                                    page_image_files.append(img_filename)
+                                except Exception:
+                                    pass
 
-                            if auto_cat_pdf == "resume":
-                                resume_entry = {
-                                    "name": title,
-                                    "title": "",
-                                    "brief_bio": pdf_text[:300].strip(),
-                                    "_source_file": fname,
-                                    "_source_path": fpath,
-                                }
-                                all_materials["resumes"].append(resume_entry)
-                                result = {"resumes": 1}
-                            elif auto_cat_pdf == "qualification":
-                                qual_entry = {
-                                    "name": title,
-                                    "issuer": "",
-                                    "cert_type": "enterprise",
-                                    "_source_file": fname,
-                                }
-                                all_materials["qualifications"].append(qual_entry)
-                                result = {"qualifications": 1}
-                            else:
-                                all_materials["narrative_chunks"].append({
-                                    "title": title,
-                                    "content": pdf_text[:5000],
-                                    "_source_file": fname,
-                                })
-                                result = {"narrative_chunks": 1}
+                        auto_cat_pdf = _auto_categorize(rel_path, fname)
+                        title = fname.rsplit(".", 1)[0]
 
-                            logger.info(f"[archive] PDF parsed: {fname} → {auto_cat_pdf}, {len(pdf_text)} chars")
+                        # OCR for scan PDFs (no text)
+                        if not pdf_text.strip() and page_image_files:
+                            try:
+                                from app.core.skills.builtin.image_ocr import ocr_image
+                                for img_f in page_image_files[:3]:
+                                    img_p = os.path.join(images_dir, img_f)
+                                    ocr_res = ocr_image(img_p)
+                                    pdf_text += (ocr_res.get("ocr_text", "") or "") + "\n"
+                            except Exception:
+                                pass
+
+                        # Build material entry with page images
+                        if auto_cat_pdf == "resume":
+                            entry = {
+                                "name": title,
+                                "title": "",
+                                "brief_bio": pdf_text[:300].strip(),
+                                "_source_file": fname,
+                                "_source_path": fpath,
+                            }
+                            if page_image_files:
+                                entry["_images"] = page_image_files
+                            all_materials["resumes"].append(entry)
+                            result = {"resumes": 1}
+                        elif auto_cat_pdf in ("qualification", "financial"):
+                            entry = {
+                                "name": title,
+                                "issuer": "",
+                                "cert_type": "enterprise",
+                                "_source_file": fname,
+                            }
+                            if page_image_files:
+                                entry["_images"] = page_image_files
+                            all_materials["qualifications"].append(entry)
+                            result = {"qualifications": 1}
+                        elif auto_cat_pdf == "company_intro":
+                            all_materials["narrative_chunks"].append({
+                                "title": title,
+                                "content": pdf_text[:5000],
+                                "_source_file": fname,
+                            })
+                            result = {"narrative_chunks": 1}
                         else:
-                            result = {"message": "PDF 无文字内容（扫描件）"}
-                            logger.info(f"[archive] PDF no text: {fname} (image-based)")
+                            # General: still save with images
+                            entry = {
+                                "name": title,
+                                "issuer": "",
+                                "cert_type": "enterprise",
+                                "_source_file": fname,
+                            }
+                            if page_image_files:
+                                entry["_images"] = page_image_files
+                            all_materials["qualifications"].append(entry)
+                            result = {"qualifications": 1}
+
+                        img_count = len(page_image_files)
+                        logger.info(
+                            f"[archive] PDF parsed: {fname} → {auto_cat_pdf}, "
+                            f"{len(pdf_text)} chars, {img_count} page images"
+                        )
 
                     except ImportError:
                         logger.warning("[archive] pdfplumber not installed")

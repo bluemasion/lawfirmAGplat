@@ -351,7 +351,11 @@ export default function BiddingAgent() {
 
         try {
             // Use selectedCompany and selectedProjectId directly
-            const effectiveCompanyData = { ...companyData, company_name: selectedCompany || companyData.company_name };
+            const rawCompanyData = { ...companyData, company_name: selectedCompany || companyData.company_name };
+            // Filter to string-only values (Pydantic expects Dict[str, str])
+            const effectiveCompanyData = Object.fromEntries(
+                Object.entries(rawCompanyData).filter(([, v]) => typeof v === 'string')
+            );
             const res = await fetch(`${API_BASE}/api/bidding/generate-full/${taskId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
