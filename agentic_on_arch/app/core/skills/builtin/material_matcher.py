@@ -212,7 +212,12 @@ class MaterialMatcher:
             if not person_name or len(person_name) < 2:
                 continue
 
-            existing_images = set(resume.get('_images', []))
+            # Build set of existing image files for dedup
+            existing_files = set()
+            for img in resume.get('_images', []):
+                f = img.get('file', img) if isinstance(img, dict) else img
+                existing_files.add(f)
+
             added = []
 
             # Search all records for ones containing this person's name
@@ -224,8 +229,9 @@ class MaterialMatcher:
                 # Check if person's name appears in the record name
                 if person_name in record_name:
                     for img in record.get('_images', []):
-                        if img not in existing_images:
-                            existing_images.add(img)
+                        img_file = img.get('file', img) if isinstance(img, dict) else img
+                        if img_file not in existing_files:
+                            existing_files.add(img_file)
                             added.append(img)
 
             if added:

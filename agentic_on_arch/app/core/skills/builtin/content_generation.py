@@ -996,6 +996,8 @@ class ContentGenerationSkill(BaseSkill):
     @staticmethod
     def _append_material_images(title: str, matched_materials: dict) -> str:
         """Generate markdown image references for matched material images.
+        Supports both flat format ['hash.png'] and typed format
+        [{'file': 'hash.png', 'type': 'id_card', 'label': '身份证'}].
         Returns a string block to append to section content.
         """
         images_dir = os.path.join(
@@ -1013,14 +1015,28 @@ class ContentGenerationSkill(BaseSkill):
         ]:
             for item in matched_materials.get(category, []):
                 item_images = item.get('_images', [])
-                if item_images:
-                    item_name = item.get(label_key, category)
-                    image_lines.append(f"\n#### {item_name}{label_suffix}\n")
-                    for img_file in item_images:
-                        img_path = os.path.join(images_dir, img_file)
-                        if os.path.exists(img_path):
-                            image_lines.append(f"![{item_name}]({img_path})")
-                            image_count += 1
+                if not item_images:
+                    continue
+
+                item_name = item.get(label_key, category)
+                image_lines.append(f"\n#### {item_name}{label_suffix}\n")
+
+                for img_entry in item_images:
+                    # Support both formats
+                    if isinstance(img_entry, dict):
+                        img_file = img_entry.get('file', '')
+                        img_label = img_entry.get('label', item_name)
+                        caption = f"{item_name} - {img_label}"
+                    else:
+                        img_file = img_entry
+                        caption = item_name
+
+                    if not img_file:
+                        continue
+                    img_path = os.path.join(images_dir, img_file)
+                    if os.path.exists(img_path):
+                        image_lines.append(f"![{caption}]({img_path})")
+                        image_count += 1
 
         if image_lines:
             logger.info(
@@ -1534,7 +1550,8 @@ class ContentGenerationSkill(BaseSkill):
                 if q_images:
                     q_name = q.get('name', '资质证书')
                     lines.append(f"\n#### {q_name} — 证书扫描件\n")
-                    for img_file in q_images:
+                    for img_entry in q_images:
+                        img_file = img_entry.get('file', img_entry) if isinstance(img_entry, dict) else img_entry
                         img_path = os.path.join(images_dir, img_file)
                         if os.path.exists(img_path):
                             lines.append(f"![{q_name}]({img_path})")
@@ -1645,7 +1662,9 @@ class ContentGenerationSkill(BaseSkill):
             # Image placeholder
             images = r.get("_images", [])
             if images:
-                parts.append(f"\n> 📎 附件：{name} 资质证书（{len(images)}份）")
+                # Count image files (support both flat and typed format)
+                img_count = len(images)
+                parts.append(f"\n> 📎 附件：{name} 资质证书（{img_count}份）")
             parts.append("")
 
         return "\n".join(parts)

@@ -364,6 +364,203 @@ class MaterialStore:
 
     # ── Save Methods ──
 
+    # ── Image certificate type classification rules ──
+    _CERT_TYPE_RULES = [
+        # (keywords_in_name, cert_type, label)
+        (['身份证'], 'id_card', '身份证'),
+        (['学历', '毕业证', '学位'], 'degree', '学历证书'),
+        (['执业证', '律师证'], 'practice_cert', '律师执业证'),
+        (['资格证', '法律职业'], 'bar_cert', '法律职业资格证'),
+        (['社保', '社会保险'], 'social_security', '社保证明'),
+        (['实习证', '实习'], 'intern_cert', '实习证'),
+    ]
+
+    @classmethod
+    def _classify_cert_type(cls, name_or_title):
+        """Classify certificate type from a record name or section title."""
+        for keywords, cert_type, label in cls._CERT_TYPE_RULES:
+            if any(kw in name_or_title for kw in keywords):
+                return cert_type, label
+        return 'other', '其他证件'
+
+    @classmethod
+    def _extract_person_name_from_record(cls, record_name):
+        """Try to extract a real person name from an artifact record name.
+        E.g., '身份证扫描件-钟雨' → '钟雨', '范彩云-硕士毕业证书' → '范彩云'
+        """
+        import re
+        name = record_name.strip()
+
+        # Remove leading numbers like "1. " "2. "
+        name = re.sub(r'^[\d]+[.、\s]+', '', name)
+
+        # Keywords that indicate a part is a document type, NOT a person name
+        _DOC_KEYWORDS = [
+            '身份证', '学历', '毕业证', '学位', '执业证', '资格证',
+            '证书', '扫描件', '副本', '许可证', '社保', '实习证',
+            '律师', '平台', '律所', '事务所', '信息', '记录',
+        ]
+
+        def _is_person_part(part):
+            """Check if a part looks like a Chinese person name."""
+            if not (2 <= len(part) <= 4):
+                return False
+            if not all('\u4e00' <= c <= '\u9fff' for c in part):
+                return False
+            # Reject if it contains document keywords
+            if any(kw in part for kw in _DOC_KEYWORDS):
+                return False
+            return True
+
+        # Common patterns: "XXX-人名" or "人名-XXX" or "人名 - XXX"
+        # Split by common separators
+        for sep in ['-', '—', '_', ' ']:
+            parts = [p.strip() for p in name.split(sep) if p.strip()]
+            if len(parts) >= 2:
+                for part in parts:
+                    if _is_person_part(part):
+                        return part
+
+        return None
+
+    def _consolidate_person_images(self, materials):
+        """Post-process extracted materials: merge artifact records' images
+        into their parent person records.
+
+        For example:
+          "身份证扫描件-钟雨" (has 1 image) + "学历证书-钟雨" (has 1 image)
+          → merge images into "钟雨" record → remove artifact records
+
+        Also converts _images from flat list to typed list:
+          ["hash1.png", "hash2.png"]
+          → [{"file": "hash1.png", "type": "id_card", "label": "身份证"}, ...]
+        """
+        resumes = materials.get('resumes', [])
+        if not resumes:
+            return
+
+        # Step 1: Separate real people from artifact records
+        real_people = {}     # name → resume dict
+        artifacts = []       # records to merge + remove
+
+        # Non-person keywords (same as MaterialMatcher)
+        _NON_PERSON_KW = [
+            '身份证', '学历', '毕业证', '学位证', '实习证', '执业证',
+            '资格证', '社保', '证书', '许可证', '平台', '律师事务所',
+            '副本', '扫描件', '法律职业', '信息公示',
+        ]
+
+        for resume in resumes:
+            name = (resume.get('name') or '').strip()
+            if not name:
+                continue
+
+            is_artifact = (
+                name[0].isdigit()
+                or any(kw in name for kw in _NON_PERSON_KW)
+                or len(name) > 6
+            )
+
+            if is_artifact:
+                artifacts.append(resume)
+            else:
+                real_people[name] = resume
+
+        if not artifacts:
+            # No artifacts to merge - but still tag existing images
+            for resume in resumes:
+                self._tag_images(resume, resume.get('_source_section', ''))
+            return
+
+        # Step 2: For each artifact, find the parent person and merge images
+        merged_count = 0
+        removed = set()
+
+        for artifact in artifacts:
+            art_name = (artifact.get('name') or '').strip()
+            art_images = artifact.get('_images', [])
+            if not art_images:
+                removed.add(art_name)  # No images, just remove
+                continue
+
+            # Extract person name from artifact name
+            person_name = self._extract_person_name_from_record(art_name)
+            if not person_name or person_name not in real_people:
+                # Can't find parent - keep as is
+                continue
+
+            # Classify cert type
+            cert_type, cert_label = self._classify_cert_type(art_name)
+
+            # Merge images into parent
+            parent = real_people[person_name]
+            parent_images = parent.get('_images', [])
+
+            # Convert to typed format if needed
+            if parent_images and isinstance(parent_images[0], str):
+                parent_images = [
+                    {'file': f, 'type': 'other', 'label': '证件'}
+                    for f in parent_images
+                ]
+
+            for img_file in art_images:
+                if isinstance(img_file, str):
+                    img_entry = {
+                        'file': img_file,
+                        'type': cert_type,
+                        'label': cert_label,
+                    }
+                else:
+                    img_entry = img_file
+                # Dedup
+                existing_files = {
+                    (e['file'] if isinstance(e, dict) else e)
+                    for e in parent_images
+                }
+                if img_entry.get('file', img_file) not in existing_files:
+                    parent_images.append(img_entry)
+
+            parent['_images'] = parent_images
+            removed.add(art_name)
+            merged_count += 1
+
+            logger.info(
+                f"  Consolidated: '{art_name}' → '{person_name}' "
+                f"({len(art_images)} images, type={cert_type})"
+            )
+
+        # Step 3: Remove merged artifact records from resumes list
+        if removed:
+            materials['resumes'] = [
+                r for r in resumes
+                if (r.get('name') or '').strip() not in removed
+            ]
+            logger.info(
+                f"  Consolidation complete: merged {merged_count} artifact records, "
+                f"removed {len(removed)} entries, "
+                f"{len(materials['resumes'])} resumes remaining"
+            )
+
+        # Step 4: Tag remaining images with cert_type
+        for resume in materials.get('resumes', []):
+            self._tag_images(resume, resume.get('_source_section', ''))
+
+    @classmethod
+    def _tag_images(cls, item, source_hint=''):
+        """Convert flat _images list to typed format if not already."""
+        images = item.get('_images', [])
+        if not images:
+            return
+        if images and isinstance(images[0], dict):
+            return  # Already typed
+
+        # Convert to typed format using source hint
+        cert_type, cert_label = cls._classify_cert_type(source_hint)
+        item['_images'] = [
+            {'file': f, 'type': cert_type, 'label': cert_label}
+            for f in images
+        ]
+
     def save_materials(self, materials: Dict[str, Any],
                        company: str = "",
                        project: str = "") -> Dict[str, int]:
@@ -378,6 +575,9 @@ class MaterialStore:
         """
         company = company or self.get_default_company() or "未分类"
         counts = {}
+
+        # ── Pre-save: consolidate person images ──
+        self._consolidate_person_images(materials)
 
         conn = self._get_conn()
         try:
