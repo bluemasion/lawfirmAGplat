@@ -570,7 +570,7 @@ class RequirementExtractionSkill(BaseSkill):
                 _progress(f"✅ Pass 2 完成: {total_secs} 个章节, {rej_secs} 个有废标风险")
 
                 # ── Pass 3: Deterministic verification ──
-                _progress("🔍 Pass 3/3: 快速校验和联动匹配...")
+                _progress("🔍 Pass 3/3: 校验 → 补全 → 联动匹配...")
                 verification = self._verify_structure(analysis, structure)
                 structure["verification"] = verification
                 logger.info(
@@ -579,6 +579,24 @@ class RequirementExtractionSkill(BaseSkill):
                     f"evaluation {verification['evaluation_check']['covered']}/{verification['evaluation_check']['total']}, "
                     f"documents {verification['document_check']['covered']}/{verification['document_check']['total']}"
                 )
+
+                # ── Pass 3b: Auto-complete missing sections ──
+                added = self._auto_complete_sections(structure, verification, analysis)
+                if added > 0:
+                    logger.info(f"Pass 3b: Auto-completed {added} missing sections")
+                    _progress(f"🔧 自动补全 {added} 个缺失章节")
+                    # Re-verify after completion
+                    verification = self._verify_structure(analysis, structure)
+                    structure["verification"] = verification
+                    logger.info(
+                        f"Pass 3b re-verification: "
+                        f"evaluation {verification['evaluation_check']['covered']}/{verification['evaluation_check']['total']}"
+                    )
+
+                # ── Pass 3c: Inject material_refs programmatically ──
+                refs_injected = self._inject_material_refs(structure, verification)
+                if refs_injected:
+                    logger.info(f"Pass 3c: Injected material_refs into {refs_injected} sections")
 
                 # ── Inject linkage into each section for frontend ──
                 linkage = verification.get("section_linkage", {})
@@ -598,6 +616,7 @@ class RequirementExtractionSkill(BaseSkill):
                 if linked_count:
                     logger.info(f"Section linkage: {linked_count} sections linked to scoring/rejection items")
                     _progress(f"✅ Pass 3 完成: {linked_count} 个章节关联到评分/废标项")
+
 
                 return structure
 
@@ -1123,3 +1142,201 @@ class RequirementExtractionSkill(BaseSkill):
             logger.warning(f"Section classifier not available: {e}")
 
         return result
+
+    # ── Evaluation item → section deterministic mapping ──
+    EVAL_TO_SECTION_MAP = {
+        # eval_keyword → (section_title, section_type, material_refs)
+        "业绩": ("业绩与项目经验", "narrative", ["近年类似业绩项目"]),
+        "律所业绩": ("业绩与项目经验", "narrative", ["近年类似业绩项目"]),
+        "团队": ("项目团队配置", "narrative", ["项目经理及核心成员简历"]),
+        "人员": ("项目团队配置", "narrative", ["项目经理及核心成员简历"]),
+        "人员构成": ("项目团队配置", "narrative", ["项目经理及核心成员简历"]),
+        "资质": ("资格审查资料", "qualification", ["营业执照", "执业许可证"]),
+        "荣誉": ("荣誉奖项", "qualification", ["行业排名证明", "获奖证书"]),
+        "荣誉奖项": ("荣誉奖项", "qualification", ["行业排名证明", "获奖证书"]),
+        "方案": ("服务方案", "narrative", []),
+        "服务方案": ("服务方案", "narrative", []),
+        "服务方案编制": ("服务方案", "narrative", []),
+        "质量": ("服务质量控制方案", "narrative", []),
+        "服务质量": ("服务质量控制方案", "narrative", []),
+        "服务质量控制": ("服务质量控制方案", "narrative", []),
+        "报价": ("报价文件", "form", []),
+        "综合实力": ("律所综合实力", "narrative", ["行业排名证明", "获奖证书"]),
+        "分所": ("律所综合实力", "narrative", []),
+        "分所覆盖": ("律所综合实力", "narrative", []),
+        "处罚": ("合规声明", "form", []),
+        "处罚情况": ("合规声明", "form", []),
+        "财务": ("财务状况", "qualification", ["审计报告"]),
+    }
+
+    # ── Keywords → material_refs injection rules ──
+    _MATERIAL_REF_RULES = [
+        # (title_keywords, material_refs_to_inject)
+        (["团队", "人员", "简历", "律师"], ["项目经理及核心成员简历"]),
+        (["业绩", "项目经验", "案例", "合同"], ["近年类似业绩项目"]),
+        (["资格", "资质", "证书", "执照", "许可"], ["资质证书"]),
+        (["荣誉", "奖项", "排名", "评级"], ["行业排名证明", "获奖证书"]),
+        (["财务", "审计", "报表"], ["审计报告"]),
+        (["综合实力", "公司简介", "律所"], ["行业排名证明", "获奖证书"]),
+    ]
+
+    def _auto_complete_sections(self, structure, verification, analysis):
+        # type: (Dict, Dict, Dict) -> int
+        """Auto-complete: add missing sections for uncovered evaluation
+        criteria and required documents. Returns number of sections added."""
+        added = 0
+
+        # Collect existing section titles
+        existing_titles = set()
+        target_volume = None
+        for vol in structure.get("volumes", []):
+            for sec in vol.get("sections", []):
+                existing_titles.add(sec.get("title", ""))
+            if target_volume is None:
+                target_volume = vol
+
+        if target_volume is None:
+            return 0
+
+        sections = target_volume.get("sections", [])
+        max_order = max((s.get("order", 0) for s in sections), default=0)
+
+        # ── Step 1: Auto-complete from uncovered evaluation criteria ──
+        for ei in verification.get("evaluation_check", {}).get("items", []):
+            if ei.get("status") == "covered":
+                continue
+
+            item_name = ei.get("item", "")
+            bid_section_needed = ei.get("bid_section_needed", "")
+
+            # Try to find a mapping
+            sec_title = None
+            sec_type = "narrative"
+            sec_refs = []
+
+            # Strategy 1: Direct mapping from EVAL_TO_SECTION_MAP
+            for key, (title, stype, refs) in self.EVAL_TO_SECTION_MAP.items():
+                if key in item_name:
+                    sec_title = title
+                    sec_type = stype
+                    sec_refs = refs
+                    break
+
+            # Strategy 2: Use bid_section_needed from Pass 1
+            if not sec_title and bid_section_needed:
+                sec_title = bid_section_needed
+
+            # Strategy 3: Use item_name as title
+            if not sec_title:
+                sec_title = item_name
+
+            # Skip if a section with similar title already exists
+            if sec_title in existing_titles:
+                continue
+            # Check fuzzy: if any existing title contains core words
+            core_words = [w for w in sec_title if len(w.encode('utf-8')) > 1]
+            if any(
+                sum(1 for c in sec_title if c in t) >= len(sec_title) * 0.5
+                for t in existing_titles if t
+            ):
+                continue
+
+            max_order += 1
+            new_section = {
+                "order": max_order,
+                "title": sec_title,
+                "type": sec_type,
+                "required": True,
+                "rejection_risk": False,
+                "score_weight": ei.get("max_score", 0),
+                "content_hints": ei.get("description", ""),
+                "content_outline": [
+                    f"{sub.get('item', '')} ← {sub.get('description', '')}"
+                    for sub in ei.get("sub_criteria", [])
+                ] if ei.get("sub_criteria") else [ei.get("description", "")],
+                "material_refs": sec_refs,
+                "data_fields": [],
+                "source_reference": f"评分项自动补全: {item_name}",
+                "_auto_completed": True,
+            }
+            sections.append(new_section)
+            existing_titles.add(sec_title)
+            added += 1
+            logger.info(
+                f"  Auto-added section: [{sec_type}] {sec_title} "
+                f"(eval: {item_name}, {ei.get('max_score', 0)}分)"
+            )
+
+        # ── Step 2: Auto-complete from uncovered required documents ──
+        for di in verification.get("document_check", {}).get("items", []):
+            if di.get("status") == "covered":
+                continue
+            if not di.get("is_mandatory", True):
+                continue
+
+            doc_name = di.get("name", "")
+            if not doc_name or doc_name in existing_titles:
+                continue
+
+            max_order += 1
+            doc_type = di.get("category", "form")
+            if doc_type not in ("form", "qualification", "narrative", "table"):
+                doc_type = "form"
+
+            new_section = {
+                "order": max_order,
+                "title": doc_name,
+                "type": doc_type,
+                "required": True,
+                "rejection_risk": True,  # mandatory document → rejection risk
+                "score_weight": 0,
+                "content_hints": f"必须提供: {doc_name}",
+                "content_outline": [],
+                "material_refs": [],
+                "data_fields": [],
+                "source_reference": f"必须文件自动补全",
+                "_auto_completed": True,
+            }
+            sections.append(new_section)
+            existing_titles.add(doc_name)
+            added += 1
+            logger.info(f"  Auto-added required document: [{doc_type}] {doc_name}")
+
+        return added
+
+    def _inject_material_refs(self, structure, verification):
+        # type: (Dict, Dict) -> int
+        """Programmatically inject material_refs into sections based on
+        title keywords and linked scoring items. Returns count of sections updated."""
+        injected = 0
+        linkage = verification.get("section_linkage", {})
+
+        for vol in structure.get("volumes", []):
+            for sec in vol.get("sections", []):
+                title = sec.get("title", "")
+                existing_refs = sec.get("material_refs", [])
+
+                new_refs = list(existing_refs)  # preserve any LLM-generated refs
+
+                # Rule 1: Title keyword matching
+                for keywords, refs_to_add in self._MATERIAL_REF_RULES:
+                    if any(kw in title for kw in keywords):
+                        for ref in refs_to_add:
+                            if ref not in new_refs:
+                                new_refs.append(ref)
+
+                # Rule 2: Linked scoring items
+                sec_linkage = linkage.get(title, {})
+                for scoring_item in sec_linkage.get("scoring_items", []):
+                    item_name = scoring_item.get("item", "")
+                    for key, (_, _, refs) in self.EVAL_TO_SECTION_MAP.items():
+                        if key in item_name:
+                            for ref in refs:
+                                if ref not in new_refs:
+                                    new_refs.append(ref)
+
+                if len(new_refs) > len(existing_refs):
+                    sec["material_refs"] = new_refs
+                    injected += 1
+
+        return injected
