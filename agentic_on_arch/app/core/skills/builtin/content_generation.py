@@ -696,6 +696,8 @@ class ContentGenerationSkill(BaseSkill):
                 title, content_hints, matched_materials["resumes"],
                 company_info, content_outline,
             )
+            # Append resume certification images
+            content += self._append_material_images(title, matched_materials)
             if chunk_callback:
                 await chunk_callback(content)
             logger.info(f"  → Data-driven team narrative: {len(matched_materials['resumes'])} resumes")
@@ -709,6 +711,8 @@ class ContentGenerationSkill(BaseSkill):
                 title, content_hints, matched_materials["projects"],
                 company_info, content_outline,
             )
+            # Append project evidence images
+            content += self._append_material_images(title, matched_materials)
             if chunk_callback:
                 await chunk_callback(content)
             logger.info(f"  → Data-driven project narrative: {len(matched_materials['projects'])} projects")
@@ -978,7 +982,53 @@ class ContentGenerationSkill(BaseSkill):
                 await chunk_callback(error_msg)
             logger.error(f"Stream generation failed for '{title}': {e}")
 
+        # ── Append matched material images (qualifications, certifications) ──
+        if matched_materials:
+            img_block = self._append_material_images(title, matched_materials)
+            if img_block:
+                full_content.append(img_block)
+                if chunk_callback:
+                    await chunk_callback(img_block)
+
         return "".join(full_content)
+
+    # ── Material image embedding helper ──
+
+    @staticmethod
+    def _append_material_images(title: str, matched_materials: dict) -> str:
+        """Generate markdown image references for matched material images.
+        Returns a string block to append to section content.
+        """
+        images_dir = os.path.join(
+            os.path.dirname(__file__), "..", "..", "..", "..",
+            "data", "materials", "images"
+        )
+        images_dir = os.path.normpath(images_dir)
+        image_lines = []
+        image_count = 0
+
+        for category, label_key, label_suffix in [
+            ("qualifications", "name", ""),
+            ("resumes", "name", " — 执业证书"),
+            ("projects", "project_name", " — 业绩证明"),
+        ]:
+            for item in matched_materials.get(category, []):
+                item_images = item.get('_images', [])
+                if item_images:
+                    item_name = item.get(label_key, category)
+                    image_lines.append(f"\n#### {item_name}{label_suffix}\n")
+                    for img_file in item_images:
+                        img_path = os.path.join(images_dir, img_file)
+                        if os.path.exists(img_path):
+                            image_lines.append(f"![{item_name}]({img_path})")
+                            image_count += 1
+
+        if image_lines:
+            logger.info(
+                f"  → Material images appended for '{title}': {image_count} images"
+            )
+            return "\n\n---\n\n### 附件：相关证明材料\n" + "\n".join(image_lines) + "\n"
+        return ""
 
     # ── Form: code templates ──
 
