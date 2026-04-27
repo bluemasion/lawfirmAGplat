@@ -291,8 +291,33 @@ class BidDocumentParserSkill(BaseSkill):
 
             if material_type == "resume":
                 extracted = await self._extract_resumes(llm, title, content)
-                # Attach section images to each extracted item
-                if section_images:
+                # Attach images: use per-table groups if available, else fallback
+                image_groups = sec.get("_image_groups", [])
+                if image_groups and len(extracted) > 1:
+                    # Build name→images lookup from table-based groups
+                    group_lookup = {}
+                    for g in image_groups:
+                        gname = g.get("table_name", "")
+                        if gname:
+                            group_lookup[gname] = [img["filename"] for img in g["images"]]
+                    # Match each extracted person to their image group
+                    matched = 0
+                    for item in extracted:
+                        person_name = (item.get("name") or "").strip()
+                        if person_name and person_name in group_lookup:
+                            item["_images"] = group_lookup[person_name]
+                            matched += 1
+                    if matched > 0:
+                        logger.info(
+                            f"  Image groups: {matched}/{len(extracted)} persons "
+                            f"matched from {len(image_groups)} groups"
+                        )
+                    elif section_images:
+                        # Fallback: couldn't match names, give all to each
+                        for item in extracted:
+                            item["_images"] = [img["filename"] for img in section_images]
+                elif section_images:
+                    # Single person or no groups: assign all images
                     for item in extracted:
                         item["_images"] = [img["filename"] for img in section_images]
                 resumes.extend(extracted)
@@ -527,8 +552,15 @@ class BidDocumentParserSkill(BaseSkill):
             r'^\d+[、.\s]',
         ]
 
+        # Track per-table image groups for precise person↔image matching
+        # Structure: [{"table_name": str, "images": [img_info]}]
+        current_image_groups = []  # type: List[Dict]
+        _last_table_name = ""  # name from most recent table
+        _pending_images = []   # images since last table
+
         def _flush():
             nonlocal current_title, current_content_parts, current_tables, current_images
+            nonlocal current_image_groups, _last_table_name, _pending_images
             if current_title:
                 content = "\n".join(current_content_parts + current_tables).strip()
                 sec = {
@@ -537,10 +569,34 @@ class BidDocumentParserSkill(BaseSkill):
                 }
                 if current_images:
                     sec["images"] = list(current_images)
+                # Flush any pending images to last group
+                if _pending_images and _last_table_name:
+                    current_image_groups.append({
+                        "table_name": _last_table_name,
+                        "images": list(_pending_images),
+                    })
+                if current_image_groups:
+                    sec["_image_groups"] = list(current_image_groups)
                 sections.append(sec)
                 current_content_parts = []
                 current_tables = []
                 current_images = []
+                current_image_groups = []
+                _last_table_name = ""
+                _pending_images = []
+
+        def _extract_name_from_table(table_element):
+            """Extract person name from a table by looking for 姓名 field."""
+            for table in doc.tables:
+                if table._element is table_element:
+                    for row in table.rows:
+                        cells = [c.text.strip() for c in row.cells]
+                        for ci, cell in enumerate(cells):
+                            if "姓名" in cell and ci + 1 < len(cells):
+                                name = cells[ci + 1].strip()
+                                if name and len(name) <= 10:
+                                    return name
+            return ""
 
         for element in doc.element.body:
             if element.tag.endswith('}p'):
@@ -548,6 +604,7 @@ class BidDocumentParserSkill(BaseSkill):
                 para_images = self._extract_images_from_element(element, doc, saved_hashes)
                 if para_images:
                     current_images.extend(para_images)
+                    _pending_images.extend(para_images)
                     for img in para_images:
                         current_content_parts.append(f"[图片: {img['filename']}]")
 
@@ -574,10 +631,24 @@ class BidDocumentParserSkill(BaseSkill):
                         break
 
             elif element.tag.endswith('}tbl'):
+                # Before processing new table: flush pending images to previous group
+                if _pending_images and _last_table_name:
+                    current_image_groups.append({
+                        "table_name": _last_table_name,
+                        "images": list(_pending_images),
+                    })
+                    _pending_images = []
+
+                # Extract name from this table
+                tbl_name = _extract_name_from_table(element)
+                if tbl_name:
+                    _last_table_name = tbl_name
+
                 # Check for images in table cells
                 tbl_images = self._extract_images_from_element(element, doc, saved_hashes)
                 if tbl_images:
                     current_images.extend(tbl_images)
+                    _pending_images.extend(tbl_images)
 
                 for table in doc.tables:
                     if table._element is element:
