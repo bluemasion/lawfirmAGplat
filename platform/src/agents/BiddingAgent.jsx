@@ -642,6 +642,49 @@ export default function BiddingAgent() {
                 <input ref={materialInputRef} type="file" accept=".docx" multiple className="hidden"
                     onChange={(e) => { handleMaterialUpload(Array.from(e.target.files)); e.target.value = ''; }} />
 
+                {/* ── Step Bar (visible after parsing) ── */}
+                {['confirming', 'material_selection', 'generating', 'done'].includes(phase) && (
+                    <div className="flex items-center px-4 py-1.5 border-b border-zinc-800 bg-zinc-900/60 gap-1">
+                        {[
+                            { key: 'confirming', label: '大纲确认', icon: '📋', phase: 'confirming' },
+                            { key: 'material_selection', label: '素材匹配', icon: '🔗', phase: 'material_selection' },
+                            { key: 'generating', label: '文件生成', icon: '⚡', phase: 'generating' },
+                        ].map((step, i, arr) => {
+                            const phaseOrder = { confirming: 0, material_selection: 1, generating: 2, done: 2 };
+                            const currentIdx = phaseOrder[phase] ?? 0;
+                            const stepIdx = i;
+                            const isActive = step.phase === phase || (phase === 'done' && step.key === 'generating');
+                            const isDone = stepIdx < currentIdx || phase === 'done';
+                            const canClick = isDone && !processing;
+                            return (
+                                <div key={step.key} className="flex items-center gap-1">
+                                    <button
+                                        onClick={() => canClick && setPhase(step.phase)}
+                                        disabled={!canClick}
+                                        className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded-md transition-all ${
+                                            isActive
+                                                ? 'bg-orange-500/20 border border-orange-500/40 text-orange-300 font-bold'
+                                                : isDone
+                                                    ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 cursor-pointer hover:bg-emerald-500/20'
+                                                    : 'bg-zinc-800/50 border border-zinc-700/50 text-zinc-600'
+                                        }`}>
+                                        <span>{isDone && !isActive ? '✓' : step.icon}</span>
+                                        <span>{step.label}</span>
+                                    </button>
+                                    {i < arr.length - 1 && (
+                                        <div className={`w-4 h-px ${
+                                            stepIdx < currentIdx || phase === 'done' ? 'bg-emerald-500/40' : 'bg-zinc-700'
+                                        }`} />
+                                    )}
+                                </div>
+                            );
+                        })}
+                        {phase === 'done' && (
+                            <span className="ml-auto text-[10px] text-emerald-400 font-bold">✅ 完成</span>
+                        )}
+                    </div>
+                )}
+
                 {/* ── Material Panel (replaces main content when active) ── */}
                 {showMaterialPanel ? (
                     <MaterialPanel onClose={() => setShowMaterialPanel(false)} />
@@ -1568,6 +1611,11 @@ export default function BiddingAgent() {
 
                             {/* Footer */}
                             <div className="px-4 py-3 border-t border-zinc-800 flex items-center justify-center space-x-3">
+                                <button onClick={() => setPhase('confirming')}
+                                    className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1">
+                                    ← 返回大纲
+                                </button>
+                                <span className="text-zinc-800">|</span>
                                 <button onClick={() => setShowMaterialPanel(true)}
                                     className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1">
                                     <Package size={10} /> 素材库
