@@ -1,257 +1,273 @@
-# 智能投标系统 — 技术架构审查报告
+# 智能投标系统 — 架构分层分析与重构方向
 
-> **首次审查**: 2026-03-28  
-> **审查人**: Mason + AI  
-> **基准文档**: `bidding_system_architecture.md` (2026-03-10 v0.1)  
-> **目的**: 定期对照原始设计 vs 实际实现，记录架构决策
+> 最后更新: 2026-04-27
+
+## 一、当前架构的根本问题
+
+当前系统把**三件不同的事情混在一张 `materials` 表里**：
+
+| 实际职责 | 应该属于 | 当前状态 |
+|---------|---------|---------|
+| 原始文件数据（上传的证件图片、合同扫描件） | 元数据层 (Layer 1) | ❌ 和实体混存 |
+| 结构化实体（朱凡是谁、做过什么项目） | 知识层 (Layer 2) | ❌ 完全缺失 |
+| 可搜索的文本块（叙述性内容） | RAG 索引层 (Layer 3) | ⚠️ 仅 8 条 narrative_chunks |
+
+### 导致的连锁问题
+
+| 混乱点 | 具体表现 | 根因 |
+|--------|---------|------|
+| "身份证扫描件-钟雨" 被当成一个人 | parser 直接把文件名存为 resume name | **源文件 ≠ 实体**，但混着存了 |
+| 朱凡的图片找不到 | 图片在独立记录里，不关联到人 | **没有 person→image 关系**，只有扁平 JSON |
+| LLM 写出 "[待补充]" | prompt 里没有真实数据 | RAG 搜不到，因为知识层本身是乱的 |
+| 资质和荣誉混在一起 | 69 个 qualifications 里什么都有 | **没有分类维度** |
+| 人员-项目完全脱节 | 无法回答"朱凡参与过哪些项目" | **没有关联关系** |
+
+**一句话：我们缺少"知识层" — 应该存的是"钟雨是谁"，而不是"钟雨的身份证扫描件"。**
 
 ---
 
-## 一、系统能力分层（设计 vs 现实）
-
-### 原始设计（三层架构）
+## 二、正确的四层架构
 
 ```
-┌──────────────────────────────────────────────────────┐
-│   程序控制层（确定性）— 文档解析·结构排序·模板匹配·文档组装  │
-├──────────────────────────────────────────────────────┤
-│   大语言模型层（生成性）— 招标理解·需求提取·内容撰写·交叉校验 │
-├──────────────────────────────────────────────────────┤
-│   数据层（事实性）— 律所信息·团队简历·历史标书·资质文件      │
-└──────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│  Layer 4: Prompt / Skill                 │  → 告诉 LLM "做什么"
+│  "请根据以下团队信息撰写项目团队章节"         │  → 引用 Layer 2 的实体
+│  "请基于以下评分标准组织服务方案"            │  → 不自己"发明"数据
+└──────────────┬───────────────────────────┘
+               │ 查询
+┌──────────────▼───────────────────────────┐
+│  Layer 3: RAG / Search Index             │  → 语义搜索
+│  向量化的文本块 (embeddings)               │  → 从 Layer 2 构建
+│  可随时重建，不是"真相"                     │  → 辅助 Prompt 找到相关内容
+└──────────────┬───────────────────────────┘
+               │ 索引自
+┌──────────────▼───────────────────────────┐
+│  Layer 2: Knowledge / Entity             │  → "什么是对的"
+│  Person(钟雨, 合伙人, 15年)               │  → 结构化实体 + 关系
+│    ├── cert: 身份证 → image_hash_1       │  → 可验证、可修正
+│    ├── cert: 律师证 → image_hash_2       │
+│    └── project: 中投保常年合同 (role=主办)  │
+│  Award(ALB排名, 2024)                    │
+│  Project(中投保, 常年法律顾问, 2026-2030)   │
+└──────────────┬───────────────────────────┘
+               │ 提取自
+┌──────────────▼───────────────────────────┐
+│  Layer 1: Metadata / Source              │  → "数据从哪来"
+│  file: 张玉凯黄冠李巍身份证明文件.docx      │  → 原始上传文件
+│  image: hash_abc123.png (OCR text...)    │  → 不可变，可追溯
+│  upload_time, file_hash, source_path     │
+└──────────────────────────────────────────┘
 ```
 
-### 当前落地
+### 各层职责说明
 
-| 层级 | 实现状态 | 实际落地 |
-|------|---------|---------|
-| **程序控制层** | ✅ 基本完成 | `tender_parsing` + `docx_assembly` + 9种table模板 + 8种form模板 |
-| **LLM层** | ⚠️ 部分完成 | 理解✅ 提取✅ 撰写✅ 匹配✅ **交叉校验❌** |
-| **数据层** | 🔄 路线变更 | PostgreSQL+pgvector → **SQLite+BGE内存向量** |
+#### Layer 1: 元数据层 (Metadata / Source)
 
----
+> **设计原则：不可变，永远能追溯"这个数据从哪来"**
 
-## 二、8步主流程对照
+- 存上传原件，不做任何解读
+- 每张图片有 hash、OCR 文本、来源文件路径
+- 每份文档有文件名、上传时间、文件大小、解析状态
+- 当知识层出错时，可以回溯到这里找原始数据
 
-| Step | 原始设计 | 实际实现 | 状态 |
-|------|---------|---------|------|
-| **1. 文档解析** | python-docx 提取标题树/正文/表格 | `tender_parsing.py` + 中文标题识别 | ✅ 一致 |
-| **2. LLM需求提取** | Qwen-Max 单次提取 → JSON | `requirement_extraction.py` V2 两轮 + BGE分类 (555→78章节) | ✅ 超越设计 |
-| **3. 模板匹配** | 向量相似度检索历史模板 | `template_store.py` + BGE向量匹配 | ✅ 一致 |
-| **4. 数据匹配** | pgvector RAG + DB | `material_matcher.py` + `material_store.py` (SQLite+BGE内存) | ✅ 变形实现 |
-| **5. 逐章生成** | 3类型分流(表格/叙述/资质) | `content_generation.py` 4类型: table(9)/form(8)/narrative(5 prompt)/qualification | ✅ 超越设计 |
-| **6. 文档组装** | python-docx 拼装+格式+目录 | `docx_assembly.py` Markdown→Word + 中文字体 | ✅ 一致 |
-| **7. 多模型校验** | 三层(代码→Qwen→DeepSeek+GLM) | `rule_verification.py` **仅第1层代码校验** (5维) | ⚠️ 降级 |
-| **8. 人工审阅** | 逐章审阅→修改→锁定→重生成 | 前端章节勾选 + 实时预览 | ⚠️ 部分 |
+当前对应：
+- `image_meta` 表 → ✅ 已有
+- 文件系统 `data/materials/images/` → ✅ 已有
+- 但上传文件本身没有存溯源信息 → ❌ 需要补
 
----
+#### Layer 2: 知识层 (Knowledge / Entity)
 
-## 三、两个最大架构偏离 + 决策
+> **设计原则：这里定义"什么是正确的"，可以被人工修正**
 
-### 偏离1: Multi-Agent + MCP 完全未使用
+- 存结构化的**实体**和**关系**
+- `Person` 是一个独立实体，不是 "身份证扫描件-钟雨" 这样的"文件描述"
+- 关系是显式的：`钟雨 HAS_CERT 身份证(image_hash_1)`
+- 可以被人工确认和修正（前端实体管理界面）
+- **LLM 提取的数据先进入"待确认"状态，确认后才成为正式知识**
 
-**现象**: 原设计有 Planner/Parser/Writer/Reviewer 四个 Agent + MCP 工具协议。实际全部被 `bidding.py` (1585行) 硬编排替代。`agent_engine/` 是空骨架。
+当前对应：
+- `materials` 表 → ⚠️ 部分承担了这个角色，但结构不对
+- 没有实体关系 → ❌ 完全缺失
+- 没有确认状态 → ❌ LLM 提取直接入库
 
-**决策 (2026-03-28)**:
+#### Layer 3: RAG 索引层 (Search Index)
 
-> **不补 Agent 架构。保持 bidding.py 硬编排模式。**
+> **设计原则：是索引不是存储，删了可以重来**
 
-**理由**:
-- 投标生成是**确定性流水线** (Step1→7 顺序固定)，不是开放式任务
-- 硬编排的可调试性、确定性、性能**全面优于** Agent 架构
-- Multi-Agent 适合开放式任务（如利冲检索），不适合固定流程
-- `bidding.py` 过长的问题，正确拆法是重构为 Service 类，不是 Agent
+- 从 Layer 2 的实体数据 + Layer 1 的原始文本自动构建
+- 向量化后供语义搜索
+- 可以随时全量重建（实体变更后自动更新）
 
-**后续行动**:
-- [ ] `bidding.py` 重构为 `BiddingOrchestrator` 类 (纯代码拆分，不改架构)
-- [ ] `agent_engine/` 保留骨架，留给未来开放式 Agent 场景 (利冲/底稿)
-- [ ] MCP 不引入，当前 Skill 直接函数调用更简单
+当前对应：
+- `narrative_chunks` 表 (8 条) → ⚠️ 远远不够
+- `tender_index` 仅招标文件 → ✅ 但和素材库无关
 
----
+#### Layer 4: Prompt / Skill 层
 
-### 偏离2: PostgreSQL+pgvector → SQLite+BGE内存
+> **设计原则：Prompt 永远不制造数据，只组装和表达**
 
-**现象**: 原设计是 PostgreSQL + pgvector + 4层分层存储。实际走"轻量化"路线 (03-18技术对齐会议决策)。`requirements.txt` 中 `asyncpg/pgvector/alembic` 写了没用。
+- 告诉 LLM "做什么"，不告诉它"数据是什么"
+- 数据来自 Layer 2（确定性数据）+ Layer 3（补充搜索）
+- Skill 定义生成策略（narrative/table/form/qualification）
 
-**决策 (2026-03-28)**:
-
-> **当前不动。等 GB10 部署时一起迁移 PostgreSQL。**
-
-**SQLite 可支撑的边界**:
-| 场景 | SQLite 够否 |
-|------|------------|
-| 单律所 1-3 用户 | ✅ |
-| 素材库 < 5000 条 | ✅ |
-| 内存向量 < 10万条 | ✅ |
-| 多律所 SaaS / 10+并发 | ❌ WAL 锁竞争 |
-| 向量 > 10万条 | ❌ 内存放不下 |
-| 审计日志 / RBAC | ❌ 需要关系型 |
-
-**迁移时间表**:
-| 阶段 | 行动 |
-|------|------|
-| 现在 | 保持 SQLite。清理 requirements.txt 注释死依赖 |
-| GB10部署 (Phase 3) | PostgreSQL + vLLM 一起部署。SQLite→PG迁移，BGE内存→pgvector |
-| SaaS化 (Phase 4+) | PostgreSQL 必须。加 Redis 缓存 + 多租户 |
-
-**后续行动**:
-- [ ] requirements.txt: 注释 asyncpg/pgvector/alembic，标注 "Phase 3 启用"
-- [ ] `material_store.py` 保持 SQLite 接口不变，迁移时只改底层连接
-- [ ] GB10 到位时写迁移脚本 (SQLite → PG)
+当前对应：
+- `requirement_extraction.py` → ✅ 招标分析 skill
+- `content_generation.py` → ✅ 内容生成 skill
+- 各类 prompt 模板 → ✅ 已有
 
 ---
 
-## 四、Skill 模块对照
+## 三、当前数据流 vs 正确数据流
 
-### 设计 vs 实际
+### 当前（有问题的）
 
-| 原始设计 Skill | 实际文件 | 状态 |
-|--------------|---------|------|
-| `tender_parsing.py` | `tender_parsing.py` | ✅ |
-| `requirement_extraction.py` | `requirement_extraction.py` | ✅ 超越 (V2多轮+BGE) |
-| `template_matching.py` | `template_store.py` (改名) | ✅ |
-| `data_retrieval.py` | `data_retrieval.py` | ✅ |
-| `content_generation.py` | `content_generation.py` | ✅ 超越 (5种prompt路由) |
-| `template_filling.py` | `template_filling.py` | ✅ |
-| `docx_assembly.py` | `docx_assembly.py` | ✅ |
-| `rule_verification.py` | `rule_verification.py` | ✅ (仅三层中第一层) |
-| `llm_verification.py` | — | ❌ 未创建 |
-| `cross_verification.py` | — | ❌ 未创建 |
-| `gap_analysis.py` | — | ❌ (合并到 rule_verification) |
+```
+上传 docx
+  → LLM 分类章节类型
+  → LLM 提取结构化数据
+  → 直接存 materials 表 (JSON blob, INSERT OR REPLACE)
+     ↓
+  MaterialMatcher 关键词搜索
+     ↓
+  Prompt 带着搜到的数据 → LLM 写内容
 
-### 设计外新增
+问题链: LLM 提取不准 → 存了垃圾 → 搜到垃圾 → 生成垃圾
+        没有人工校验环节
+        没有"正确答案"的维护入口
+```
 
-| 新增 Skill | 说明 |
-|-----------|------|
-| `material_store.py` | SQLite素材库 — 原设计的数据层轻量化替代 |
-| `material_matcher.py` | 4步规则匹配引擎 — 支撑真实数据注入 |
-| `bid_document_parser.py` | 历史标书LLM提取 — 原设计数据层的具体实现 |
+### 正确的
 
----
+```
+上传 docx
+  → 存原件到 Layer 1 (元数据, 不可变)
+  → LLM 提取 → 写入候选实体 (Layer 2, status=pending)
+  → 人工确认/修正 → 实体确认 (Layer 2, status=confirmed)
+  → 自动构建 RAG 索引 (Layer 3, 可重建)
+  → 生成时:
+      Prompt (Layer 4) 查询 Layer 2 实体 (确定性的)
+                     + Layer 3 语义检索 (补充性的)
+      → LLM 基于真实数据撰写
 
-## 五、多模型校验体系对照
-
-| 层 | 设计 | 实际 | 决策 |
-|----|------|------|------|
-| **第1层** 代码规则 | 结构/缺项/格式 | ✅ 5维校验 | 已完成 |
-| **第2层** LLM深度审阅 | Qwen-Max 逐章审查 | ❌ 未做 | 暂缓 |
-| **第3层** 交叉模型复核 | DeepSeek+GLM-4 | ❌ 未做 | 暂缓 |
-
-**第2/3层何时补**：MVP发布后迭代，当前单层代码校验 + 占位符标记够用。
-
----
-
-## 六、版本清单
-
-### 运行环境
-
-| 项目 | 版本 |
-|------|------|
-| Python | 3.8.10 (⚠️ 不能用 `list[str]`，需 `typing.List`) |
-| Node.js | v20.20.0 (nvm) |
-| npm | v10.8.2 |
-
-### 后端 (requirements.txt)
-
-| 库 | 版本 | 状态 |
-|------|------|------|
-| fastapi | 0.115.0 | ✅ 在用 |
-| uvicorn[standard] | 0.30.0 | ✅ 在用 |
-| pydantic | 2.9.0 | ✅ 在用 |
-| pydantic-settings | 2.5.0 | ✅ 在用 |
-| sqlalchemy[asyncio] | 2.0.35 | ⚠️ 骨架 (DB未部署) |
-| asyncpg | 0.29.0 | ❌ 死依赖 → Phase 3 |
-| alembic | 1.13.0 | ❌ 死依赖 → Phase 3 |
-| pgvector | 0.3.0 | ❌ 死依赖 → Phase 3 |
-| dashscope | 1.20.0 | ✅ Qwen SDK |
-| zhipuai | 2.1.0 | ✅ GLM-4 SDK |
-| httpx | 0.27.0 | ✅ LocalLLM |
-| loguru | 0.7.2 | ✅ 日志 |
-| python-dotenv | 1.0.1 | ✅ 配置 |
-
-### 前端 (package.json)
-
-| 库 | 版本 |
-|------|------|
-| react | ^19.2.0 |
-| react-dom | ^19.2.0 |
-| vite | ^7.3.1 |
-| tailwindcss | ^4.2.1 |
-| lucide-react | ^0.575.0 |
-| marked | ^17.0.3 |
-
-### AI/ML (手动安装，未在 requirements.txt)
-
-| 库/模型 | 版本 | 状态 |
-|------|------|------|
-| python-docx | 1.1.2 | ✅ Word 解析 |
-| sentence-transformers | 3.2.1 | ✅ BGE 服务 |
-| transformers | 4.46.3 | ✅ 模型加载 |
-| torch | 2.2.2 (CPU) | ✅ 推理 |
-| BAAI/bge-small-zh-v1.5 | 95MB / 512维 | ✅ 已部署 |
-| Ollama | v0.18.1 | ✅ qwen2.5:3b (1.9GB) |
+关键差异:
+  1. Layer 2 有确认态，人能修正它
+  2. 实体有关系 (person→cert, person→project)
+  3. Prompt 拿到的是干净的、确认过的数据
+```
 
 ---
 
-## 七、产品功能实现率
+## 四、Layer 2 知识层 - 实体模型设计
 
-### 智能投标（核心）
+```
+Person (人员实体)
+├── id, firm_id
+├── name: "钟雨"
+├── title: "合伙人"
+├── specialty: "公司治理、投融资"
+├── education: "硕士"
+├── years_of_practice: 15
+├── brief_bio: "..."
+├── status: confirmed | pending
+├── certs: [                          ← 关系
+│   {type: "id_card",     image: "hash1.png"},
+│   {type: "degree",      image: "hash2.png"},
+│   {type: "practice_cert", image: "hash3.png"}
+│ ]
+└── projects: [                       ← 关系
+    {project_id: 1, role: "主办律师"},
+    {project_id: 3, role: "项目负责人"}
+  ]
 
-| 功能 | 状态 | 备注 |
-|------|------|------|
-| 上传招标.docx → AI解析 | ✅ | python-docx + Qwen V2 |
-| 章节自动分类 (4类型) | ✅ | BGE ZeroShot 90.9% |
-| 废标条件识别 | ✅ | LLM 提取 + 前端红标 |
-| 评分维度解析 | ✅ | LLM 提取 |
-| 大纲确认 (勾选+content_outline) | ✅ | Word风格预览 |
-| 表格代码模板 (9种) | ✅ | 确定性输出 |
-| 表单代码模板 (8种) | ✅ | 确定性输出 |
-| 叙述LLM生成 (5种prompt) | ✅ | prompt路由 |
-| SSE实时流 + 5路并发 | ✅ | Semaphore(5) |
-| Markdown→Word组装 | ✅ | 中文字体+红色占位符 |
-| 5维代码校验 | ✅ | 结构/顺序/缺项/合规/质量 |
-| Self-RAG 招标自检索 | ✅ | BGE内存向量 |
-| 下载.docx | ✅ | — |
-| 素材匹配引擎 | ✅ | 规则匹配 (非LLM) |
-| 素材注入到narrative prompt | ✅ | 已实现 |
-| table/form 从素材库取数据 | ⚠️ 部分 | team/project表已对接 |
-| 大纲页展示匹配数量 | ❌ | 前端未展示 |
-| 匹配结果人工确认 | ❌ | 4步中最后一步缺失 |
-| LLM深度审阅 (第2层校验) | ❌ | 暂缓 |
-| 交叉模型复核 (第3层校验) | ❌ | 暂缓 |
-| 单章重生成 + 锁定 | ❌ | MVP后迭代 |
+Project (项目实体)
+├── id, firm_id
+├── name: "中国投融资担保常年合同"
+├── client: "中国投融资担保股份有限公司"
+├── project_type: "常年法律顾问"
+├── period: "2026-2030"
+├── amount: "..."
+├── evidence_images: ["hash4.png", "hash5.png"]  ← 合同扫描件
+├── status: confirmed | pending
+└── members: [                        ← 关系
+    {person_id: 1, role: "主办律师"},
+    {person_id: 5, role: "协办律师"}
+  ]
 
-### 素材管理
+FirmQualification (律所资质)
+├── id, firm_id
+├── qual_type: "license" | "permit" | "audit"
+├── name: "执业许可证"
+├── number: "..."
+├── valid_from, valid_until
+├── images: ["hash6.png"]
+└── status: confirmed | pending
 
-| 功能 | 状态 |
-|------|------|
-| 上传历史标书 → LLM提取 | ✅ |
-| diff对比 + 用户确认入库 | ✅ |
-| SQLite存储 (4张表) | ✅ |
-| 多公司隔离 | ✅ |
-| CRUD (3类素材) | ✅ |
-| BGE语义搜索 (narrative) | ✅ |
-| MaterialPanel前端 (81KB) | ✅ |
-| 图片提取+展示 | ✅ |
-| 文件在线预览 | ✅ |
+Award (荣誉奖项)
+├── id, firm_id
+├── name: "ALB China 合规业务榜单"
+├── issuer: "亚洲法律杂志"
+├── year: 2024
+├── rank: "第二级别"
+├── images: ["hash7.png"]  ← 截图/证书
+└── status: confirmed | pending
 
-### 其他模块
-
-| 模块 | 状态 |
-|------|------|
-| AI Copilot 对话 | ✅ 接入Qwen-Max |
-| 利冲检索 | ⚠️ 仅前端Demo |
-| 证券底稿 | ⚠️ 仅前端Demo |
-| 翻译 | ⚠️ 仅前端Demo |
-| 控制台KPI | ⚠️ 仅前端Demo |
-| RBAC权限 | ❌ 待建 |
-| 审计日志 | ❌ 待建 |
+Financial (财务审计)
+├── id, firm_id
+├── year: 2024
+├── report_name: "天元北京审计报告-2024年"
+├── images: ["hash8.png", "hash9.png", ...]  ← 审计报告页
+└── status: confirmed | pending
+```
 
 ---
 
-## 八、审查记录
+## 五、实施路径
 
-| 日期 | 审查内容 | 决策 |
-|------|---------|------|
-| 2026-03-28 | 原始架构 vs 实际实现全面对照 | Agent架构不补; 数据层等GB10一起迁移 |
-| | | |
+### 短期修复（当前 — 已完成）
+
+在现有架构不变的前提下，通过后置处理修复最严重的问题：
+
+- ✅ `_consolidate_person_images`: 入库时合并杂质记录的图片到真人记录
+- ✅ `_enrich_resume_images`: 查询时兜底搜索含人名的其他记录
+- ✅ `_is_person_name`: 过滤非人名条目
+- ✅ Pass 3 自动补全: 评分项缺对应章节时程序创建
+- ✅ Type Override 修复: 资格审查不再被误改为 narrative
+
+### 中期改造（下一迭代, 3-5天）
+
+实现 Layer 2 知识层：
+
+1. **创建实体表** — `persons`, `person_certs`, `person_projects`, `awards`, `firm_qualifications`, `financials`
+2. **改入库流程** — LLM 提取 → 暂存区(pending) → 前端确认 → 正式知识库(confirmed)
+3. **前端实体管理** — 能查看/编辑人员信息、补充证件、关联项目
+4. **改生成查询** — ContentGeneration 直接查实体表，不走 JSON blob
+
+### 长期演进
+
+- 知识图谱可视化（律所→人员→项目→资质的拓扑图）
+- 多版本管理（同一个人不同年份的简历）
+- 跨公司素材隔离 + 共享
+- 自动化素材健康度检查（哪些人缺证件、哪些项目没合同）
+
+---
+
+## 六、当前数据库 Schema 参考
+
+```sql
+-- 现有 (Layer 1 + 扁平 Layer 2 混合)
+companies     (id, name, is_default)
+bid_projects  (id, company_id, name)
+materials     (id, company_id, project_id, category, name, data[JSON], source_file)
+image_meta    (image_hash, ocr_text, image_type, structured[JSON])
+narrative_chunks (id, company_id, title, content)
+```
+
+### 现有数据量（天元律师事务所, 清理后）
+
+| 类型 | 数量 | 有图片 | 无图片 | 说明 |
+|------|------|--------|--------|------|
+| resumes | 27 | 8 | 19 | 19人无图片=素材库缺该人证件 |
+| projects | 10 | 4 | 6 | 6个项目没有合同扫描件 |
+| qualifications | 69 | 10 | 59 | 混存了律所资质+荣誉+个人证件 |
+| narrative_chunks | 8 | - | - | RAG 内容极少 |
+| image_meta | 48 | - | - | 48张图片的 OCR 元数据 |
