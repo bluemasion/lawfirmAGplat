@@ -722,6 +722,7 @@ class ContentGenerationSkill(BaseSkill):
             content_outline=content_outline,
             matched_materials=matched_materials,
             company=company,
+            project_id=project_id,
         )
         missing = self._scan_missing(content)
         return self._result(title, content, missing, "generated")
@@ -730,6 +731,7 @@ class ContentGenerationSkill(BaseSkill):
         self, title, hints, reference, company_info,
         llm_provider, skeleton=None, chunk_callback=None,
         content_outline=None, matched_materials=None, company="",
+        project_id=None,
     ):
         # type: (str, str, str, str, str, Optional[str], Any, Optional[List], Optional[Dict], str) -> str
         """Stream narrative section using llm.stream(), calling chunk_callback per token."""
