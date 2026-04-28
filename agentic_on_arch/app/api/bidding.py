@@ -870,6 +870,9 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
                         "skeleton": skeleton_text,
                         "company": company_data.get("company_name", ""),
                         "project_id": project_id,
+                        "sibling_titles": [
+                            s.get("title", "") for s in all_sections
+                        ],
                     }, chunk_callback=on_chunk)
 
                     result["order"] = section.get("order", idx + 1)

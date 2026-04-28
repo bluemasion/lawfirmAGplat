@@ -315,6 +315,7 @@ class ContentGenerationSkill(BaseSkill):
         skeleton = params.get("skeleton", None)
         company = params.get("company", "")  # company name for material filtering
         project_id = params.get("project_id", None)  # project id for material filtering
+        sibling_titles = params.get("sibling_titles", [])  # other section titles for boundary awareness
 
         title = section.get("title", "未知章节")
         sec_type = section.get("type", "narrative")
@@ -421,6 +422,7 @@ class ContentGenerationSkill(BaseSkill):
             matched_materials=matched_materials,
             company=company,
             project_id=project_id,
+            sibling_titles=sibling_titles,
         )
         missing = self._scan_missing(content)
         return self._result(title, content, missing, "generated")
@@ -429,7 +431,7 @@ class ContentGenerationSkill(BaseSkill):
         self, title, hints, reference, company_info,
         llm_provider, skeleton=None, chunk_callback=None,
         content_outline=None, matched_materials=None, company="",
-        project_id=None,
+        project_id=None, sibling_titles=None,
     ):
         # type: (str, str, str, str, str, Optional[str], Any, Optional[List], Optional[Dict], str) -> str
         """Stream narrative section using llm.stream(), calling chunk_callback per token."""
@@ -439,6 +441,23 @@ class ContentGenerationSkill(BaseSkill):
         skeleton_hint = ""
         if skeleton:
             skeleton_hint = f"\n【参考骨架（来自历史模板）】\n{skeleton}\n请参考以上骨架结构，结合本次招标要求改写。\n"
+
+        # ── Cross-section boundary hint (prevent content duplication) ──
+        if sibling_titles:
+            other_sections = [t for t in sibling_titles if t != title]
+            if other_sections:
+                boundary_hint = (
+                    "\n【⚠️ 内容边界 — 防止章节间内容重复】\n"
+                    "本投标文件中还有以下其他章节，它们各自有独立的内容。"
+                    "请严格只写本章节的内容，不要涉及其他章节的主题：\n"
+                )
+                for ot in other_sections:
+                    boundary_hint += f"- 《{ot}》\n"
+                boundary_hint += (
+                    "\n例如：如果有独立的'律所业绩'章节，本章节就不要再写业绩内容。"
+                    "如果有独立的'项目团队配置'章节，本章节就不要再写团队介绍。\n"
+                )
+                skeleton_hint = boundary_hint + skeleton_hint
 
         # ── content_outline injection (with tender requirement linkage) ──
         outline_hint = ""

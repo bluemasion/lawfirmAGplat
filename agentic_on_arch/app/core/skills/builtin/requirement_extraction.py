@@ -356,6 +356,34 @@ class RequirementExtractionSkill(BaseSkill):
                              f"{rej_secs} with rejection risk")
                 _progress(f"✅ Pass 2 完成: {total_secs} 个章节, {rej_secs} 个有废标风险")
 
+                # ── Pass 2b: Sanitize catch-all sections ──
+                # LLM sometimes generates vague sections like "商务部分" or
+                # "综合实力" that overlap with specific sections. Remove them.
+                _BANNED_PATTERNS = [
+                    "商务部分", "综合实力", "律所综合实力",
+                    "技术部分", "其他文件和资料", "补充材料",
+                    "附件", "其他资料",
+                ]
+                for vol in structure.get("volumes", []):
+                    original_count = len(vol.get("sections", []))
+                    vol["sections"] = [
+                        sec for sec in vol.get("sections", [])
+                        if not any(
+                            ban in sec.get("title", "")
+                            for ban in _BANNED_PATTERNS
+                        )
+                    ]
+                    removed = original_count - len(vol["sections"])
+                    if removed > 0:
+                        logger.info(
+                            f"Pass 2b: Removed {removed} catch-all sections "
+                            f"(banned patterns: {_BANNED_PATTERNS[:3]}...)"
+                        )
+                        _progress(f"🧹 移除 {removed} 个模糊章节")
+                        # Re-number remaining sections
+                        for i, sec in enumerate(vol["sections"], 1):
+                            sec["order"] = i
+
                 # ── Pass 3: Deterministic verification ──
                 _progress("🔍 Pass 3/3: 校验 → 补全 → 联动匹配...")
                 verification = self._verify_structure(analysis, structure)
@@ -933,8 +961,9 @@ class RequirementExtractionSkill(BaseSkill):
     # ── Evaluation item → section deterministic mapping ──
     EVAL_TO_SECTION_MAP = {
         # eval_keyword → (section_title, section_type, material_refs)
-        "业绩": ("业绩与项目经验", "narrative", ["近年类似业绩项目"]),
-        "律所业绩": ("业绩与项目经验", "narrative", ["近年类似业绩项目"]),
+        "业绩": ("律所业绩", "narrative", ["近年类似业绩项目"]),
+        "律所业绩": ("律所业绩", "narrative", ["近年类似业绩项目"]),
+        "项目经验": ("律所业绩", "narrative", ["近年类似业绩项目"]),
         "团队": ("项目团队配置", "narrative", ["项目经理及核心成员简历"]),
         "人员": ("项目团队配置", "narrative", ["项目经理及核心成员简历"]),
         "人员构成": ("项目团队配置", "narrative", ["项目经理及核心成员简历"]),
@@ -948,13 +977,28 @@ class RequirementExtractionSkill(BaseSkill):
         "服务质量": ("服务质量控制方案", "narrative", []),
         "服务质量控制": ("服务质量控制方案", "narrative", []),
         "报价": ("报价文件", "form", []),
-        "综合实力": ("律所综合实力", "narrative", ["行业排名证明", "获奖证书"]),
-        "分所": ("律所综合实力", "narrative", []),
-        "分所覆盖": ("律所综合实力", "narrative", []),
+        # "综合实力" deliberately NOT mapped — it's too vague and causes overlap
         "处罚": ("合规声明", "form", []),
         "处罚情况": ("合规声明", "form", []),
+        "投标文件响应": ("投标文件响应说明", "narrative", []),
         "财务": ("财务状况", "qualification", ["审计报告"]),
     }
+
+    # ── Topic groups for semantic overlap detection ──
+    # If ANY keyword from a group appears in an existing section title,
+    # the whole group is considered "covered".
+    _TOPIC_GROUPS = [
+        # (group_name, keywords that indicate this topic)
+        ("业绩", ["业绩", "项目经验", "类似项目", "案例", "代表项目", "服务案例"]),
+        ("团队", ["团队", "人员", "简历", "律师", "拟投入", "成员", "项目组"]),
+        ("荣誉", ["荣誉", "奖项", "排名", "评级", "获奖"]),
+        ("方案", ["服务方案", "实施方案", "技术方案", "工作方案"]),
+        ("质量", ["质量控制", "质量管理", "质量保证"]),
+        ("资质", ["资格审查", "资质", "执照", "许可"]),
+        ("合规", ["合规", "处罚", "诚信", "声明"]),
+        ("综合实力", ["综合实力", "律所介绍", "公司简介", "律所概况"]),
+        ("商务", ["商务部分", "商务文件"]),
+    ]
 
     # ── Keywords → material_refs injection rules ──
     _MATERIAL_REF_RULES = [
@@ -964,7 +1008,6 @@ class RequirementExtractionSkill(BaseSkill):
         (["资格", "资质", "证书", "执照", "许可"], ["资质证书"]),
         (["荣誉", "奖项", "排名", "评级"], ["行业排名证明", "获奖证书"]),
         (["财务", "审计", "报表"], ["审计报告"]),
-        (["综合实力", "公司简介", "律所"], ["行业排名证明", "获奖证书"]),
     ]
 
     def _auto_complete_sections(self, structure, verification, analysis):
@@ -1020,31 +1063,48 @@ class RequirementExtractionSkill(BaseSkill):
             # Skip if a section with similar title already exists
             if sec_title in existing_titles:
                 continue
-            # Check semantic overlap: if the new section's topic area
-            # is already covered by an existing section
-            _topic_overlap = False
-            # Build keyword sets for overlap detection
-            new_keywords = set()
-            for key, (mapped_title, _, _) in self.EVAL_TO_SECTION_MAP.items():
-                if mapped_title == sec_title:
-                    new_keywords.add(key)
-            new_keywords.add(sec_title)
 
+            # ── Topic-group overlap detection ──
+            # Check if the new section's topic is already covered by
+            # an existing section, using _TOPIC_GROUPS for semantic matching.
+            _topic_overlap = False
+
+            # Step A: Find which topic groups the NEW section belongs to
+            new_topic_groups = set()
+            for group_name, keywords in self._TOPIC_GROUPS:
+                for kw in keywords:
+                    if kw in sec_title or kw in item_name:
+                        new_topic_groups.add(group_name)
+                        break
+
+            # Step B: Find which topic groups the EXISTING sections cover
+            existing_topic_groups = set()
             for existing_title in existing_titles:
                 if not existing_title:
                     continue
-                # Direct containment
-                if sec_title in existing_title or existing_title in sec_title:
-                    _topic_overlap = True
-                    break
-                # Keyword overlap: if existing title contains keywords
-                # that map to the same section
-                for kw in new_keywords:
-                    if kw in existing_title:
+                for group_name, keywords in self._TOPIC_GROUPS:
+                    for kw in keywords:
+                        if kw in existing_title:
+                            existing_topic_groups.add(group_name)
+                            break
+
+            # Step C: If any topic group overlaps, skip
+            overlap_groups = new_topic_groups & existing_topic_groups
+            if overlap_groups:
+                _topic_overlap = True
+                logger.debug(
+                    f"  Skip auto-add '{sec_title}': topic groups "
+                    f"{overlap_groups} already covered by existing sections"
+                )
+
+            # Step D: Direct containment check (fallback)
+            if not _topic_overlap:
+                for existing_title in existing_titles:
+                    if not existing_title:
+                        continue
+                    if sec_title in existing_title or existing_title in sec_title:
                         _topic_overlap = True
                         break
-                if _topic_overlap:
-                    break
 
             if _topic_overlap:
                 logger.debug(
