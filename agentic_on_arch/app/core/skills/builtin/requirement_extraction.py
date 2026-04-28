@@ -571,14 +571,30 @@ class RequirementExtractionSkill(BaseSkill):
         # Synonym mapping for common evaluation terms → section titles
         _EVAL_SYNONYM_MAP = {
             '技术方案': ['技术', '方案', '实施', '解决方案', '技术路线'],
-            '服务方案': ['服务', '运维', '售后', '服务保障', '服务承诺'],
-            '团队': ['人员', '律师', '团队', '简历', '拟投入', '拟委派', '项目经理'],
+            '服务方案': ['服务', '运维', '售后', '服务保障', '服务承诺', '服务方案'],
+            '团队': ['人员', '律师', '团队', '简历', '拟投入', '拟委派', '项目经理', '配置', '成员'],
+            '人员': ['人员', '团队', '配置', '律师', '成员', '项目组'],
+            '人员构成': ['人员', '团队', '配置', '律师', '成员', '项目组'],
             '业绩': ['业绩', '案例', '项目经验', '类似项目', '合同'],
             '报价': ['报价', '价格', '费用', '开标', '一览表', '投标报价'],
             '资质': ['资质', '证书', '营业执照', '许可证', '认证'],
             '管理': ['管理', '质量', '进度', '风控', '安全', '保密'],
             '培训': ['培训', '知识转移', '交接'],
             '应急': ['应急', '预案', '备份', '容灾'],
+            # New synonyms for previously-unmatched items
+            '处罚': ['合规', '处罚', '声明', '信用', '诚信'],
+            '合规': ['合规', '处罚', '声明', '信用'],
+            '响应': ['响应', '投标文件', '说明', '偏离'],
+            '分所': ['分所', '覆盖', '介绍', '概况', '律所'],
+            '综合': ['综合', '实力', '介绍', '概况'],
+            '质量': ['质量', '控制', '管理', '保障'],
+        }
+
+        # Aggregate eval items: these are parent items whose score is
+        # the sum of sub-items. If all sub-topics are covered, the
+        # aggregate is considered covered.
+        _AGGREGATE_ITEMS = {
+            '综合实力': ['业绩', '荣誉', '人员', '团队', '资质', '介绍', '分所'],
         }
 
         def _eval_match(item_name, needed):
@@ -611,7 +627,39 @@ class RequirementExtractionSkill(BaseSkill):
                 "matched_section": matched,
             })
 
+        # Post-process: mark aggregate items as covered if their sub-topics
+        # are represented by other covered eval items or existing sections
+        for ei in eval_items:
+            if ei["status"] != "missing":
+                continue
+            item_name = ei["item"]
+            for agg_name, sub_topics in _AGGREGATE_ITEMS.items():
+                if agg_name in item_name:
+                    # Check if sub-topics are covered by existing sections
+                    sub_covered = 0
+                    for topic in sub_topics:
+                        for title in all_titles:
+                            if topic in title:
+                                sub_covered += 1
+                                break
+                    if sub_covered >= 2:
+                        # At least 2 sub-topics have corresponding sections
+                        ei["status"] = "covered"
+                        ei["matched_section"] = f"(聚合项: {sub_covered}/{len(sub_topics)}子项已覆盖)"
+                        logger.info(
+                            f"  Aggregate eval '{item_name}': "
+                            f"{sub_covered}/{len(sub_topics)} sub-topics covered by sections"
+                        )
+                    break
+
         eval_covered = sum(1 for e in eval_items if e["status"] == "covered")
+        # Log per-item coverage for debugging
+        for e in eval_items:
+            status_icon = "✅" if e["status"] == "covered" else "❌"
+            logger.info(
+                f"  Eval item {status_icon} [{e.get('max_score', 0)}分] "
+                f"'{e['item']}' → {e.get('matched_section', 'NO MATCH')}"
+            )
 
         # ── Required documents check ──
         doc_items = []
