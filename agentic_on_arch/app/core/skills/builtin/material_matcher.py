@@ -167,7 +167,7 @@ class MaterialMatcher:
     def _match_resumes(self, ref: str, filters: List[str],
                        count: Optional[int], company: str,
                        project_id: int = None) -> List[dict]:
-        """Match resumes from store."""
+        """Match resumes from store, prioritizing people with images and seniority."""
         all_resumes = self.store.get_resumes(company=company, project_id=project_id)
         if not all_resumes:
             return []
@@ -188,6 +188,33 @@ class MaterialMatcher:
                     filtered.append(r)
             if filtered:
                 all_resumes = filtered
+
+        # ── Smart sort: images first → seniority → years ──
+        _TITLE_RANK = {
+            '高级合伙人': 0, '管理合伙人': 0, '首席合伙人': 0,
+            '合伙人': 1, '高级顾问': 2,
+            '资深律师': 3, '律师': 4,
+        }
+
+        def _sort_key(r):
+            # 1. Has images (more is better)
+            img_count = len(r.get('_images', []))
+            # 2. Title seniority (lower rank number = more senior)
+            title = r.get('title', '') or ''
+            title_rank = 9  # default for unknown titles
+            for t, rank in _TITLE_RANK.items():
+                if t in title:
+                    title_rank = rank
+                    break
+            # 3. Years of practice
+            years = 0
+            try:
+                years = int(r.get('years_of_practice') or 0)
+            except (ValueError, TypeError):
+                pass
+            return (-img_count, title_rank, -years)
+
+        all_resumes.sort(key=_sort_key)
 
         limit = count or 8
         matched = all_resumes[:limit]
@@ -269,11 +296,37 @@ class MaterialMatcher:
     def _match_qualifications(self, ref: str, filters: List[str],
                               count: Optional[int], company: str,
                               project_id: int = None) -> List[dict]:
-        """Match qualifications from store."""
-        all_quals = self.store.get_qualifications(company=company, project_id=project_id)
+        """Match qualifications from store, with entity_type smart routing.
+
+        Routes based on ref/filter context:
+        - 荣誉/奖项/排名 → award + ranking + ranking_proof
+        - 资格审查/执照/许可 → firm_license + firm_audit + financial_proof
+        - Other → all qualifications
+        """
+        # Determine entity_type filter from ref and filter keywords
+        context = f"{ref} {' '.join(filters)}"
+        entity_type_filter = ""
+
+        # Honor/award context → only awards and rankings with evidence
+        _AWARD_KW = ['荣誉', '奖项', '排名', '榜单', 'ALB', '钱伯斯',
+                     'Legal 500', 'LEGALBAND', 'IFLR', '表彰']
+        # Qualification/license context → firm-level docs
+        _LICENSE_KW = ['资格审查', '营业执照', '执业许可', '执照', '许可证',
+                       '审计', '财务']
+
+        if any(kw in context for kw in _AWARD_KW):
+            entity_type_filter = "award,ranking,ranking_proof"
+        elif any(kw in context for kw in _LICENSE_KW):
+            entity_type_filter = "firm_license,firm_audit,financial_proof"
+
+        all_quals = self.store.get_qualifications(
+            company=company, project_id=project_id,
+            entity_type=entity_type_filter
+        )
         if not all_quals:
             return []
 
+        # Additional keyword filter if specified
         if filters:
             filtered = []
             for q in all_quals:
@@ -286,7 +339,15 @@ class MaterialMatcher:
             if filtered:
                 all_quals = filtered
 
+        # Prioritize items with images
+        all_quals.sort(key=lambda q: -len(q.get('_images', [])))
+
         limit = count or 10
+        if entity_type_filter:
+            logger.info(
+                f"  Qualification filter: entity_type={entity_type_filter} "
+                f"→ {len(all_quals)} matches"
+            )
         return all_quals[:limit]
 
 

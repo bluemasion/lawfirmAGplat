@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS materials (
     project_id   INTEGER REFERENCES bid_projects(id) ON DELETE SET NULL,
     category     TEXT NOT NULL,
     name         TEXT NOT NULL,
+    entity_type  TEXT DEFAULT '',
     data         TEXT NOT NULL DEFAULT '{}',
     source_file  TEXT DEFAULT '',
     source_path  TEXT DEFAULT '',
@@ -96,7 +97,9 @@ CREATE INDEX IF NOT EXISTS idx_image_meta_type ON image_meta(image_type);
 # Migration SQL for existing databases (adds new columns/tables)
 _MIGRATION_SQL = [
     "CREATE TABLE IF NOT EXISTS bid_projects (id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE, name TEXT NOT NULL, description TEXT DEFAULT '', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(company_id, name))",
-    # project_id columns (safe to run multiple times — ignored if exists)
+    # entity_type column for qualification sub-classification
+    "ALTER TABLE materials ADD COLUMN entity_type TEXT DEFAULT ''",
+    "CREATE INDEX IF NOT EXISTS idx_materials_entity_type ON materials(entity_type)",
 ]
 
 def _safe_add_column(conn, table, column, col_type, default=""):
@@ -364,6 +367,51 @@ class MaterialStore:
 
     # ── Save Methods ──
 
+    # ── Entity type classification for qualifications ──
+    # (keywords, entity_type) — first match wins
+    _ENTITY_TYPE_RULES = [
+        # Ranking proof with images (screenshots)
+        (['排名证明'], 'ranking_proof'),
+        # Rankings/ratings from authoritative sources
+        (['Legal 500', 'LEGALBAND', 'IFLR', '钱伯斯', 'Chambers',
+          'ALB', '亚洲法律', '榜单', '排名', '等'], 'ranking'),
+        # Awards and honors
+        (['优秀律师事务所', '先进集体', '荣誉', '奖', '表彰',
+          '破产管理人考核'], 'award'),
+        # Firm-level qualifications
+        (['营业执照', '执业许可', '律所证'], 'firm_license'),
+        # Financial audit reports
+        (['审计', '财务', '报表', '审计报告'], 'firm_audit'),
+        # Personal certificates (mixed into qualifications)
+        (['身份证', '学历', '执业证', '资格证', '社保', '实习证',
+          '律师执照', '年检'], 'personal_cert'),
+        # Financial/payment related
+        (['保证金', '缴费'], 'financial_proof'),
+    ]
+
+    @classmethod
+    def _classify_entity_type(cls, name, item=None):
+        """Classify a qualification record into a sub-type.
+
+        Args:
+            name: Material name/title
+            item: Full item dict (optional, for issuer-based hints)
+
+        Returns:
+            entity_type string like 'award', 'ranking', 'firm_license', etc.
+        """
+        # Combine name + issuer for broader keyword matching
+        text = name
+        if item:
+            issuer = item.get('issuer', '') or ''
+            text = f"{name} {issuer}"
+
+        for keywords, etype in cls._ENTITY_TYPE_RULES:
+            if any(kw in text for kw in keywords):
+                return etype
+
+        return 'other_qual'
+
     # ── Image certificate type classification rules ──
     _CERT_TYPE_RULES = [
         # (keywords_in_name, cert_type, label)
@@ -604,6 +652,11 @@ class MaterialStore:
                         item[key_field] = name
                         logger.info(f"[save] Generated fallback name for "
                                     f"{category}: '{name}'")
+                    # Auto-classify entity_type for qualifications
+                    entity_type = ""
+                    if category == "qualifications":
+                        entity_type = self._classify_entity_type(name, item)
+
                     # Remove internal fields before storing
                     clean = {k: v for k, v in item.items()
                              if not k.startswith("_") or k == "_images"}
@@ -611,10 +664,11 @@ class MaterialStore:
                     source_path = item.get("_source_path", "")
                     conn.execute("""
                         INSERT OR REPLACE INTO materials
-                        (company_id, project_id, category, name, data,
-                         source_file, source_path, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        (company_id, project_id, category, name, entity_type,
+                         data, source_file, source_path, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                     """, (company_id, project_id, category, name,
+                          entity_type,
                           json.dumps(clean, ensure_ascii=False),
                           source_file, source_path))
                     saved += 1
@@ -654,6 +708,10 @@ class MaterialStore:
             data = json.loads(row["data"]) if row["data"] else {}
             data[key_field] = row["name"]
             data["_company"] = row["company_name"]
+            # Include entity_type for sub-classification filtering
+            et = row["entity_type"] if "entity_type" in row.keys() else ""
+            if et:
+                data["_entity_type"] = et
             if row["source_file"]:
                 data["_source_file"] = row["source_file"]
             if row["source_path"]:
@@ -700,9 +758,16 @@ class MaterialStore:
         """Get stored projects, optionally filtered by company or project."""
         return self._get_materials("projects", company, project_id)
 
-    def get_qualifications(self, company: str = "", project_id: int = None) -> List[Dict]:
-        """Get stored qualifications, optionally filtered by company or project."""
-        return self._get_materials("qualifications", company, project_id)
+    def get_qualifications(self, company: str = "", project_id: int = None,
+                           entity_type: str = "") -> List[Dict]:
+        """Get stored qualifications, optionally filtered by company, project,
+        or entity_type (award/firm_license/firm_audit/personal_cert/ranking)."""
+        all_quals = self._get_materials("qualifications", company, project_id)
+        if entity_type:
+            # Support comma-separated types: "award,ranking"
+            types = set(t.strip() for t in entity_type.split(','))
+            all_quals = [q for q in all_quals if q.get('_entity_type', '') in types]
+        return all_quals
 
     def get_narrative_chunks(self, company: str = "") -> List[Dict]:
         """Get stored narrative chunks, optionally filtered by company."""
