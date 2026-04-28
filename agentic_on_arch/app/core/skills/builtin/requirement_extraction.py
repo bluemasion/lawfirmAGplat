@@ -977,7 +977,12 @@ class RequirementExtractionSkill(BaseSkill):
         "服务质量": ("服务质量控制方案", "narrative", []),
         "服务质量控制": ("服务质量控制方案", "narrative", []),
         "报价": ("报价文件", "form", []),
-        # "综合实力" deliberately NOT mapped — it's too vague and causes overlap
+        # "综合实力" is an aggregate eval item — map sub-items, not itself.
+        # When LLM produces sub_criteria like "分所覆盖" under "综合实力",
+        # those sub-items should match to existing sections (律所荣誉, etc).
+        "综合实力": None,  # Skip — it's an aggregate, handled by sub-criteria
+        "分所": None,       # Skip — covered by 律所介绍/概况
+        "分所覆盖": None,   # Skip — covered by 律所介绍/概况
         "处罚": ("合规声明", "form", []),
         "处罚情况": ("合规声明", "form", []),
         "投标文件响应": ("投标文件响应说明", "narrative", []),
@@ -998,6 +1003,13 @@ class RequirementExtractionSkill(BaseSkill):
         ("合规", ["合规", "处罚", "诚信", "声明"]),
         ("综合实力", ["综合实力", "律所介绍", "公司简介", "律所概况"]),
         ("商务", ["商务部分", "商务文件"]),
+    ]
+
+    # ── Banned section names (must NOT be auto-created) ──
+    _BANNED_SECTION_NAMES = [
+        "商务部分", "综合实力", "律所综合实力",
+        "技术部分", "其他文件和资料", "补充材料",
+        "附件", "其他资料",
     ]
 
     # ── Keywords → material_refs injection rules ──
@@ -1045,12 +1057,21 @@ class RequirementExtractionSkill(BaseSkill):
             sec_refs = []
 
             # Strategy 1: Direct mapping from EVAL_TO_SECTION_MAP
-            for key, (title, stype, refs) in self.EVAL_TO_SECTION_MAP.items():
+            for key, val in self.EVAL_TO_SECTION_MAP.items():
                 if key in item_name:
-                    sec_title = title
-                    sec_type = stype
-                    sec_refs = refs
+                    if val is None:
+                        # Explicitly skipped — aggregate or covered elsewhere
+                        sec_title = None
+                        logger.debug(
+                            f"  Skip eval item '{item_name}': mapped to None (aggregate)"
+                        )
+                        break
+                    sec_title, sec_type, sec_refs = val
                     break
+
+            # If explicitly skipped (None mapping), skip entirely
+            if sec_title is None and any(k in item_name for k, v in self.EVAL_TO_SECTION_MAP.items() if v is None):
+                continue
 
             # Strategy 2: Use bid_section_needed from Pass 1
             if not sec_title and bid_section_needed:
@@ -1059,6 +1080,13 @@ class RequirementExtractionSkill(BaseSkill):
             # Strategy 3: Use item_name as title
             if not sec_title:
                 sec_title = item_name
+
+            # ── Banned name filter ──
+            if any(ban in sec_title for ban in self._BANNED_SECTION_NAMES):
+                logger.info(
+                    f"  Skip auto-add '{sec_title}': matches banned pattern"
+                )
+                continue
 
             # Skip if a section with similar title already exists
             if sec_title in existing_titles:
@@ -1148,6 +1176,12 @@ class RequirementExtractionSkill(BaseSkill):
             doc_name = di.get("name", "")
             if not doc_name or doc_name in existing_titles:
                 continue
+            # ── Banned name filter for documents too ──
+            if any(ban in doc_name for ban in self._BANNED_SECTION_NAMES):
+                logger.info(
+                    f"  Skip auto-add document '{doc_name}': matches banned pattern"
+                )
+                continue
 
             max_order += 1
             doc_type = di.get("category", "form")
@@ -1200,7 +1234,10 @@ class RequirementExtractionSkill(BaseSkill):
                 sec_linkage = linkage.get(title, {})
                 for scoring_item in sec_linkage.get("scoring_items", []):
                     item_name = scoring_item.get("item", "")
-                    for key, (_, _, refs) in self.EVAL_TO_SECTION_MAP.items():
+                    for key, val in self.EVAL_TO_SECTION_MAP.items():
+                        if val is None:
+                            continue
+                        _, _, refs = val
                         if key in item_name:
                             for ref in refs:
                                 if ref not in new_refs:
