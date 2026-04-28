@@ -361,6 +361,11 @@ class BidDocumentParserSkill(BaseSkill):
 
         resumes = _dedup(resumes, "name")
         projects = _dedup(projects, "project_name")
+
+        # Step 3a+: Consolidate artifact resumes into real person records
+        # E.g., "身份证扫描件-钟雨" → merge its images into "钟雨" record
+        resumes = self._consolidate_resumes(resumes)
+
         # Qualifications: use name+holder as key (same cert held by different people must be kept)
         def _dedup_quals(items):
             seen = {}
@@ -478,6 +483,156 @@ class BidDocumentParserSkill(BaseSkill):
             "total_sections": len(sections),
             "detected_company": detected_company,
         }
+
+    # ── Resume consolidation (merge artifact records into real people) ──
+
+    # Non-person keywords — records with these are cert/doc artifacts
+    _NON_PERSON_KW = [
+        '身份证', '学历', '毕业证', '学位证', '实习证', '执业证',
+        '资格证', '社保', '证书', '许可证', '平台', '律师事务所',
+        '副本', '扫描件', '法律职业', '信息公示',
+    ]
+
+    # Cert type rules for image tagging
+    _CERT_CLASSIFY = [
+        (['身份证'], 'id_card', '身份证'),
+        (['学历', '毕业证', '学位'], 'degree', '学历证书'),
+        (['执业证', '律师证'], 'practice_cert', '律师执业证'),
+        (['资格证', '法律职业'], 'bar_cert', '法律职业资格证'),
+        (['社保', '社会保险'], 'social_security', '社保证明'),
+        (['实习证', '实习'], 'intern_cert', '实习证'),
+    ]
+
+    def _consolidate_resumes(self, resumes):
+        """Merge artifact records (like '身份证扫描件-钟雨') into their
+        parent person record ('钟雨'), with typed image labels.
+
+        Returns cleaned list of resumes with artifacts removed.
+        """
+        if not resumes:
+            return resumes
+
+        # Separate real people from artifact records
+        real_people = {}     # name → resume dict
+        artifacts = []
+
+        for resume in resumes:
+            name = (resume.get('name') or '').strip()
+            if not name:
+                continue
+
+            is_artifact = (
+                name[0].isdigit()
+                or any(kw in name for kw in self._NON_PERSON_KW)
+                or len(name) > 6
+            )
+
+            if is_artifact:
+                artifacts.append(resume)
+            else:
+                real_people[name] = resume
+
+        if not artifacts:
+            return resumes
+
+        # Merge each artifact's images into its parent person
+        merged = 0
+        removed_names = set()
+
+        for artifact in artifacts:
+            art_name = (artifact.get('name') or '').strip()
+            art_images = artifact.get('_images', [])
+
+            # Extract person name from artifact name
+            person_name = self._extract_person_from_name(art_name)
+            if not person_name or person_name not in real_people:
+                if not art_images:
+                    removed_names.add(art_name)  # no images, just remove
+                continue
+
+            if not art_images:
+                removed_names.add(art_name)
+                continue
+
+            # Classify cert type from artifact name
+            cert_type, cert_label = 'other', '其他证件'
+            for keywords, ctype, clabel in self._CERT_CLASSIFY:
+                if any(kw in art_name for kw in keywords):
+                    cert_type, cert_label = ctype, clabel
+                    break
+
+            # Merge images into parent
+            parent = real_people[person_name]
+            parent_images = parent.get('_images', [])
+
+            # Convert to typed format if flat
+            if parent_images and isinstance(parent_images[0], str):
+                parent_images = [
+                    {'file': f, 'type': 'other', 'label': '证件'}
+                    for f in parent_images
+                ]
+
+            existing_files = set()
+            for e in parent_images:
+                existing_files.add(e['file'] if isinstance(e, dict) else e)
+
+            for img in art_images:
+                img_file = img if isinstance(img, str) else img
+                if img_file not in existing_files:
+                    parent_images.append({
+                        'file': img_file,
+                        'type': cert_type,
+                        'label': cert_label,
+                    })
+                    existing_files.add(img_file)
+
+            parent['_images'] = parent_images
+            removed_names.add(art_name)
+            merged += 1
+            logger.info(
+                f"  Parser consolidated: '{art_name}' → '{person_name}' "
+                f"(+{len(art_images)} images, type={cert_type})"
+            )
+
+        # Remove merged artifacts from resumes list
+        result = [
+            r for r in resumes
+            if (r.get('name') or '').strip() not in removed_names
+        ]
+
+        if merged:
+            logger.info(
+                f"  Parser consolidation: merged {merged} artifacts, "
+                f"removed {len(removed_names)} entries, "
+                f"{len(result)} resumes remaining"
+            )
+
+        return result
+
+    @staticmethod
+    def _extract_person_from_name(record_name):
+        """Extract a Chinese person name from an artifact record name.
+        E.g., '身份证扫描件-钟雨' → '钟雨'
+        """
+        import re
+        name = record_name.strip()
+        name = re.sub(r'^[\d]+[.、\s]+', '', name)
+
+        _DOC_KW = [
+            '身份证', '学历', '毕业证', '学位', '执业证', '资格证',
+            '证书', '扫描件', '副本', '许可证', '社保', '实习证',
+            '律师', '平台', '律所', '事务所', '信息', '记录',
+        ]
+
+        for sep in ['-', '—', '_', ' ']:
+            parts = [p.strip() for p in name.split(sep) if p.strip()]
+            if len(parts) >= 2:
+                for part in parts:
+                    if (2 <= len(part) <= 4
+                            and all('\u4e00' <= c <= '\u9fff' for c in part)
+                            and not any(kw in part for kw in _DOC_KW)):
+                        return part
+        return None
 
     # ── Image storage directory ──
     IMAGES_DIR = os.path.join(

@@ -473,7 +473,8 @@ class MaterialStore:
 
     def _consolidate_person_images(self, materials):
         """Post-process extracted materials: merge artifact records' images
-        into their parent person records.
+        into their parent person records. Acts as a safety net for data
+        that was not pre-consolidated by the parser.
 
         For example:
           "身份证扫描件-钟雨" (has 1 image) + "学历证书-钟雨" (has 1 image)
