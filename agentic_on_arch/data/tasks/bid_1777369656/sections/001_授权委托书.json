@@ -14,5 +14,8 @@
   "status": "template",
   "order": 2,
   "type": "form",
-  "level": 2
+  "level": 2,
+  "linked_scoring": [],
+  "linked_rejection": [],
+  "linked_total_score": 0
 }

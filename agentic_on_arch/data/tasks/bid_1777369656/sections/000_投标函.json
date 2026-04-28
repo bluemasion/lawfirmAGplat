@@ -15,5 +15,17 @@
   "status": "template",
   "order": 1,
   "type": "form",
-  "level": 2
+  "level": 2,
+  "linked_scoring": [],
+  "linked_rejection": [
+    {
+      "condition": "投标文件不满足第三章评标办法3评审程序3.1初步评审的要求。",
+      "source": "评标办法前附表"
+    },
+    {
+      "condition": "各投标人之间以及投标人与招标人、招标代理单位之间存在关联关系。",
+      "source": "评标办法前附表"
+    }
+  ],
+  "linked_total_score": 0
 }

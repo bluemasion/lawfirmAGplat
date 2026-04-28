@@ -323,8 +323,12 @@ class ContentGenerationSkill(BaseSkill):
         data_fields = section.get("data_fields", [])
         content_outline = section.get("content_outline", [])
         material_refs = section.get("material_refs", [])
+        linked_scoring = section.get("linked_scoring", [])
+        linked_total_score = section.get("linked_total_score", 0)
 
         logger.info(f"Generating (stream) content for: [{sec_type}] {title}")
+        if linked_scoring:
+            logger.info(f"  Linked scoring: {len(linked_scoring)} items, total {linked_total_score}分")
 
         # ── Match materials for this section ──
         # Prefer pre-matched data from bidding pipeline's batch pre-matching
@@ -425,6 +429,8 @@ class ContentGenerationSkill(BaseSkill):
             company=company,
             project_id=project_id,
             sibling_titles=sibling_titles,
+            linked_scoring=linked_scoring,
+            linked_total_score=linked_total_score,
         )
         missing = self._scan_missing(content)
         return self._result(title, content, missing, "generated")
@@ -434,6 +440,7 @@ class ContentGenerationSkill(BaseSkill):
         llm_provider, skeleton=None, chunk_callback=None,
         content_outline=None, matched_materials=None, company="",
         project_id=None, sibling_titles=None,
+        linked_scoring=None, linked_total_score=0,
     ):
         # type: (str, str, str, str, str, Optional[str], Any, Optional[List], Optional[Dict], str) -> str
         """Stream narrative section using llm.stream(), calling chunk_callback per token."""
@@ -690,6 +697,32 @@ class ContentGenerationSkill(BaseSkill):
                             f"block={len(deterministic_block)}字)"
                         )
 
+        # ── Build scoring criteria context for LLM ──
+        scoring_context = ""
+        if linked_scoring:
+            scoring_parts = [
+                "\n\n━━━ 本章节对应的评分标准 ━━━",
+                f"⚠️ 本章节共对应 {linked_total_score} 分，请严格按照以下评分标准组织内容："
+            ]
+            for si in linked_scoring:
+                item = si.get('item', '')
+                score = si.get('max_score', 0)
+                desc = si.get('description', '')
+                scoring_parts.append(f"\n【评分项: {item}】分值: {score}分")
+                if desc:
+                    scoring_parts.append(f"评分标准: {desc}")
+                # Include sub-criteria if available
+                for sub in si.get('sub_criteria', []):
+                    sub_name = sub.get('name', sub) if isinstance(sub, dict) else sub
+                    scoring_parts.append(f"  - {sub_name}")
+            scoring_parts.append(
+                "\n❗ 写作要求：内容必须逐项回应以上评分标准，"
+                "确保评委能直接找到得分点。"
+                "每个评分项应有对应的内容段落，不要遗漏任何评分点。"
+            )
+            scoring_context = "\n".join(scoring_parts)
+            logger.info(f"  Scoring context injected: {len(scoring_context)}字")
+
         selected_prompt = _route_prompt(title)
 
         # If we have a deterministic block, instruct LLM to write only the
@@ -701,9 +734,9 @@ class ContentGenerationSkill(BaseSkill):
                 "3) 服务方案/措施的具体描述。"
                 "\n不要包含团队介绍表格、业绩列表或资质清单，这些已经有了。\n"
             )
-            skeleton_hint = skeleton_hint + outline_hint + material_context + llm_instruction
+            skeleton_hint = skeleton_hint + outline_hint + material_context + scoring_context + llm_instruction
         else:
-            skeleton_hint = skeleton_hint + outline_hint + material_context + structured_context
+            skeleton_hint = skeleton_hint + outline_hint + material_context + scoring_context + structured_context
 
         prompt = selected_prompt.format(
             section_title=title,

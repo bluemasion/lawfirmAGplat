@@ -878,6 +878,10 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
                     result["order"] = section.get("order", idx + 1)
                     result["type"] = section.get("type", "narrative")
                     result["level"] = 2
+                    # Preserve scoring linkage from structure analysis
+                    result["linked_scoring"] = section.get("linked_scoring", [])
+                    result["linked_rejection"] = section.get("linked_rejection", [])
+                    result["linked_total_score"] = section.get("linked_total_score", 0)
 
                     # ── Save to disk cache ──
                     _save_section_cache(cache_path, result)

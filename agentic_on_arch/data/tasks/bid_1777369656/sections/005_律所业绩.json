@@ -5,5 +5,53 @@
   "status": "data_driven",
   "order": 6,
   "type": "narrative",
-  "level": 2
+  "level": 2,
+  "linked_scoring": [
+    {
+      "item": "分所覆盖情况",
+      "max_score": 10,
+      "description": "根据律所在全国范围内分所分布情况进行横向比较",
+      "sub_criteria": [
+        {
+          "name": "分布广泛",
+          "score": 10,
+          "scoring_rule": "得10-8分"
+        },
+        {
+          "name": "分布较广",
+          "score": 7,
+          "scoring_rule": "得7-4分"
+        },
+        {
+          "name": "分布不广泛",
+          "score": 3,
+          "scoring_rule": "得3-0分"
+        }
+      ]
+    },
+    {
+      "item": "律所业绩",
+      "max_score": 20,
+      "description": "根据律所近三年在投资并购、诉讼案件等领域的重大项目（标的金额在10亿人民币以上的投资并购项目、诉讼仲裁项目）法律服务业绩情况打分",
+      "sub_criteria": [
+        {
+          "name": "优秀",
+          "score": 20,
+          "scoring_rule": "20-14分"
+        },
+        {
+          "name": "良好",
+          "score": 13,
+          "scoring_rule": "13-7分"
+        },
+        {
+          "name": "一般",
+          "score": 6,
+          "scoring_rule": "6-0分"
+        }
+      ]
+    }
+  ],
+  "linked_rejection": [],
+  "linked_total_score": 30
 }
