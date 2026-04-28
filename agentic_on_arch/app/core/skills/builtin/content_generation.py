@@ -391,8 +391,9 @@ class ContentGenerationSkill(BaseSkill):
                 title, content_hints, matched_materials["resumes"],
                 company_info, content_outline,
             )
-            # Append resume certification images
-            content += self._append_material_images(title, matched_materials)
+            # Append ONLY resume images (not projects/qualifications)
+            scoped = self._filter_materials_for_section(title, matched_materials)
+            content += self._append_material_images(title, scoped)
             if chunk_callback:
                 await chunk_callback(content)
             logger.info(f"  → Data-driven team narrative: {len(matched_materials['resumes'])} resumes")
@@ -406,8 +407,9 @@ class ContentGenerationSkill(BaseSkill):
                 title, content_hints, matched_materials["projects"],
                 company_info, content_outline,
             )
-            # Append project evidence images
-            content += self._append_material_images(title, matched_materials)
+            # Append ONLY project evidence images
+            scoped = self._filter_materials_for_section(title, matched_materials)
+            content += self._append_material_images(title, scoped)
             if chunk_callback:
                 await chunk_callback(content)
             logger.info(f"  → Data-driven project narrative: {len(matched_materials['projects'])} projects")
@@ -706,6 +708,63 @@ class ContentGenerationSkill(BaseSkill):
         return "".join(full_content)
 
     # ── Material image embedding helper ──
+
+    # Section topic → allowed material categories for image attachment.
+    # This prevents team chapters from showing financial audit images, etc.
+    _SECTION_MATERIAL_SCOPE = {
+        # topic_keywords → allowed categories
+        "团队": ["resumes"],           # 只附简历+证件照
+        "人员": ["resumes"],
+        "律师": ["resumes"],
+        "成员": ["resumes"],
+        "拟投入": ["resumes"],
+        "业绩": ["projects"],           # 只附业绩合同扫描件
+        "案例": ["projects"],
+        "项目经验": ["projects"],
+        "资格审查": ["qualifications"],  # 只附营业执照等证件
+        "资质": ["qualifications"],
+        "荣誉": ["qualifications"],      # 只附获奖证书
+        "奖项": ["qualifications"],
+    }
+
+    @classmethod
+    def _filter_materials_for_section(cls, title, matched_materials):
+        # type: (str, dict) -> dict
+        """Filter matched_materials to only include categories relevant
+        to the section's topic. Returns a new dict with irrelevant
+        categories emptied out."""
+        # Determine allowed categories based on title keywords
+        allowed = None
+        for kw, categories in cls._SECTION_MATERIAL_SCOPE.items():
+            if kw in title:
+                allowed = set(categories)
+                break
+
+        if allowed is None:
+            # No scope rule matched → return all (for generic chapters)
+            return matched_materials
+
+        # Build filtered copy
+        filtered = dict(matched_materials)
+        for key in ["resumes", "projects", "qualifications"]:
+            if key not in allowed:
+                filtered[key] = []
+
+        old_count = sum(
+            len(matched_materials.get(k, []))
+            for k in ["resumes", "projects", "qualifications"]
+        )
+        new_count = sum(
+            len(filtered.get(k, []))
+            for k in ["resumes", "projects", "qualifications"]
+        )
+        if old_count != new_count:
+            logger.info(
+                f"  Material scope filter for '{title}': "
+                f"{old_count} → {new_count} items "
+                f"(allowed: {allowed})"
+            )
+        return filtered
 
     @staticmethod
     def _append_material_images(title: str, matched_materials: dict) -> str:
