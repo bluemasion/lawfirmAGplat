@@ -502,69 +502,90 @@ class ContentGenerationSkill(BaseSkill):
                     logger.debug(f"MaterialMatcher auto-match failed for '{title}': {e}")
 
         if not structured_context:
-            # Fallback 2: inject company's full material summary as background context
-            # This ensures narrative chapters like "售后服务承诺书" / "技术方案" can still
-            # reference real company data (projects, team, qualifications)
+            # Fallback 2: inject company material summary as background context.
+            # Scope-filtered: only inject categories relevant to this section.
             store = _get_material_store()
             if store and company:
                 try:
-                    company_context_parts = []
-
-                    # Projects summary
-                    projects = store.get_projects(company=company, project_id=project_id)
-                    if projects:
-                        company_context_parts.append(
-                            f"\n【我方公司业绩数据（{len(projects)}项，请在撰写中引用真实案例）】"
-                        )
-                        for p in projects[:6]:
-                            line = f"- {p.get('project_name', '?')}"
-                            if p.get('client'):
-                                line += f"，委托方: {p['client']}"
-                            if p.get('contract_amount') or p.get('amount'):
-                                line += f"，金额: {p.get('contract_amount', p.get('amount', ''))}"
-                            if p.get('description'):
-                                line += f"，{p['description'][:50]}"
-                            company_context_parts.append(line)
-
-                    # Resumes summary
-                    resumes = store.get_resumes(company=company, project_id=project_id)
-                    if resumes:
-                        company_context_parts.append(
-                            f"\n【我方公司团队成员（{len(resumes)}人，可引用真实信息）】"
-                        )
-                        for r in resumes[:5]:
-                            line = f"- {r.get('name', '?')}"
-                            if r.get('title'):
-                                line += f"，{r['title']}"
-                            if r.get('specialty'):
-                                line += f"，擅长{r['specialty']}"
-                            company_context_parts.append(line)
-
-                    # Qualifications summary
-                    quals = store.get_qualifications(company=company, project_id=project_id)
-                    if quals:
-                        company_context_parts.append(
-                            f"\n【我方公司资质证书（{len(quals)}项，按需引用）】"
-                        )
-                        for q in quals[:5]:
-                            line = f"- {q.get('name', '?')}"
-                            if q.get('issuer'):
-                                line += f"，颁发: {q['issuer']}"
-                            company_context_parts.append(line)
-
-                    if company_context_parts:
-                        structured_context = "\n".join(company_context_parts)
-                        structured_context += (
-                            "\n\n⚠️ 重要写作指示：以上是我方公司的真实业绩、团队和资质数据。"
-                            "在撰写本章节时，请**务必引用**至少2-3项相关的真实案例或团队信息来支撑论述，"
-                            "而不是使用泛泛的承诺性语言。例如，在描述服务能力时，"
-                            "应引用具体的项目经验；在描述团队保障时，应提及具体的团队成员资质。\n"
-                        )
+                    # Determine which categories are allowed for this section
+                    allowed_cats = None
+                    for kw, cats in self._SECTION_MATERIAL_SCOPE.items():
+                        if kw in title:
+                            allowed_cats = set(cats)
+                            break
+                    # If allowed_cats is empty list [], skip injection entirely
+                    if allowed_cats is not None and len(allowed_cats) == 0:
                         logger.info(
-                            f"  Company material summary injected for '{title}': "
-                            f"{len(projects)} projects, {len(resumes)} resumes, "
-                            f"{len(quals)} qualifications"
+                            f"  Company material summary SKIPPED for '{title}': "
+                            f"scope rule = [] (pure LLM writing)"
                         )
+                    else:
+                        company_context_parts = []
+
+                        # Projects summary (only if allowed)
+                        if allowed_cats is None or "projects" in allowed_cats:
+                            projects = store.get_projects(company=company, project_id=project_id)
+                            if projects:
+                                company_context_parts.append(
+                                    f"\n【我方公司业绩数据（{len(projects)}项，请在撰写中引用真实案例）】"
+                                )
+                                for p in projects[:6]:
+                                    line = f"- {p.get('project_name', '?')}"
+                                    if p.get('client'):
+                                        line += f"，委托方: {p['client']}"
+                                    if p.get('contract_amount') or p.get('amount'):
+                                        line += f"，金额: {p.get('contract_amount', p.get('amount', ''))}"
+                                    if p.get('description'):
+                                        line += f"，{p['description'][:50]}"
+                                    company_context_parts.append(line)
+
+                        # Resumes summary (only if allowed)
+                        if allowed_cats is None or "resumes" in allowed_cats:
+                            resumes = store.get_resumes(company=company, project_id=project_id)
+                            if resumes:
+                                company_context_parts.append(
+                                    f"\n【我方公司团队成员（{len(resumes)}人，可引用真实信息）】"
+                                )
+                                for r in resumes[:5]:
+                                    line = f"- {r.get('name', '?')}"
+                                    if r.get('title'):
+                                        line += f"，{r['title']}"
+                                    if r.get('specialty'):
+                                        line += f"，擅长{r['specialty']}"
+                                    company_context_parts.append(line)
+
+                        # Qualifications summary (only if allowed)
+                        if allowed_cats is None or "qualifications" in allowed_cats:
+                            quals = store.get_qualifications(company=company, project_id=project_id)
+                            if quals:
+                                company_context_parts.append(
+                                    f"\n【我方公司资质证书（{len(quals)}项，按需引用）】"
+                                )
+                                for q in quals[:5]:
+                                    line = f"- {q.get('name', '?')}"
+                                    if q.get('issuer'):
+                                        line += f"，颁发: {q['issuer']}"
+                                    company_context_parts.append(line)
+
+                        if company_context_parts:
+                            structured_context = "\n".join(company_context_parts)
+                            structured_context += (
+                                "\n\n⚠️ 重要写作指示：以上是我方公司的真实数据。"
+                                "在撰写本章节时，请引用相关的真实案例或信息来支撑论述，"
+                                "而不是使用泛泛的承诺性语言。\n"
+                            )
+                            injected_types = []
+                            if allowed_cats is None or "projects" in (allowed_cats or set()):
+                                injected_types.append(f"{len(store.get_projects(company=company, project_id=project_id))} projects")
+                            if allowed_cats is None or "resumes" in (allowed_cats or set()):
+                                injected_types.append(f"{len(store.get_resumes(company=company, project_id=project_id))} resumes")
+                            if allowed_cats is None or "qualifications" in (allowed_cats or set()):
+                                injected_types.append(f"{len(store.get_qualifications(company=company, project_id=project_id))} quals")
+                            _types = ", ".join(injected_types)
+                            logger.info(
+                                f"  Company material summary injected for '{title}': "
+                                f"{_types} (scope: {allowed_cats or 'all'})"
+                            )
                 except Exception as e:
                     logger.debug(f"Company material summary failed for '{title}': {e}")
 
@@ -584,73 +605,90 @@ class ContentGenerationSkill(BaseSkill):
                 logger.debug(f"Material RAG failed for '{title}': {e}")
 
         # ── Deterministic content block: pre-compose real data ──
-        # This block is injected BEFORE LLM output, guaranteeing material citation
+        # Scope-filtered: only inject categories relevant to this section.
         deterministic_block = ""
         if company:
-            store = _get_material_store()
-            if store:
-                det_parts = []
+            # Check if this section should get any materials at all
+            det_allowed = None
+            for kw, cats in self._SECTION_MATERIAL_SCOPE.items():
+                if kw in title:
+                    det_allowed = set(cats)
+                    break
 
-                # Inject relevant project references
-                projects = store.get_projects(company=company)
-                if projects:
-                    det_parts.append("\n### 我方相关业绩\n")
-                    det_parts.append("我方在相关领域具有丰富的实践经验，代表性项目包括：\n")
-                    for i, p in enumerate(projects[:5], 1):
-                        line = f"{i}. **{p.get('project_name', '项目')}**"
-                        if p.get('client'):
-                            line += f"（委托方：{p['client']}"
-                        if p.get('contract_amount') or p.get('amount'):
-                            amt = p.get('contract_amount', p.get('amount', ''))
-                            line += f"，合同金额：{amt}"
-                        if p.get('client'):
-                            line += "）"
-                        if p.get('service_period') or p.get('period'):
-                            line += f"，服务期：{p.get('service_period', p.get('period', ''))}"
-                        if p.get('description'):
-                            desc = p['description'][:80]
-                            line += f"。{desc}"
-                        det_parts.append(line + "\n")
-                    det_parts.append("")
+            # If scope is empty list [], skip deterministic block entirely
+            if det_allowed is not None and len(det_allowed) == 0:
+                logger.info(
+                    f"  Deterministic block SKIPPED for '{title}': "
+                    f"scope rule = [] (pure LLM writing)"
+                )
+            else:
+                store = _get_material_store()
+                if store:
+                    det_parts = []
 
-                # Inject team summary
-                resumes = store.get_resumes(company=company)
-                if resumes:
-                    det_parts.append("\n### 项目团队保障\n")
-                    det_parts.append(
-                        f"我方将组建由{len(resumes)}名专业人员组成的服务团队，核心成员包括：\n"
-                    )
-                    det_parts.append("| 姓名 | 职务/职称 | 专业方向 | 从业年限 |")
-                    det_parts.append("|------|----------|---------|---------|")
-                    for r in resumes[:6]:
-                        name = r.get('name', '—')
-                        title_r = r.get('title', '—')
-                        spec = r.get('specialty', '—')
-                        yrs = r.get('years_of_practice', '—')
-                        det_parts.append(f"| {name} | {title_r} | {spec} | {yrs}年 |")
-                    det_parts.append("")
+                    # Inject project references (only if allowed)
+                    if det_allowed is None or "projects" in det_allowed:
+                        projects = store.get_projects(company=company)
+                        if projects:
+                            det_parts.append("\n### 我方相关业绩\n")
+                            det_parts.append("我方在相关领域具有丰富的实践经验，代表性项目包括：\n")
+                            for i, p in enumerate(projects[:5], 1):
+                                line = f"{i}. **{p.get('project_name', '项目')}**"
+                                if p.get('client'):
+                                    line += f"（委托方：{p['client']}"
+                                if p.get('contract_amount') or p.get('amount'):
+                                    amt = p.get('contract_amount', p.get('amount', ''))
+                                    line += f"，合同金额：{amt}"
+                                if p.get('client'):
+                                    line += "）"
+                                if p.get('service_period') or p.get('period'):
+                                    line += f"，服务期：{p.get('service_period', p.get('period', ''))}"
+                                if p.get('description'):
+                                    desc = p['description'][:80]
+                                    line += f"。{desc}"
+                                det_parts.append(line + "\n")
+                            det_parts.append("")
 
-                # Inject qualification summary
-                quals = store.get_qualifications(company=company)
-                if quals:
-                    det_parts.append("\n### 资质保障\n")
-                    det_parts.append("我方持有以下相关资质证书：\n")
-                    for q in quals[:5]:
-                        qname = q.get('name', '—')
-                        issuer = q.get('issuer', '')
-                        line = f"- **{qname}**"
-                        if issuer:
-                            line += f"（颁发机构：{issuer}）"
-                        det_parts.append(line)
-                    det_parts.append("")
+                    # Inject team summary (only if allowed)
+                    if det_allowed is None or "resumes" in det_allowed:
+                        resumes = store.get_resumes(company=company)
+                        if resumes:
+                            det_parts.append("\n### 项目团队保障\n")
+                            det_parts.append(
+                                f"我方将组建由{len(resumes)}名专业人员组成的服务团队，核心成员包括：\n"
+                            )
+                            det_parts.append("| 姓名 | 职务/职称 | 专业方向 | 从业年限 |")
+                            det_parts.append("|------|----------|---------|---------|")
+                            for r in resumes[:6]:
+                                name = r.get('name', '—')
+                                title_r = r.get('title', '—')
+                                spec = r.get('specialty', '—')
+                                yrs = r.get('years_of_practice', '—')
+                                det_parts.append(f"| {name} | {title_r} | {spec} | {yrs}年 |")
+                            det_parts.append("")
 
-                if det_parts:
-                    deterministic_block = "\n".join(det_parts)
-                    logger.info(
-                        f"  Deterministic block for '{title}': "
-                        f"{len(projects)} projects, {len(resumes)} resumes, "
-                        f"{len(quals)} qualifications (block={len(deterministic_block)}字)"
-                    )
+                    # Inject qualification summary (only if allowed)
+                    if det_allowed is None or "qualifications" in det_allowed:
+                        quals = store.get_qualifications(company=company)
+                        if quals:
+                            det_parts.append("\n### 资质保障\n")
+                            det_parts.append("我方持有以下相关资质证书：\n")
+                            for q in quals[:5]:
+                                qname = q.get('name', '—')
+                                issuer = q.get('issuer', '')
+                                line = f"- **{qname}**"
+                                if issuer:
+                                    line += f"（颁发机构：{issuer}）"
+                                det_parts.append(line)
+                            det_parts.append("")
+
+                    if det_parts:
+                        deterministic_block = "\n".join(det_parts)
+                        logger.info(
+                            f"  Deterministic block for '{title}': "
+                            f"(scope: {det_allowed or 'all'}, "
+                            f"block={len(deterministic_block)}字)"
+                        )
 
         selected_prompt = _route_prompt(title)
 
@@ -713,18 +751,27 @@ class ContentGenerationSkill(BaseSkill):
     # This prevents team chapters from showing financial audit images, etc.
     _SECTION_MATERIAL_SCOPE = {
         # topic_keywords → allowed categories
-        "团队": ["resumes"],           # 只附简历+证件照
+        # 团队类: 只附简历+证件照
+        "团队": ["resumes"],
         "人员": ["resumes"],
         "律师": ["resumes"],
         "成员": ["resumes"],
         "拟投入": ["resumes"],
-        "业绩": ["projects"],           # 只附业绩合同扫描件
+        # 业绩类: 只附业绩合同扫描件
+        "业绩": ["projects"],
         "案例": ["projects"],
         "项目经验": ["projects"],
-        "资格审查": ["qualifications"],  # 只附营业执照等证件
+        # 资质类: 只附资质证书
+        "资格审查": ["qualifications"],
         "资质": ["qualifications"],
-        "荣誉": ["qualifications"],      # 只附获奖证书
+        "荣誉": ["qualifications"],
         "奖项": ["qualifications"],
+        # 方案类: 不注入任何素材（纯LLM写方案）
+        "方案": [],
+        "质量": [],
+        "控制": [],
+        "措施": [],
+        "承诺": [],
     }
 
     @classmethod
