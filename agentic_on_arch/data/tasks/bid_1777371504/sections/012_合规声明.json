@@ -1,0 +1,33 @@
+{
+  "title": "合规声明",
+  "content": "## 合规声明\n\n填写合规声明，承诺无处罚、无失信。不写其他内容。\n\n声明单位（盖章）：国信优易数据有限公司\n法定代表人（签字）：[待补充：法定代表人]\n日期：[待补充：日期]\n",
+  "missing_fields": [
+    "法定代表人",
+    "日期"
+  ],
+  "status": "template",
+  "order": 13,
+  "type": "form",
+  "level": 2,
+  "linked_scoring": [
+    {
+      "item": "处罚情况",
+      "max_score": 15,
+      "description": "根据律所承诺，近三年是否因法律服务质量等问题受到行政处罚、行业处分以及被有权机关书面警示的情况进行评分：无相关情况得 15 分，有 1 次处罚纪录扣 5 分，最低 0 分。",
+      "sub_criteria": [
+        {
+          "name": "无处罚记录",
+          "score": 15,
+          "scoring_rule": "无相关情况得 15 分"
+        },
+        {
+          "name": "有处罚记录",
+          "score": 0,
+          "scoring_rule": "有 1 次处罚纪录扣 5 分，最低 0 分"
+        }
+      ]
+    }
+  ],
+  "linked_rejection": [],
+  "linked_total_score": 15
+}

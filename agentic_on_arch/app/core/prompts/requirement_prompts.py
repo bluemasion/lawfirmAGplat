@@ -53,8 +53,9 @@ ANALYSIS_PROMPT = """请深度分析以下招标文件内容，提取编制投�
   "evaluation_criteria": [
     {{
       "item": "评分项名称",
+      "category": "商务|技术|价格（该评分项属于哪个评分表）",
       "max_score": 0,
-      "description": "评分要点",
+      "description": "评分要点/评分标准的完整描述",
       "bid_section_needed": "投标文件中需要哪个章节来回应这个评分项",
       "sub_criteria": [
         {{

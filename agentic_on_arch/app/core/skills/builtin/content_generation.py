@@ -367,6 +367,13 @@ class ContentGenerationSkill(BaseSkill):
             return self._result(title, content, data_fields or [title], "placeholder")
 
         if sec_type == "table":
+            # If pre-filled content exists (e.g. auto-generated deviation table), use directly
+            prefilled = section.get("_deviation_table_content", "")
+            if prefilled:
+                logger.info(f"  Using pre-filled deviation table for '{title}' ({len(prefilled)}字)")
+                if chunk_callback:
+                    await chunk_callback(prefilled)
+                return self._result(title, prefilled, [], "deviation_table")
             content = await self._generate_table_by_template(
                 title, content_hints, data_fields,
                 company=company, project_id=project_id

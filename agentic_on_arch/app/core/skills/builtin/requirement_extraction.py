@@ -432,6 +432,46 @@ class RequirementExtractionSkill(BaseSkill):
                     logger.info(f"Section linkage: {linked_count} sections linked to scoring/rejection items")
                     _progress(f"✅ Pass 3 完成: {linked_count} 个章节关联到评分/废标项")
 
+                # ── Pass 3d: Auto-generate deviation/compliance tables ──
+                deviation_sections = self._generate_deviation_tables(
+                    analysis, verification, structure
+                )
+                if deviation_sections:
+                    # Insert at the beginning of the first volume
+                    first_vol = structure.get("volumes", [{}])[0]
+                    existing_sections = first_vol.get("sections", [])
+                    # Insert after form sections (投标函, 授权委托书 etc.)
+                    # but before content sections
+                    insert_idx = 0
+                    for i, sec in enumerate(existing_sections):
+                        if sec.get("type") in ("form",):
+                            insert_idx = i + 1
+                        else:
+                            break
+                    for j, dev_sec in enumerate(deviation_sections):
+                        existing_sections.insert(insert_idx + j, dev_sec)
+                    # Re-number all sections
+                    for i, sec in enumerate(existing_sections, 1):
+                        sec["order"] = i
+                    first_vol["sections"] = existing_sections
+
+                    # Rebuild order map with correct post-insertion numbers
+                    # and regenerate deviation table content
+                    new_order_map = {}
+                    for sec in existing_sections:
+                        t = sec.get("title", "")
+                        o = sec.get("order", 0)
+                        new_order_map[t] = f"第{o}章 {t}"
+                    for dev_sec in deviation_sections:
+                        self._patch_deviation_content(
+                            dev_sec, new_order_map, verification
+                        )
+
+                    logger.info(
+                        f"Pass 3d: Generated {len(deviation_sections)} "
+                        f"deviation table(s), inserted at position {insert_idx + 1}"
+                    )
+                    _progress(f"📊 自动生成 {len(deviation_sections)} 个评审偏离表")
 
                 return structure
 
@@ -599,11 +639,26 @@ class RequirementExtractionSkill(BaseSkill):
 
         def _eval_match(item_name, needed):
             """Try to match an evaluation criterion to a section using synonyms."""
-            # Direct match first
+            # Priority 0: Deterministic mapping from EVAL_TO_SECTION_MAP
+            for key, val in RequirementExtractionSkill.EVAL_TO_SECTION_MAP.items():
+                if key in item_name:
+                    if val is None:
+                        return None  # aggregate item, skip
+                    mapped_title = val[0]
+                    # Check if this mapped title exists in actual sections
+                    for title in all_titles:
+                        if mapped_title in title or title in mapped_title:
+                            return title
+            # Priority 1: Direct match (title contains needed or item_name)
             matched = _find_matching_section([needed, item_name])
             if matched:
                 return matched
-            # Synonym-based matching
+            # Priority 2: Precise item_name containment
+            for title in all_titles:
+                if item_name and len(item_name) >= 2:
+                    if item_name in title or title in item_name:
+                        return title
+            # Priority 3: Synonym-based matching (broadest)
             for trigger, synonyms in _EVAL_SYNONYM_MAP.items():
                 if trigger in item_name or trigger in (needed or ''):
                     for syn in synonyms:
@@ -1256,6 +1311,162 @@ class RequirementExtractionSkill(BaseSkill):
             logger.info(f"  Auto-added required document: [{doc_type}] {doc_name}")
 
         return added
+
+    def _generate_deviation_tables(self, analysis, verification, structure):
+        # type: (Dict, Dict, Dict) -> List[Dict]
+        """Auto-generate deviation/compliance tables from eval linkage.
+
+        Produces one section per scoring category (商务/技术/价格).
+        Each section contains a markdown table mapping evaluation items
+        to their corresponding bid chapter locations.
+        """
+        eval_items = verification.get("evaluation_check", {}).get("items", [])
+        if not eval_items:
+            return []
+
+        # Build section order lookup: title → "第X章"
+        section_order_map = {}  # type: Dict[str, str]
+        for vol in structure.get("volumes", []):
+            for sec in vol.get("sections", []):
+                order = sec.get("order", 0)
+                title = sec.get("title", "")
+                section_order_map[title] = f"第{order}章 {title}"
+
+        # Group eval items by category
+        categories = {}  # type: Dict[str, List]
+        for ei in eval_items:
+            cat = ei.get("category", "")
+            # Infer category from item content if Qwen didn't provide it
+            if not cat:
+                item_name = ei.get("item", "")
+                # Heuristic: 报价/价格 → 价格; 方案/质量/人员 → 技术; else → 商务
+                if any(kw in item_name for kw in ["报价", "价格", "费用"]):
+                    cat = "价格"
+                elif any(kw in item_name for kw in [
+                    "方案", "质量", "人员", "团队", "业绩", "服务"
+                ]):
+                    cat = "技术"
+                else:
+                    cat = "商务"
+            if cat not in categories:
+                categories[cat] = []
+            categories[cat].append(ei)
+
+        # Desired order for tables
+        cat_order = ["商务", "技术", "价格"]
+        result_sections = []
+
+        for cat in cat_order:
+            items = categories.get(cat, [])
+            if not items:
+                continue
+
+            # Build markdown table
+            lines = [
+                f"## {cat}评分偏离表\n",
+                "| 序号 | 评分项目 | 分值 | 招标文件评分要求 | 对应投标文件位置 | 偏离说明 | 备注 |",
+                "|------|---------|------|----------------|----------------|---------|------|",
+            ]
+            for idx, ei in enumerate(items, 1):
+                item_name = ei.get("item", "—")
+                score = ei.get("max_score", 0)
+                desc = ei.get("description", "—")
+                # Truncate long descriptions for table readability
+                if len(desc) > 50:
+                    desc = desc[:47] + "..."
+                matched = ei.get("matched_section", "")
+                if matched and not matched.startswith("("):
+                    location = section_order_map.get(matched, matched)
+                else:
+                    location = "详见正文"
+                status = "covered" if ei.get("status") == "covered" else "missing"
+                deviation = "无偏离" if status == "covered" else "待补充"
+                lines.append(
+                    f"| {idx} | {item_name} | {score} | {desc} "
+                    f"| {location} | {deviation} | |"
+                )
+
+            content = "\n".join(lines)
+
+            result_sections.append({
+                "title": f"{cat}评分偏离表",
+                "type": "table",
+                "content_hints": f"根据招标文件{cat}评分表自动生成的偏离/响应索引表",
+                "data_fields": [],
+                "content_outline": [],
+                "material_refs": [],
+                "rejection_risk": False,
+                "linked_scoring": [],
+                "linked_rejection": [],
+                "linked_total_score": 0,
+                # Pre-fill content so content_generation skips LLM
+                "_deviation_table_content": content,
+            })
+
+        if result_sections:
+            logger.info(
+                f"Generated deviation tables: "
+                f"{', '.join(f'{cat}({len(items)}项)' for cat, items in categories.items() if items)}"
+            )
+
+        return result_sections
+
+    def _patch_deviation_content(self, dev_sec, order_map, verification):
+        # type: (Dict, Dict[str, str], Dict) -> None
+        """Regenerate deviation table content with correct chapter numbers.
+
+        Called after deviation sections are inserted and all sections
+        re-numbered, so the order_map reflects final positions.
+        """
+        title = dev_sec.get("title", "")
+        # Determine which category this table is for
+        cat = title.replace("评分偏离表", "")  # "商务" / "技术" / "价格"
+
+        # Filter eval items for this category
+        eval_items = verification.get("evaluation_check", {}).get("items", [])
+        cat_items = []
+        for ei in eval_items:
+            ei_cat = ei.get("category", "")
+            if not ei_cat:
+                item_name = ei.get("item", "")
+                if any(kw in item_name for kw in ["报价", "价格", "费用"]):
+                    ei_cat = "价格"
+                elif any(kw in item_name for kw in [
+                    "方案", "质量", "人员", "团队", "业绩", "服务"
+                ]):
+                    ei_cat = "技术"
+                else:
+                    ei_cat = "商务"
+            if ei_cat == cat:
+                cat_items.append(ei)
+
+        if not cat_items:
+            return
+
+        lines = [
+            f"## {cat}评分偏离表\n",
+            "| 序号 | 评分项目 | 分值 | 招标文件评分要求 | 对应投标文件位置 | 偏离说明 | 备注 |",
+            "|------|---------|------|----------------|----------------|---------|------|",
+        ]
+        for idx, ei in enumerate(cat_items, 1):
+            item_name = ei.get("item", "—")
+            score = ei.get("max_score", 0)
+            desc = ei.get("description", "—")
+            if len(desc) > 50:
+                desc = desc[:47] + "..."
+            matched = ei.get("matched_section", "")
+            if matched and not matched.startswith("("):
+                location = order_map.get(matched, matched)
+            else:
+                location = "详见正文"
+            status = "covered" if ei.get("status") == "covered" else "missing"
+            deviation = "无偏离" if status == "covered" else "待补充"
+            lines.append(
+                f"| {idx} | {item_name} | {score} | {desc} "
+                f"| {location} | {deviation} | |"
+            )
+
+        dev_sec["_deviation_table_content"] = "\n".join(lines)
 
     def _inject_material_refs(self, structure, verification):
         # type: (Dict, Dict) -> int
