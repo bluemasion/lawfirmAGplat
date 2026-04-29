@@ -39,16 +39,21 @@ from app.core.prompts.content_generation_prompts import (
 )
 
 
-def _route_prompt(title: str) -> str:
-    """Match chapter title to specialized prompt template."""
+def _route_prompt(title, return_type=False):
+    # type: (str, bool) -> str
+    """Match chapter title to specialized prompt template.
+
+    If return_type=True, returns the type string (e.g. 'service_plan')
+    instead of the prompt template. Used for reference_sections lookup.
+    """
     title_lower = title.lower()
     for route in PROMPT_ROUTING:
         for kw in route["keywords"]:
             if kw in title_lower:
                 logger.info(f"  Prompt routing: '{title}' → {route['type']}")
-                return route["prompt"]
+                return route["type"] if return_type else route["prompt"]
     logger.info(f"  Prompt routing: '{title}' → generic")
-    return NARRATIVE_PROMPT
+    return "generic" if return_type else NARRATIVE_PROMPT
 
 
 # ── Built-in Form Templates (code, no LLM) ──
@@ -654,16 +659,59 @@ class ContentGenerationSkill(BaseSkill):
         material_context = ""
         store = _get_material_store()
         if store:
+            # Priority 1: Search reference_sections (historical winning bid sections)
             try:
-                relevant = await store.search_narratives(title, top_k=3, company=company)
-                if relevant:
-                    material_context = "\n【来自历史投标文件的参考范文】\n"
-                    for chunk in relevant:
-                        material_context += f"[{chunk.get('title', '')}]\n{chunk.get('content', '')}\n\n"
-                    material_context += "请参考以上范文的写法和结构，结合本次招标要求改写。\n"
-                    logger.info(f"  Material RAG: {len(relevant)} chunks for '{title}'")
+                prompt_type = _route_prompt(title, return_type=True)
+                ref_sections = store.search_reference_sections(
+                    section_type=prompt_type,
+                    query=title,
+                    top_k=2,
+                    company=company
+                )
+                if ref_sections:
+                    material_context = (
+                        "\n【历史中标方案参考（学习结构和论证方式，不要照抄）】\n"
+                    )
+                    for rs in ref_sections:
+                        # Truncate to avoid context overflow
+                        content_preview = rs['content'][:2000]
+                        material_context += (
+                            f"--- {rs['title']} ---\n{content_preview}\n\n"
+                        )
+                    material_context += (
+                        "请参考以上方案的论证结构和写作方式，"
+                        "结合本次招标的具体要求改写。\n"
+                    )
+                    logger.info(
+                        f"  Reference RAG: {len(ref_sections)} sections "
+                        f"for '{title}' (type={prompt_type})"
+                    )
             except Exception as e:
-                logger.debug(f"Material RAG failed for '{title}': {e}")
+                logger.debug(f"Reference section RAG failed for '{title}': {e}")
+
+            # Priority 2: Fallback to narrative_chunks (if no reference sections)
+            if not material_context:
+                try:
+                    relevant = await store.search_narratives(
+                        title, top_k=3, company=company
+                    )
+                    if relevant:
+                        material_context = "\n【来自历史投标文件的参考范文】\n"
+                        for chunk in relevant:
+                            material_context += (
+                                f"[{chunk.get('title', '')}]\n"
+                                f"{chunk.get('content', '')}\n\n"
+                            )
+                        material_context += (
+                            "请参考以上范文的写法和结构，"
+                            "结合本次招标要求改写。\n"
+                        )
+                        logger.info(
+                            f"  Material RAG: {len(relevant)} chunks "
+                            f"for '{title}'"
+                        )
+                except Exception as e:
+                    logger.debug(f"Material RAG failed for '{title}': {e}")
 
         # ── Deterministic content block: pre-compose real data ──
         # Scope-filtered: only inject categories relevant to this section.

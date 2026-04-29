@@ -886,6 +886,32 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
                     # ── Save to disk cache ──
                     _save_section_cache(cache_path, result)
 
+                    # ── Auto-save narrative to reference_sections for future RAG ──
+                    if result.get("status") == "generated" and sec_type == "narrative":
+                        try:
+                            from app.core.skills.builtin.material_store import MaterialStore
+                            _ref_store = MaterialStore()
+                            from app.core.skills.builtin.content_generation import _route_prompt
+                            _prompt_type = _route_prompt(title, return_type=True)
+                            _score_info = ""
+                            if section.get("linked_scoring"):
+                                import json as _json
+                                _score_info = _json.dumps(
+                                    [{"item": s.get("item", ""), "score": s.get("max_score", 0)}
+                                     for s in section["linked_scoring"]],
+                                    ensure_ascii=False
+                                )
+                            _ref_store.save_reference_section(
+                                company=company_data.get("company_name", ""),
+                                section_type=_prompt_type,
+                                title=title,
+                                content=result.get("content", ""),
+                                source_file=f"task_{task_id}",
+                                score_info=_score_info,
+                            )
+                        except Exception as _ref_err:
+                            logger.debug(f"Auto-save reference section failed: {_ref_err}")
+
                     elapsed = time.time() - sec_start
                     logger.info(
                         f"  [{idx+1}/{total_sections}] DONE: {title} "

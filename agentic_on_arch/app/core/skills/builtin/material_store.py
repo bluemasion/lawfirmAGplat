@@ -87,11 +87,24 @@ CREATE TABLE IF NOT EXISTS image_meta (
     created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS reference_sections (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    company      TEXT NOT NULL DEFAULT '',
+    section_type TEXT NOT NULL DEFAULT '',
+    title        TEXT NOT NULL,
+    content      TEXT NOT NULL,
+    source_file  TEXT DEFAULT '',
+    score_info   TEXT DEFAULT '',
+    quality_rating INTEGER DEFAULT 0,
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_materials_company ON materials(company_id);
 CREATE INDEX IF NOT EXISTS idx_materials_project ON materials(project_id);
 CREATE INDEX IF NOT EXISTS idx_materials_category ON materials(category);
 CREATE INDEX IF NOT EXISTS idx_narratives_company ON narrative_chunks(company_id);
 CREATE INDEX IF NOT EXISTS idx_image_meta_type ON image_meta(image_type);
+CREATE INDEX IF NOT EXISTS idx_ref_sections_type ON reference_sections(section_type);
 """
 
 # Migration SQL for existing databases (adds new columns/tables)
@@ -100,6 +113,9 @@ _MIGRATION_SQL = [
     # entity_type column for qualification sub-classification
     "ALTER TABLE materials ADD COLUMN entity_type TEXT DEFAULT ''",
     "CREATE INDEX IF NOT EXISTS idx_materials_entity_type ON materials(entity_type)",
+    # reference_sections for historical winning bid sections RAG
+    "CREATE TABLE IF NOT EXISTS reference_sections (id INTEGER PRIMARY KEY AUTOINCREMENT, company TEXT NOT NULL DEFAULT '', section_type TEXT NOT NULL DEFAULT '', title TEXT NOT NULL, content TEXT NOT NULL, source_file TEXT DEFAULT '', score_info TEXT DEFAULT '', quality_rating INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+    "CREATE INDEX IF NOT EXISTS idx_ref_sections_type ON reference_sections(section_type)",
 ]
 
 def _safe_add_column(conn, table, column, col_type, default=""):
@@ -1221,6 +1237,103 @@ class MaterialStore:
             q = query.lower()
             scored = [c for c in chunks if q in c.get("content", "").lower()]
             return scored[:top_k]
+
+    # ── Reference Sections (historical winning bid sections) ──
+
+    def save_reference_section(self, company, section_type, title,
+                               content, source_file="", score_info=""):
+        # type: (str, str, str, str, str, str) -> bool
+        """Save a generated narrative section as reference for future RAG.
+
+        Deduplicates by (company, section_type, title): updates if exists.
+        Only saves sections with substantial content (>500 chars).
+        """
+        if len(content) < 500:
+            return False
+        conn = self._get_conn()
+        try:
+            c = conn.cursor()
+            c.execute(
+                "SELECT id FROM reference_sections "
+                "WHERE company = ? AND section_type = ? AND title = ?",
+                (company, section_type, title)
+            )
+            existing = c.fetchone()
+            if existing:
+                c.execute(
+                    "UPDATE reference_sections SET content = ?, "
+                    "source_file = ?, score_info = ?, created_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ?",
+                    (content, source_file, score_info, existing[0])
+                )
+            else:
+                c.execute(
+                    "INSERT INTO reference_sections "
+                    "(company, section_type, title, content, source_file, score_info) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (company, section_type, title, content, source_file, score_info)
+                )
+            conn.commit()
+            logger.info(
+                f"Reference section saved: [{section_type}] {title} "
+                f"({len(content)}字, {'updated' if existing else 'new'})"
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to save reference section: {e}")
+            return False
+
+    def search_reference_sections(self, section_type="", query="",
+                                  top_k=2, company=""):
+        # type: (str, str, int, str) -> List[Dict]
+        """Search reference sections by type and optional query.
+
+        Returns top_k most relevant sections, preferring same company.
+        """
+        conn = self._get_conn()
+        try:
+            c = conn.cursor()
+            if section_type:
+                c.execute(
+                    "SELECT id, company, section_type, title, content, "
+                    "score_info, created_at FROM reference_sections "
+                    "WHERE section_type = ? ORDER BY created_at DESC LIMIT ?",
+                    (section_type, top_k * 3)
+                )
+            else:
+                c.execute(
+                    "SELECT id, company, section_type, title, content, "
+                    "score_info, created_at FROM reference_sections "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (top_k * 3,)
+                )
+            rows = c.fetchall()
+            if not rows:
+                return []
+
+            results = []
+            for row in rows:
+                results.append({
+                    "id": row[0],
+                    "company": row[1],
+                    "section_type": row[2],
+                    "title": row[3],
+                    "content": row[4],
+                    "score_info": row[5],
+                    "created_at": row[6],
+                })
+
+            # Prioritize same company
+            if company:
+                same = [r for r in results if r["company"] == company]
+                other = [r for r in results if r["company"] != company]
+                results = same + other
+
+            return results[:top_k]
+
+        except Exception as e:
+            logger.warning(f"Reference section search failed: {e}")
+            return []
 
     # ── Update / Delete Methods ──
 

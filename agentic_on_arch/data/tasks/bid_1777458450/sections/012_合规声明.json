@@ -1,0 +1,27 @@
+{
+  "title": "合规声明",
+  "content": "## 合规声明\n\n填写合规声明，承诺无处罚、无失信记录。不写其他内容。\n\n声明单位（盖章）：北京天元律师事务所\n法定代表人（签字）：朱小辉\n日期：[待补充：日期]\n",
+  "missing_fields": [
+    "日期"
+  ],
+  "status": "template",
+  "order": 13,
+  "type": "form",
+  "level": 2,
+  "linked_scoring": [
+    {
+      "item": "处罚情况",
+      "max_score": 15,
+      "description": "根据律所承诺，近三年是否因法律服务质量等问题受到行政处罚、行业处分以及被有权机关书面警示的情况进行评分：无相关情况得15分，有1次处罚纪录扣5分，最低0分。",
+      "sub_criteria": [
+        {
+          "name": "处罚情况",
+          "score": 15,
+          "scoring_rule": "无相关情况得15分，有1次处罚纪录扣5分，最低0分"
+        }
+      ]
+    }
+  ],
+  "linked_rejection": [],
+  "linked_total_score": 15
+}
