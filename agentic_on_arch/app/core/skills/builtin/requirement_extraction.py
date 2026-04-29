@@ -676,6 +676,8 @@ class RequirementExtractionSkill(BaseSkill):
                 "item": item_name,
                 "max_score": ec.get("max_score", 0),
                 "description": ec.get("description", ""),
+                "material_evidence": ec.get("material_evidence", ""),
+                "category": ec.get("category", ""),
                 "bid_section_needed": needed,
                 "sub_criteria": ec.get("sub_criteria", []),
                 "status": "covered" if matched else "missing",
@@ -1364,8 +1366,8 @@ class RequirementExtractionSkill(BaseSkill):
             # Build markdown table
             lines = [
                 f"## {cat}评分偏离表\n",
-                "| 序号 | 评分项目 | 分值 | 招标文件评分要求 | 对应投标文件位置 | 偏离说明 | 备注 |",
-                "|------|---------|------|----------------|----------------|---------|------|",
+                "| 序号 | 评分项目 | 分值 | 招标文件评分要求 | 材料依据 | 对应投标文件位置 | 偏离说明 | 备注 |",
+                "|------|---------|------|----------------|----------|----------------|---------|------|",
             ]
             for idx, ei in enumerate(items, 1):
                 item_name = ei.get("item", "—")
@@ -1374,6 +1376,12 @@ class RequirementExtractionSkill(BaseSkill):
                 # Truncate long descriptions for table readability
                 if len(desc) > 50:
                     desc = desc[:47] + "..."
+                # Material evidence from scoring table
+                evidence = ei.get("material_evidence", "")
+                if evidence and len(evidence) > 40:
+                    evidence = evidence[:37] + "..."
+                if not evidence:
+                    evidence = "—"
                 matched = ei.get("matched_section", "")
                 if matched and not matched.startswith("("):
                     location = section_order_map.get(matched, matched)
@@ -1383,7 +1391,7 @@ class RequirementExtractionSkill(BaseSkill):
                 deviation = "无偏离" if status == "covered" else "待补充"
                 lines.append(
                     f"| {idx} | {item_name} | {score} | {desc} "
-                    f"| {location} | {deviation} | |"
+                    f"| {evidence} | {location} | {deviation} | |"
                 )
 
             content = "\n".join(lines)
@@ -1445,8 +1453,8 @@ class RequirementExtractionSkill(BaseSkill):
 
         lines = [
             f"## {cat}评分偏离表\n",
-            "| 序号 | 评分项目 | 分值 | 招标文件评分要求 | 对应投标文件位置 | 偏离说明 | 备注 |",
-            "|------|---------|------|----------------|----------------|---------|------|",
+            "| 序号 | 评分项目 | 分值 | 招标文件评分要求 | 材料依据 | 对应投标文件位置 | 偏离说明 | 备注 |",
+            "|------|---------|------|----------------|----------|----------------|---------|------|",
         ]
         for idx, ei in enumerate(cat_items, 1):
             item_name = ei.get("item", "—")
@@ -1454,6 +1462,11 @@ class RequirementExtractionSkill(BaseSkill):
             desc = ei.get("description", "—")
             if len(desc) > 50:
                 desc = desc[:47] + "..."
+            evidence = ei.get("material_evidence", "")
+            if evidence and len(evidence) > 40:
+                evidence = evidence[:37] + "..."
+            if not evidence:
+                evidence = "—"
             matched = ei.get("matched_section", "")
             if matched and not matched.startswith("("):
                 location = order_map.get(matched, matched)
@@ -1463,7 +1476,7 @@ class RequirementExtractionSkill(BaseSkill):
             deviation = "无偏离" if status == "covered" else "待补充"
             lines.append(
                 f"| {idx} | {item_name} | {score} | {desc} "
-                f"| {location} | {deviation} | |"
+                f"| {evidence} | {location} | {deviation} | |"
             )
 
         dev_sec["_deviation_table_content"] = "\n".join(lines)
