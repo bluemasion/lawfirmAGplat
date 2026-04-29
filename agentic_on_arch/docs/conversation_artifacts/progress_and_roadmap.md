@@ -1,6 +1,6 @@
 # 智能投标系统 — 开发进度与产品规划对照
 
-> 更新时间: 2026-04-29 17:35
+> 更新时间: 2026-04-29 19:04
 
 ---
 
@@ -68,33 +68,30 @@
 | `v2.1.0` | 4/07 | 基础管线完成 |
 | `v2.1.2-stable` | 4/14 | 任务管理+OCR+前端体验 |
 | `backup-before-prompt-separation` | 4/28 | Prompt 分离前备份 |
-| `v2.2.0-deviation` | **4/29** | **偏离表 + 评分精确匹配** |
+| `v2.2.0-deviation` | 4/29 | 偏离表 + 评分精确匹配 |
+| `v2.2.1-narrative-enhance` | **4/29** | **P0-1 叙述章节质量跃升** |
 
 ---
 
 ## 三、后续开发计划 (4/29 重新评估)
 
-> 核心判断：系统已能自动生成完整投标文件，但叙述类章节(服务方案/质量控制)是评委
-> 打分主战场(80分/200分=40%)，目前恰恰是最弱的。优先级按"直接影响中标率"排序。
+> P0-1 已完成，下一步聚焦评分精确性和排版。
 
 ### 🔴 P0 — 直接影响中标率（1-2周）
 
 | # | 方向 | 为什么重要 | 预估 |
 |---|------|----------|------|
-| **1** | **叙述章节质量跃升** | 服务方案(40分)+质量控制(20分)=60分，当前是通用LLM输出 | 3-4天 |
+| ~~1~~ | ~~叙述章节质量跃升~~ | 服务方案+质量控制字数翻倍，引用真实数据 | ✅ 已完成 |
+| **1b** | **评分子项提取增强** | 材料依据列+偏离表对应验证+总分/权重修正 | 0.5天 |
+| **1c** | **标段识别** | 文件名/正文检测，标段一vs二评分标准不同 | 0.3天 |
 | **2** | **Word 排版专业化** | 评委第一印象，排版差影响"投标文件响应情况"15分 | 2-3天 |
 | **3** | **章节级编辑+重生成** | 律师一定会改内容，当前只能全量重跑 | 1-2天 |
 
-#### P0-1 叙述章节质量跃升 — 具体方案
+#### P0-1 叙述章节质量跃升 — ✅ 已完成
 
-```
-现在:  评分标准 + 通用 prompt → Qwen → 2000字通用方案
-目标:  评分标准 + 历史方案 + 本所特色 + 行业上下文 → Qwen → 有血有肉的方案
-```
+5步改造: Profile增强 → Prompt重构(service_plan+quality_control) → 公司概要注入 → 历史方案RAG → 子项拆段
 
-- **历史方案库**: 导入过去中标的服务方案/质量控制方案，学习结构和论证方式
-- **公司特色强制注入**: 从素材库提取律所独特优势("全国21个分所""千人团队""20年")
-- **评分点逐条应答**: 子项(沟通机制/资源统筹/快速反应/增值服务)各自成段，明确呼应
+结果: 服务方案 1200→**2599字**(+116%), 质量控制 800→**1895字**(+137%), 验证分 58→64
 
 #### P0-2 Word 排版专业化
 
@@ -182,16 +179,19 @@ Embedding: BAAI/bge-small-zh-v1.5 (本地)
 
 ---
 
-## 六、最近测试结果 (4/29 国开投资律所选聘项目)
+## 六、最近测试结果 (4/29 v2.2.1-narrative-enhance)
 
 ```
-Pass 1: 7 required docs, 8 rejection conditions, 9 evaluation criteria
+Pass 1: 7 required docs, 7 rejection conditions, 9 evaluation criteria
 Pass 2: 11 sections, 4 with rejection risk
-Pass 3: rejection 8/8 ✅, evaluation 9/9 ✅ (含 auto-complete 2 章节)
+Pass 3: rejection 7/7, evaluation 8/9 (含 auto-complete 2 章节)
 Pass 3d: Generated 2 deviation tables (商务5项 + 技术4项)
-Generation: 15 sections, ~79 pages
+Generation: 15 sections, ~76 pages
   - 偏离表: 0.0s (预填直出)
   - 数据驱动: 律所业绩 6项+20图, 团队 8人+32图
-  - LLM 生成: 服务方案 (60分评分注入), 质量控制 (20分评分注入)
-Verification: WARNING (score=58, errors=0, warnings=14)
+  - LLM 生成:
+    - 服务方案: 2599字 (40分, service_plan prompt + company_profile 618字)
+    - 质量控制: 1895字 (20分, quality_control prompt + company_profile 618字)
+  - Reference sections 自动积累: 2条 (service_plan + quality_control)
+Verification: WARNING (score=64, errors=0, warnings=12)
 ```
