@@ -1,6 +1,6 @@
 # 智能投标系统 — 开发进度与产品规划对照
 
-> 更新时间: 2026-04-14 17:28
+> 更新时间: 2026-04-29 17:35
 
 ---
 
@@ -8,98 +8,67 @@
 
 ### 1. 核心管线（已上线）
 
-| 功能 | 状态 | 说明 | 提交 |
-|------|------|------|------|
-| 📄 招标文件解析 (python-docx) | ✅ 完成 | 支持 .docx，提取段落+表格+标题层级 | `1600152` |
-| 🤖 AI 两轮分析 (Pass 1 + Pass 2) | ✅ 完成 | Pass1 深度分析 → Pass2 生成大纲 | `d247849` |
-| ✅ Pass 3 校验 | ✅ 完成 | 确定性校验：废标/评分/文件覆盖率 | `f3f4307` |
-| 🔍 BGE 语义检索 (Self-RAG) | ✅ 完成 | bge-small-zh-v1.5 本地向量索引 | `4f80a4f` |
-| 📝 逐章节 AI 生成 | ✅ 完成 | 选择性生成，实时进度 | `1600152` |
-| 📥 docx 输出下载 | ✅ 完成 | 自动组装 Word 文件 | `1600152` |
-| 🎨 章节类型智能分类 | ✅ 完成 | BGE embedding 分类 + LLM 辅助 | `4f80a4f` |
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 📄 招标文件解析 (python-docx) | ✅ | 支持 .docx，提取段落+表格+标题层级 |
+| 🤖 AI 三轮分析 (Pass 1+2+3) | ✅ | Pass1 深度分析 → Pass2 大纲生成 → Pass3 校验联动 |
+| 📊 Pass 3d 偏离表自动生成 | ✅ | 商务/技术/价格 偏离表，0.0s 生成 |
+| 🔍 BGE 语义检索 (Self-RAG) | ✅ | bge-small-zh-v1.5 本地向量索引 |
+| 📝 逐章节 AI 生成 | ✅ | 5种策略: narrative/form/table/qualification/deviation_table |
+| 📥 docx 输出下载 | ✅ | 自动组装 Word 文件 |
+| 🎨 章节类型智能分类 | ✅ | BGE embedding 分类 + LLM 辅助 |
 
-### 2. 4/2-4/7 会话新增/增强
-
-| 功能 | 状态 | 说明 | 提交 |
-|------|------|------|------|
-| 🏆 评分深度提取 (含表格) | ✅ 完成 | 表格渲染为 Markdown 注入 LLM | `8e7a39a` |
-| 🔴 废标项深度提取 | ✅ 完成 | 独立提取废标章节+表格 | `8e7a39a` |
-| 🔗 评分/废标 → 章节联动 | ✅ 完成 | section_linkage 正向索引 | `8e7a39a` |
-| 📡 SSE 实时进度推送 | ✅ 完成 | asyncio.Queue + progress_callback | `8e7a39a` |
-| 🌊 Qwen 流式调用 | ✅ 完成 | 替换 generate→stream，实时显示 AI 输出 | |
-| 🔄 Pass 1 重试机制 | ✅ 完成 | 自动重试 1 次，3 秒间隔 | `8e7a39a` |
-| 📊 分值校验 (score_warnings) | ✅ 完成 | 子项分值求和 vs 大项总分校验 | `8e7a39a` |
-| 🖥️ 前端联动展示 | ✅ 完成 | 左侧大纲 + 右侧卡片显示评分/废标 | `8e7a39a` |
-
-### 3. 4/7-4/14 会话新增/增强
+### 2. 评分/废标体系
 
 | 功能 | 状态 | 说明 |
 |------|------|------|
-| 🗑 任务删除 API | ✅ 完成 | DELETE /tasks/{id} 5步清理 + 幽灵任务兼容 |
-| 📝 历史任务管理页 | ✅ 完成 | TaskHistory.jsx 删除+缓存+下载 |
-| 🎨 前端体验升级 | ✅ 完成 | 全文预览+章节管理+素材徽标 |
-| 🔍 图片 OCR 增强 | ✅ 完成 | 证书图片自动 OCR + 缓存复用 |
-| 🏅 资质去重修复 | ✅ 完成 | name\|\|holder 组合键，同名证书不再覆盖 |
-| 🏢 资质分类 | ✅ 完成 | cert_type: personal/company 自动标注 |
-| 🔗 简历-证书关联 | ✅ 完成 | resume.certifications 自动关联 |
-| 🏷️ 前端证书标签 | ✅ 完成 | 简历行🏅标签 + 资质行👤/🏢分类 |
-| 📊 日志可观测性 | ✅ 完成 | 全局中间件 + 端点级日志 |
+| 🏆 评分深度提取 (含表格) | ✅ | 表格渲染为 Markdown 注入 LLM |
+| 🔴 废标项深度提取 | ✅ | 独立提取废标章节+表格 |
+| 🔗 评分/废标 → 章节联动 | ✅ | section_linkage 正向索引 |
+| 📊 评分覆盖率 9/9 | ✅ | EVAL_TO_SECTION_MAP 确定性映射 |
+| 💉 评分标准注入生成 Prompt | ✅ | LLM 生成时知道具体得分要求 |
+| 📋 偏离表自动生成 | ✅ | Pass 3d 按评分分类生成，章节编号准确 |
 
-### 3. 测试验证结果 (8.31.docx)
+### 3. 素材库体系
 
-```
-Pass 1 results: 21 required docs, 6 rejection conditions, 3 evaluation criteria
-Pass 2 results: 21 sections, 11 with rejection risk
-Pass 3 verification: rejection 6/6 ✅, evaluation 3/3 ✅, documents 21/21 ✅
-Section linkage: 7 sections linked to scoring/rejection items
-Section type classifier corrected 1 types
-Extraction complete: 2 volumes, 21 sections
-```
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 📚 素材库管理 (MaterialPanel) | ✅ | 上传/导入/人员/项目/资质 |
+| 🔍 智能素材匹配 (MaterialMatcher) | ✅ | entity_type 分流 + 排序策略 |
+| 🏷️ 资质分类 entity_type | ✅ | firm_license/firm_audit/award/personal_cert/other_qual |
+| 🔗 Parser 证件归属合并 | ✅ | 杂质记录自动合并到正确人名 |
+| 🏅 资质分类 + 简历-证书关联 | ✅ | cert_type + resume.certifications |
+| 🖼 图片 OCR + 缓存 | ✅ | Qwen VL API + image_meta 表 |
+| 🎯 素材范围过滤 | ✅ | 章节只附相关素材图片 |
+
+### 4. 架构改进
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 📦 Prompt 独立模块 | ✅ | app/core/prompts/ (13 个 prompt) |
+| 🧹 章节去重三重防护 | ✅ | BANNED_NAMES + TOPIC_GROUPS + sibling_titles |
+| 💾 投标任务持久化 | ✅ | BiddingStore SQLite |
+| 📊 日志可观测性 | ✅ | 全局中间件 + 端点级日志 |
+
+### 5. 前端体验
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 🗑 历史任务管理页 | ✅ | 删除+缓存清理+下载 |
+| 📄 完成态全文预览 | ✅ | 非截断 + 章节管理面板 |
+| 📎 大纲素材匹配徽标 | ✅ | 每章显示匹配素材数 |
+| 🏷️ 前端证书标签 | ✅ | 简历行🏅标签 + 资质行👤/🏢分类 |
 
 ---
 
-## 二、产品功能模块总览
+## 二、版本历史
 
-```mermaid
-graph TB
-    subgraph "当前已实现"
-        A[📄 招标文件上传] --> B[🔍 文档解析]
-        B --> C[🤖 AI 分析<br/>Pass1 深度分析<br/>Pass2 大纲生成<br/>Pass3 校验联动]
-        C --> D[📊 结构确认<br/>评分/废标联动展示]
-        D --> E[📝 逐章节生成]
-        E --> F[📥 Word 下载]
-        
-        G[📚 素材库管理] --> G1[上传/导入]
-        G --> G2[人员/项目/资质]
-        G --> G3[Diff 审核]
-    end
-    
-    subgraph "开发中 / 待做"
-        H[🎯 素材智能注入<br/>MaterialMatcher]
-        I[📈 报价策略分析]
-        J[🔄 多版本对比]
-        K[👥 协同编辑]
-    end
-    
-    C -.-> H
-    G -.-> H
-    H -.-> E
-    
-    style A fill:#2d5016
-    style B fill:#2d5016
-    style C fill:#2d5016
-    style D fill:#2d5016
-    style E fill:#2d5016
-    style F fill:#2d5016
-    style G fill:#2d5016
-    style G1 fill:#2d5016
-    style G2 fill:#2d5016
-    style G3 fill:#2d5016
-    style H fill:#7c4a03
-    style I fill:#4a1c1c
-    style J fill:#4a1c1c
-    style K fill:#4a1c1c
-```
+| 标签 | 日期 | 里程碑 |
+|------|------|--------|
+| `v2.1.0` | 4/07 | 基础管线完成 |
+| `v2.1.2-stable` | 4/14 | 任务管理+OCR+前端体验 |
+| `backup-before-prompt-separation` | 4/28 | Prompt 分离前备份 |
+| `v2.2.0-deviation` | **4/29** | **偏离表 + 评分精确匹配** |
 
 ---
 
@@ -109,42 +78,44 @@ graph TB
 
 | # | 功能 | 说明 | 状态 |
 |---|------|------|------|
-| 1 | **素材智能注入** | MaterialMatcher 4 步策略 | ✅ 已完成 |
-| 2 | **生成质量提升** | 数据驱动章节生成策略 | 🔥 下一步 |
-| 3 | **资质分类+简历关联** | cert_type + resume.certifications | ✅ 已完成 |
+| 1 | **前端素材校验界面** | 证件状态列 + 补图 UI + 健康度面板 | 🔜 待做 |
+| 2 | **素材推荐确认页** | 大纲确认后，用户选择/确认素材 | 🔜 待做 (方案已批准) |
 
-### P1 — 短期 (1-2 周)
-
-| # | 功能 | 说明 | 预估 |
-|---|------|------|------|
-| 4 | **素材确认界面** | 匹配结果人工确认 UI | 1-2 天 |
-| 5 | **多招标文件格式** | 支持 .pdf（OCR）、.doc（转换） | 2 天 |
-| 6 | **架构重构** | bidding.py 拆分为 BiddingOrchestrator | 2-3 天 |
-| 7 | **前端 UI 优化** | 评分详情弹窗、废标条件高亮、进度动画 | 1-2 天 |
-
-### P2 — 中期 (2-4 周)
+### P1 — 短期
 
 | # | 功能 | 说明 | 预估 |
 |---|------|------|------|
-| 8 | **报价策略** | 基于历史中标数据分析合理报价区间 | 3-5 天 |
-| 9 | **协同编辑** | 多人在线编辑投标文件，实时同步 | 5-7 天 |
-| 10 | **版本管理** | 投标文件多版本对比和回滚 | 2-3 天 |
-| 11 | **模板库** | 常用投标文件模板，一键套用 | 2-3 天 |
+| 3 | **分所覆盖情况** | 评分项"分所覆盖"目前 ❌ 未匹配，需新增章节或子章节 | 0.5 天 |
+| 4 | **多招标文件格式** | 支持 .pdf（OCR）、.doc（转换） | 2 天 |
+| 5 | **架构重构** | bidding.py 拆分为 BiddingOrchestrator | 2-3 天 |
+
+### P2 — 中期
+
+| # | 功能 | 说明 | 预估 |
+|---|------|------|------|
+| 6 | **报价策略** | 基于历史中标数据分析合理报价区间 | 3-5 天 |
+| 7 | **版本管理** | 投标文件多版本对比和回滚 | 2-3 天 |
+| 8 | **模板库** | 常用投标文件模板，一键套用 | 2-3 天 |
 
 ---
 
 ## 四、技术架构概要
 
 ```
-数据流: 
+数据流:
   招标文件(.docx)
     → tender_parsing (python-docx, 表格提取)
-    → requirement_extraction (3-Pass: 分析→结构→校验)
+    → requirement_extraction (4-Pass)
       ├─ Pass 1: Qwen 流式分析 (废标+评分+资质)
       ├─ Pass 2: Qwen 流式生成大纲
-      └─ Pass 3: 确定性校验 + section_linkage
-    → content_generation (逐章节, Self-RAG 增强)
-    → docx_assembly (Word 输出)
+      ├─ Pass 3: 确定性校验 + section_linkage + 自动补全
+      └─ Pass 3d: 偏离表自动生成 (商务/技术/价格)
+    → content_generation (逐章节, 5种策略)
+      ├─ narrative: LLM + Self-RAG + 评分注入
+      ├─ form/table: 模板匹配
+      ├─ qualification: 素材直出 (图片嵌入)
+      └─ deviation_table: 预填内容直出
+    → docx_assembly (Word 输出, ~77页)
 
 前端: React + Vite (5173) → 后端: FastAPI + uvicorn (8001)
 LLM: Qwen-Max (DashScope API)
@@ -157,10 +128,29 @@ Embedding: BAAI/bge-small-zh-v1.5 (本地)
 
 | 模块 | 路径 |
 |------|------|
-| 后端入口 | [main.py](file:///Users/mason/Desktop/code%20/angenimi-agentic/lawfirmAGplat/agentic_on_arch/app/main.py) |
-| 投标 API | [bidding.py](file:///Users/mason/Desktop/code%20/angenimi-agentic/lawfirmAGplat/agentic_on_arch/app/api/bidding.py) |
-| 需求提取 | [requirement_extraction.py](file:///Users/mason/Desktop/code%20/angenimi-agentic/lawfirmAGplat/agentic_on_arch/app/core/skills/builtin/requirement_extraction.py) |
-| 文档解析 | [tender_parsing.py](file:///Users/mason/Desktop/code%20/angenimi-agentic/lawfirmAGplat/agentic_on_arch/app/core/skills/builtin/tender_parsing.py) |
-| Qwen LLM | [qwen.py](file:///Users/mason/Desktop/code%20/angenimi-agentic/lawfirmAGplat/agentic_on_arch/app/core/llm/qwen.py) |
-| 前端投标页 | [BiddingAgent.jsx](file:///Users/mason/Desktop/code%20/angenimi-agentic/lawfirmAGplat/platform/src/agents/BiddingAgent.jsx) |
-| 素材面板 | [MaterialPanel.jsx](file:///Users/mason/Desktop/code%20/angenimi-agentic/lawfirmAGplat/platform/src/agents/MaterialPanel.jsx) |
+| 后端入口 | `app/main.py` |
+| 投标 API | `app/api/bidding.py` |
+| 需求提取 | `app/core/skills/builtin/requirement_extraction.py` |
+| 内容生成 | `app/core/skills/builtin/content_generation.py` |
+| 素材库 | `app/core/skills/builtin/material_store.py` |
+| 素材匹配 | `app/core/skills/builtin/material_matcher.py` |
+| 文档解析 | `app/core/skills/builtin/tender_parsing.py` |
+| Prompt 中心 | `app/core/prompts/__init__.py` |
+| 前端投标页 | `platform/src/agents/BiddingAgent.jsx` |
+| 素材面板 | `platform/src/agents/MaterialPanel.jsx` |
+
+---
+
+## 六、最近测试结果 (4/29 国开投资律所选聘项目)
+
+```
+Pass 1: 7 required docs, 8 rejection conditions, 9 evaluation criteria
+Pass 2: 11 sections, 4 with rejection risk
+Pass 3: rejection 8/8 ✅, evaluation 9/9 ✅ (含 auto-complete 2 章节)
+Pass 3d: Generated 2 deviation tables (商务5项 + 技术4项)
+Generation: 15 sections, ~79 pages
+  - 偏离表: 0.0s (预填直出)
+  - 数据驱动: 律所业绩 6项+20图, 团队 8人+32图
+  - LLM 生成: 服务方案 (60分评分注入), 质量控制 (20分评分注入)
+Verification: WARNING (score=58, errors=0, warnings=14)
+```

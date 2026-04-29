@@ -1,6 +1,6 @@
 # 智能投标系统 — 上下文恢复文档
 
-> 最后更新: 2026-04-14 17:28 (会话 ID: a89a8782)
+> 最后更新: 2026-04-29 17:35 (会话 ID: a89a8782)
 
 ---
 
@@ -66,105 +66,149 @@
 
 ---
 
-## 三、下一步计划
+## 三、4/15-4/28 完成的工作 (会话 bc72143d)
+
+### 12. 资质分类 entity_type ✅
+- `material_store.py`: `materials` 表增加 `entity_type` 字段
+- 5 类分类: `firm_license` / `firm_audit` / `award` / `personal_cert` / `other_qual`
+- 83 条 qualifications 分类完成
+- **效果**: 荣誉章节只放奖项图片，资格审查只放执照图片
+
+### 13. Parser 证件归属 ✅
+- `bid_document_parser.py`: `_consolidate_resumes()` 提取后合并
+- 修复 7 条杂质记录 (钟雨/范彩云/董宇霆)
+- 证件图片正确归到人名下
+
+### 14. 智能素材匹配排序 ✅
+- `material_matcher.py`: 排序策略 → 有图片优先 → 合伙人优先 → 年限优先
+- entity_type 分流查询: 荣誉→award, 资格审查→firm_license+firm_audit
+- 团队章节 8 人各有证件图，共 32 张图片嵌入
+
+### 15. Prompt 分离到独立模块 ✅
+- 新建 `app/core/prompts/` 目录
+  - `__init__.py` — Prompt 注册中心 + `get_prompt()` API
+  - `content_generation_prompts.py` — 7 个内容生成 prompt
+  - `requirement_prompts.py` — 6 个需求分析 prompt
+- **瘦身效果**: content_generation.py -17%, requirement_extraction.py -16%
+- 备份标签: `backup-before-prompt-separation`
+
+### 16. 章节去重三重防护 ✅
+- Layer 1: STRUCTURE_PROMPT 禁止大杂烩章节名 + 评分项一对一映射
+- Layer 2: Pass 2b `_BANNED_SECTION_NAMES` 代码自动删除
+- Layer 3: Pass 3 `_TOPIC_GROUPS` 9 组主题词族群语义去重
+- Layer 4: `sibling_titles` 跨章节感知注入 LLM prompt
+- **效果**: 大杂烩章节 3→0，重复内容彻底消除
+
+### 17. 素材范围过滤 ✅
+- 章节只附相关素材图片，不再全量灌入
+- Prompt 注入层同步过滤
+
+### 18. 评分覆盖率提升 ✅
+- 4/9 → 9/9 评分项全覆盖
+- `EVAL_TO_SECTION_MAP` 确定性映射 + `_AGGREGATE_ITEMS` 聚合项处理
+- `_auto_complete_sections` 自动补全缺失章节
+
+### 19. 评分标准注入生成 Prompt ✅
+- 评分项的描述、分值、得分规则注入内容生成 Prompt
+- 生成时 LLM 知道具体评分标准，有针对性地写
+- 评分链接数据持久化到 section JSON
+
+---
+
+## 四、4/29 完成的工作 (本次会话)
+
+### 20. 偏离表自动生成 ✅
+- Pass 3d: 自动从评分项生成 商务/技术/价格 偏离表
+- 偏离表作为 `table` 类型章节插入大纲（form 章节之后）
+- 预填 `_deviation_table_content`，content_generation 直接使用，0.0s 生成
+
+### 21. 偏离表章节编号修正 ✅
+- 偏离表插入后重建 `order_map`
+- `_patch_deviation_content()` 用正确编号重写表格内容
+- 修复前: "荣誉奖项→第5章"(错), 修复后: "荣誉奖项→第7章"(对)
+
+### 22. 评分项精确匹配修复 ✅
+- `_eval_match()` 优先使用 `EVAL_TO_SECTION_MAP` 确定性映射
+- 修复: "服务质量控制" 正确指向 "质量控制方案"（之前错误指向 "服务方案"）
+- 匹配优先级: EVAL_TO_SECTION_MAP → 直接匹配 → item_name 包含 → 同义词
+
+---
+
+## 五、当前版本标签
+
+| 标签 | 说明 |
+|------|------|
+| `v2.1.0` | 基础版本 |
+| `v2.1.0-s8-material-upload` | 素材上传版本 |
+| `v2.1.2-stable` | 2026-04-14 稳定版 |
+| `backup-before-prompt-separation` | Prompt 分离前备份 |
+| `v2.2.0-deviation` | ✅ **当前版本** — 偏离表 + 评分精确匹配 |
+
+---
+
+## 六、下一步计划
 
 ### 优先级排序
 
 | 顺序 | 任务 | 状态 |
 |------|------|------|
-| **①** | 评分细则深度提取 + 废标提取增强 + 大纲联动 | ✅ 已完成 |
-| **②** | 素材库内容引用到投标文件 | ✅ 已完成 |
-| **③** | 投标任务持久化 (BiddingStore) | ✅ 已完成 |
-| **④** | 历史任务列表页面 (前端) | ✅ 已完成 |
-| **⑤** | 资质分类 + 简历-证书关联 | ✅ 已完成 |
-| **⑥** | 大纲页素材匹配数量展示 | ✅ 已完成 |
-| **⑦** | 内容质量: 数据驱动章节生成策略 | 🔥 下一步 |
-| **⑧** | 素材确认: 匹配结果人工确认界面 | 待做 |
-| **⑨** | 架构: bidding.py 拆分为 BiddingOrchestrator | 待做 |
+| **①** | 评分细则深度提取 + 大纲联动 | ✅ 已完成 |
+| **②** | 素材库知识层改造 (entity_type + 排序) | ✅ 已完成 |
+| **③** | Prompt 分离到独立模块 | ✅ 已完成 |
+| **④** | 章节去重三重防护 | ✅ 已完成 |
+| **⑤** | 评分覆盖率 9/9 + 评分注入 prompt | ✅ 已完成 |
+| **⑥** | 偏离表自动生成 | ✅ 已完成 |
+| **⑦** | 前端素材校验界面 (Phase 4) | 🔜 待做 |
+| **⑧** | 素材推荐确认页 (智能推荐+用户交互) | 🔜 待做 |
+| **⑨** | 架构: bidding.py 拆分 | 待做 |
 
-### ① 评分/废标提取增强 — 详细设计
+### Phase 4: 前端素材校验界面
+- MaterialPanel.jsx 证件状态列: ✅身份证 ✅律师证 ❌学历
+- 新增 API: person-cert 查询/上传
+- 素材健康度面板
 
-**问题现状**:
-- 评分标准常以表格形式出现在招标文件中
-- python-docx `_extract_scoring_sections()` 只提取段落文本, **丢失表格数据**
-- LLM 从散乱文本中提取 sub_criteria 准确率低
-- 大纲页只展示汇总数字, 不展示每章关联的评分/废标详情
-
-**解决方案: 三阶段混合**
-
-```
-阶段1: 代码预处理（确定性, 不用LLM）
-  ├── python-docx doc.tables 提取表格为结构化行列数据
-  ├── 关键词定位"评标办法""否决条件"章节
-  └── BGE 相似度辅助定位评标相关段落
-
-阶段2: LLM 理解（给结构化数据, 非散乱文本）
-  ├── 输入: 预处理好的表格结构 + 段落文本
-  └── 输出: 标准化 sub_criteria JSON
-
-阶段3: 代码校验（确定性后处理）
-  ├── 子项分值之和 == 大项分值?
-  ├── 得分规则完整性检查
-  ├── 废标条件 related_document 完整性
-  └── 正向索引: section → [关联评分项 + 废标条件]
-```
-
-**前端大纲联动**:
-```
-📄 第5章 项目实施方案                    [narrative] ☑️
-   › 服务目标与总体思路
-   › 实施步骤与时间安排
-   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-   🏆 关联评分: 技术方案 15分
-      ├─ 方案完整性 8分
-      └─ 创新性 7分
-   🔴 关联废标: 未提交实施方案视为无效投标
-```
-
-**改动文件**:
-| 文件 | 改动 |
-|------|------|
-| `requirement_extraction.py` | `_extract_scoring_sections()` 增加表格提取; Pass 3 加正向索引 |
-| `tender_parsing.py` | 提取表格结构化数据传递给后续步骤 |
-| `BiddingAgent.jsx` | 大纲页每章展示关联评分子项+废标条件 |
+### 素材推荐确认页 (4/14 方案已批准)
+- 大纲确认后 → 新增「素材推荐」步骤 → 再生成
+- 全局素材池: 团队/业绩/资质 三区块
+- AI 预选 + 匹配度打分 + 差距预警
 
 ---
 
-## 四、关键文件路径
+## 七、关键文件路径
 
 ### 后端 (agentic_on_arch/)
 | 文件 | 说明 |
 |------|------|
-| `app/api/bidding.py` | 投标 API 主路由 (~2050行, SSE + 缓存 + 素材 + 删除) |
-| `app/core/skills/builtin/requirement_extraction.py` | V3 多轮分析 (Pass1+2+3) |
-| `app/core/skills/builtin/content_generation.py` | 内容生成 (5种prompt + 素材注入) |
-| `app/core/skills/builtin/material_store.py` | 素材库 SQLite (5张表 + image_meta) |
-| `app/core/skills/builtin/material_matcher.py` | 4步素材匹配引擎 |
-| `app/core/skills/builtin/bid_document_parser.py` | 历史标书解析 (OCR+分类+提取+去重) |
+| `app/api/bidding.py` | 投标 API 主路由 (SSE + 缓存 + 素材 + 删除) |
+| `app/core/skills/builtin/requirement_extraction.py` | V3 多轮分析 (Pass1+2+3+3d偏离表) |
+| `app/core/skills/builtin/content_generation.py` | 内容生成 (5种策略 + 素材注入 + 偏离表直出) |
+| `app/core/skills/builtin/material_store.py` | 素材库 SQLite (5张表 + image_meta + entity_type) |
+| `app/core/skills/builtin/material_matcher.py` | 素材匹配 (entity_type 分流 + 排序策略) |
+| `app/core/skills/builtin/bid_document_parser.py` | 历史标书解析 (OCR+分类+证件合并) |
 | `app/core/skills/builtin/tender_parsing.py` | 招标文件 Word 解析 |
 | `app/core/skills/builtin/bidding_store.py` | 投标任务 SQLite 持久化 |
-| `docs/ARCHITECTURE_REVIEW.md` | 技术架构审查报告 (定期更新) |
+| `app/core/prompts/__init__.py` | Prompt 注册中心 + get_prompt() API |
+| `app/core/prompts/content_generation_prompts.py` | 7 个内容生成 prompt |
+| `app/core/prompts/requirement_prompts.py` | 6 个需求分析 prompt |
 
 ### 前端 (platform/)
 | 文件 | 说明 |
 |------|------|
-| `src/agents/BiddingAgent.jsx` | 投标 Agent 主组件 (~90KB) |
-| `src/agents/MaterialPanel.jsx` | 素材库管理面板 (~83KB, 含证书标签) |
-| `src/pages/TaskHistory.jsx` | 历史任务管理 (删除+清缓存+下载) |
+| `src/agents/BiddingAgent.jsx` | 投标 Agent 主组件 |
+| `src/agents/MaterialPanel.jsx` | 素材库管理面板 |
+| `src/pages/TaskHistory.jsx` | 历史任务管理 |
 
 ### 数据
 | 路径 | 说明 |
 |------|------|
 | `data/tasks/{task_id}/sections/` | 章节缓存 |
-| `data/materials/materials.db` | 素材库 SQLite (materials+companies+image_meta+...) |
-| `data/materials/images/` | 提取的证书/资质图片 (hash命名) |
-| `data/bidding/bidding.db` | 投标任务记录 SQLite |
+| `data/materials/materials.db` | 素材库 SQLite |
+| `data/materials/images/` | 证书/资质图片 (hash命名) |
+| `data/bidding/bidding.db` | 投标任务记录 |
 
 ---
 
-## 四、环境信息
-
-## 五、环境信息
+## 八、环境信息
 
 | 项目 | 值 |
 |------|------|
