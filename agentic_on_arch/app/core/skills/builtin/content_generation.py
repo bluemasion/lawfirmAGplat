@@ -533,6 +533,53 @@ class ContentGenerationSkill(BaseSkill):
                             f"  Company material summary SKIPPED for '{title}': "
                             f"scope rule = [] (pure LLM writing)"
                         )
+                    elif allowed_cats is not None and "company_profile" in allowed_cats:
+                        # Special: inject company profile summary (not full materials)
+                        profile = self._data_retrieval.get_company_profile()
+                        cp_parts = ["\n【我方律所核心信息（真实数据，必须在方案中引用）】"]
+                        cp_parts.append(
+                            f"- 律所名称：{profile.get('company_name', '?')}，"
+                            f"成立于{profile.get('established_year', '?')}年"
+                        )
+                        highlight = profile.get('history_highlight', '')
+                        if highlight:
+                            cp_parts.append(f"- 历史地位：{highlight}")
+                        cp_parts.append(
+                            f"- 规模：执业律师{profile.get('lawyer_count', '?')}余名，"
+                            f"合伙人{profile.get('partner_count', '?')}余名"
+                        )
+                        branch_count = profile.get('branch_count', 0)
+                        if branch_count:
+                            branches = profile.get('branch_offices', [])
+                            branch_str = '、'.join(branches[:8])
+                            if len(branches) > 8:
+                                branch_str += f"等{branch_count}个分所"
+                            cp_parts.append(f"- 分所网络：{branch_str}")
+                        key_clients = profile.get('key_clients', [])
+                        if key_clients:
+                            cp_parts.append(
+                                f"- 代表客户：{'、'.join(key_clients[:6])}"
+                            )
+                        strengths = profile.get('core_strengths', [])
+                        if strengths:
+                            cp_parts.append("\n【我方核心优势（请在方案中自然引用）】")
+                            for s in strengths:
+                                cp_parts.append(f"- {s}")
+                        mgmt = profile.get('management_systems', {})
+                        if mgmt:
+                            cp_parts.append("\n【我方管理制度（质量控制类章节必须引用）】")
+                            for k, v in mgmt.items():
+                                cp_parts.append(f"- {v}")
+                        structured_context = "\n".join(cp_parts)
+                        structured_context += (
+                            "\n\n⚠️ 重要：以上是我方律所的真实数据和制度。"
+                            "请在方案中自然引用这些信息（特别是分所数、团队规模、"
+                            "管理制度），不要使用泛泛的承诺性语言。\n"
+                        )
+                        logger.info(
+                            f"  Company profile injected for '{title}': "
+                            f"{len(structured_context)}字"
+                        )
                     else:
                         company_context_parts = []
 
@@ -711,6 +758,7 @@ class ContentGenerationSkill(BaseSkill):
                 "\n\n━━━ 本章节对应的评分标准 ━━━",
                 f"⚠️ 本章节共对应 {linked_total_score} 分，请严格按照以下评分标准组织内容："
             ]
+            has_sub_criteria = False
             for si in linked_scoring:
                 item = si.get('item', '')
                 score = si.get('max_score', 0)
@@ -719,14 +767,35 @@ class ContentGenerationSkill(BaseSkill):
                 if desc:
                     scoring_parts.append(f"评分标准: {desc}")
                 # Include sub-criteria if available
-                for sub in si.get('sub_criteria', []):
+                subs = si.get('sub_criteria', [])
+                for sub in subs:
                     sub_name = sub.get('name', sub) if isinstance(sub, dict) else sub
+                    sub_score = sub.get('score', '') if isinstance(sub, dict) else ''
                     scoring_parts.append(f"  - {sub_name}")
+                # Auto-generate mandatory section headings from sub_criteria
+                if subs and len(subs) >= 2:
+                    has_sub_criteria = True
+                    scoring_parts.append(
+                        f"\n📋 你必须按以下子评分项分段撰写，每段用二级标题（##）："
+                    )
+                    for sub in subs:
+                        sub_name = sub.get('name', sub) if isinstance(sub, dict) else sub
+                        sub_score = sub.get('score', '') if isinstance(sub, dict) else ''
+                        score_label = f"（{sub_score}分）" if sub_score else ""
+                        scoring_parts.append(f"  → ## {sub_name}{score_label}")
+                    scoring_parts.append(
+                        "每个子项段落至少 300 字，包含：方法论 + 具体措施 + 量化承诺。"
+                    )
             scoring_parts.append(
                 "\n❗ 写作要求：内容必须逐项回应以上评分标准，"
                 "确保评委能直接找到得分点。"
                 "每个评分项应有对应的内容段落，不要遗漏任何评分点。"
             )
+            if has_sub_criteria:
+                scoring_parts.append(
+                    "⚠️ 每个子评分项必须有独立的二级标题(##)段落，"
+                    "评委会按子项逐一打分！"
+                )
             scoring_context = "\n".join(scoring_parts)
             logger.info(f"  Scoring context injected: {len(scoring_context)}字")
 
@@ -806,10 +875,11 @@ class ContentGenerationSkill(BaseSkill):
         "资质": ["qualifications"],
         "荣誉": ["qualifications"],
         "奖项": ["qualifications"],
-        # 方案类: 不注入任何素材（纯LLM写方案）
-        "方案": [],
-        "质量": [],
-        "控制": [],
+        # 方案类: 注入公司概要（非全量素材，给LLM律所特色数据）
+        "方案": ["company_profile"],
+        "质量": ["company_profile"],
+        "控制": ["company_profile"],
+        # 声明类: 不注入素材（纯模板）
         "措施": [],
         "承诺": [],
     }
