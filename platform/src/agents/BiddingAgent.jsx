@@ -130,6 +130,7 @@ export default function BiddingAgent() {
             const reader = res.body.getReader();
             const decoder = new TextDecoder();
             let buffer = '';
+            let receivedComplete = false;
 
             while (true) {
                 const { done, value } = await reader.read();
@@ -156,6 +157,7 @@ export default function BiddingAgent() {
                         } else if (ev.type === 'section') {
                             updateLastAiMsg(`   ${ev.icon || '📄'} ${ev.title}  → ${ev.type}`);
                         } else if (ev.type === 'complete') {
+                            receivedComplete = true;
                             setTaskId(ev.task_id);
                             setRequirements(ev.requirements);
 
@@ -180,9 +182,101 @@ export default function BiddingAgent() {
                     } catch { }
                 }
             }
+
+            // ── SSE fallback recovery ──
+            // If stream ended without receiving 'complete' event, poll backend
+            if (!receivedComplete) {
+                console.warn('[BiddingAgent] SSE stream ended without complete event, trying recovery...');
+                updateLastAiMsg('\n⏳ 正在恢复解析结果...');
+                await new Promise(r => setTimeout(r, 3000));
+                // Poll for latest task
+                for (let attempt = 0; attempt < 5; attempt++) {
+                    try {
+                        const tasksRes = await fetch(`${API_BASE}/api/bidding/tasks`);
+                        const tasksData = await tasksRes.json();
+                        const tasks = tasksData.data || [];
+                        // Find the most recent task (created in last 15 min)
+                        const recent = tasks.find(t => {
+                            const age = (Date.now() / 1000) - (t.created_at || 0);
+                            return age < 900;
+                        });
+                        if (recent) {
+                            // Fetch full task detail with requirements
+                            const detailRes = await fetch(`${API_BASE}/api/bidding/tasks/${recent.task_id}`);
+                            const detailData = await detailRes.json();
+                            if (detailData.success && detailData.data?.requirements?.volumes?.length > 0) {
+                                const task = detailData.data;
+                                console.log('[BiddingAgent] Recovery found task:', task.task_id);
+                                setTaskId(task.task_id);
+                                setRequirements(task.requirements);
+                                const checks = {};
+                                (task.requirements?.volumes || []).forEach((v, vi) => {
+                                    (v.sections || []).forEach((_, si) => {
+                                        checks[`${vi}-${si}`] = true;
+                                    });
+                                });
+                                setSectionChecked(checks);
+                                setPhase('confirming');
+                                const vols = task.requirements?.volumes || [];
+                                const totalSecs = vols.reduce((s, v) => s + (v.sections?.length || 0), 0);
+                                updateLastAiMsg(`\n✅ 解析已恢复! 共 ${totalSecs} 个章节`);
+                                addMsg('ai', '招标文件解析完成，请确认结构后开始生成。', 'action');
+                                receivedComplete = true;
+                                break;
+                            }
+                        }
+                    } catch (e) { console.error('Recovery poll failed:', e); }
+                    await new Promise(r => setTimeout(r, 3000));
+                }
+                if (!receivedComplete) {
+                    updateLastAiMsg('\n❌ 解析连接中断，请刷新页面重试');
+                    setPhase('idle');
+                }
+            }
         } catch (err) {
-            addMsg('ai', '❌ 上传失败: ' + err.message);
-            setPhase('idle');
+            // ── Same fallback on fetch error ──
+            console.warn('[BiddingAgent] SSE fetch error, trying recovery...', err.message);
+            updateLastAiMsg('\n⏳ 连接中断，正在恢复...');
+            await new Promise(r => setTimeout(r, 3000));
+            try {
+                const tasksRes = await fetch(`${API_BASE}/api/bidding/tasks`);
+                const tasksData = await tasksRes.json();
+                const tasks = tasksData.data || [];
+                const recent = tasks.find(t => {
+                    const age = (Date.now() / 1000) - (t.created_at || 0);
+                    return age < 900;
+                });
+                if (recent) {
+                    const detailRes = await fetch(`${API_BASE}/api/bidding/tasks/${recent.task_id}`);
+                    const detailData = await detailRes.json();
+                    if (detailData.success && detailData.data?.requirements?.volumes?.length > 0) {
+                        const task = detailData.data;
+                        setTaskId(task.task_id);
+                        setRequirements(task.requirements);
+                        const checks = {};
+                        (task.requirements?.volumes || []).forEach((v, vi) => {
+                            (v.sections || []).forEach((_, si) => {
+                                checks[`${vi}-${si}`] = true;
+                            });
+                        });
+                        setSectionChecked(checks);
+                        setPhase('confirming');
+                        const vols = task.requirements?.volumes || [];
+                        const totalSecs = vols.reduce((s, v) => s + (v.sections?.length || 0), 0);
+                        updateLastAiMsg(`\n✅ 解析已恢复! 共 ${totalSecs} 个章节`);
+                        addMsg('ai', '招标文件解析完成，请确认结构后开始生成。', 'action');
+                    } else {
+                        addMsg('ai', '❌ 上传失败: ' + err.message);
+                        setPhase('idle');
+                    }
+                } else {
+                    addMsg('ai', '❌ 上传失败: ' + err.message);
+                    setPhase('idle');
+                }
+            } catch {
+                addMsg('ai', '❌ 上传失败: ' + err.message);
+                setPhase('idle');
+            }
         } finally {
             setProcessing(false);
         }

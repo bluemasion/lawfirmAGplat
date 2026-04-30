@@ -1298,6 +1298,24 @@ async def list_tasks():
     return {"success": True, "data": tasks}
 
 
+@router.get("/tasks/{task_id}")
+async def get_task_detail(task_id: str):
+    """获取单个任务完整数据（含 requirements）— 用于 SSE 断连恢复"""
+    task = _bid_store.get_task(task_id)
+    if not task:
+        return {"success": False, "message": f"任务 {task_id} 不存在"}
+    return {
+        "success": True,
+        "data": {
+            "task_id": task.get("task_id"),
+            "status": task.get("status"),
+            "tender_filename": task.get("tender_filename", ""),
+            "requirements": task.get("requirements"),
+            "created_at": task.get("created_at"),
+        },
+    }
+
+
 @router.delete("/tasks/{task_id}")
 async def delete_task(task_id: str):
     """删除投标任务 — 从数据库删除 + 清除缓存 + 删除输出文件"""
