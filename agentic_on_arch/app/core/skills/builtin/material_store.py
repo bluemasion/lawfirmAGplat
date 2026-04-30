@@ -116,6 +116,10 @@ _MIGRATION_SQL = [
     # reference_sections for historical winning bid sections RAG
     "CREATE TABLE IF NOT EXISTS reference_sections (id INTEGER PRIMARY KEY AUTOINCREMENT, company TEXT NOT NULL DEFAULT '', section_type TEXT NOT NULL DEFAULT '', title TEXT NOT NULL, content TEXT NOT NULL, source_file TEXT DEFAULT '', score_info TEXT DEFAULT '', quality_rating INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
     "CREATE INDEX IF NOT EXISTS idx_ref_sections_type ON reference_sections(section_type)",
+    # capability_tags for structured personnel profiles
+    "CREATE TABLE IF NOT EXISTS capability_tags (id INTEGER PRIMARY KEY AUTOINCREMENT, material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE, tag_category TEXT NOT NULL, tag_value TEXT NOT NULL, confidence REAL DEFAULT 1.0, source TEXT DEFAULT 'llm', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+    "CREATE INDEX IF NOT EXISTS idx_capability_tags_material ON capability_tags(material_id)",
+    "CREATE INDEX IF NOT EXISTS idx_capability_tags_category ON capability_tags(tag_category)",
 ]
 
 def _safe_add_column(conn, table, column, col_type, default=""):
@@ -1550,6 +1554,153 @@ class MaterialStore:
                         "action": "unchanged", key_field: key, "data": item,
                     })
         return results
+
+    # ── Capability Tags (Personnel Profiles) ──
+
+    def save_capability_tags(self, material_id: int, tags: list, source: str = "llm"):
+        # type: (int, list, str) -> int
+        """Save capability tags for a material (resume).
+        tags: [{"category": "practice_area", "value": "投资并购", "confidence": 0.9}, ...]
+        Returns number of tags saved.
+        """
+        conn = self._get_conn()
+        try:
+            # Clear existing tags from same source
+            conn.execute(
+                "DELETE FROM capability_tags WHERE material_id = ? AND source = ?",
+                (material_id, source),
+            )
+            count = 0
+            for tag in tags:
+                cat = tag.get("category", "")
+                val = tag.get("value", "")
+                conf = tag.get("confidence", 1.0)
+                if cat and val:
+                    conn.execute(
+                        "INSERT INTO capability_tags (material_id, tag_category, tag_value, confidence, source) VALUES (?, ?, ?, ?, ?)",
+                        (material_id, cat, val, conf, source),
+                    )
+                    count += 1
+            conn.commit()
+            logger.info(f"Saved {count} capability tags for material_id={material_id}")
+            return count
+        finally:
+            conn.close()
+
+    def get_capability_tags(self, material_id: int = None, person_name: str = None, company: str = None):
+        # type: (int, str, str) -> list
+        """Get capability tags for a material or person.
+        Returns list of {tag_category, tag_value, confidence, source}.
+        """
+        conn = self._get_conn()
+        try:
+            if material_id:
+                rows = conn.execute(
+                    "SELECT tag_category, tag_value, confidence, source FROM capability_tags WHERE material_id = ? ORDER BY tag_category, confidence DESC",
+                    (material_id,),
+                ).fetchall()
+            elif person_name:
+                # Join with materials to find by name
+                query = """
+                    SELECT ct.tag_category, ct.tag_value, ct.confidence, ct.source
+                    FROM capability_tags ct
+                    JOIN materials m ON ct.material_id = m.id
+                    WHERE m.category = 'resumes' AND m.name = ?
+                """
+                params = [person_name]
+                if company:
+                    query += " AND m.company_id = (SELECT id FROM companies WHERE name = ?)"
+                    params.append(company)
+                query += " ORDER BY ct.tag_category, ct.confidence DESC"
+                rows = conn.execute(query, params).fetchall()
+            else:
+                return []
+
+            return [
+                {"category": r["tag_category"], "value": r["tag_value"],
+                 "confidence": r["confidence"], "source": r["source"]}
+                for r in rows
+            ]
+        finally:
+            conn.close()
+
+    def search_by_capability(self, tag_category: str = None, tag_value: str = None, company: str = None):
+        # type: (str, str, str) -> list
+        """Search materials (people) by capability tags.
+        Returns list of {material_id, name, title, tags: [...]}.
+        """
+        conn = self._get_conn()
+        try:
+            query = """
+                SELECT DISTINCT m.id, m.name, m.data, m.company_id
+                FROM materials m
+                JOIN capability_tags ct ON ct.material_id = m.id
+                WHERE m.category = 'resumes'
+            """
+            params = []
+            if tag_category:
+                query += " AND ct.tag_category = ?"
+                params.append(tag_category)
+            if tag_value:
+                query += " AND ct.tag_value LIKE ?"
+                params.append(f"%{tag_value}%")
+            if company:
+                query += " AND m.company_id = (SELECT id FROM companies WHERE name = ?)"
+                params.append(company)
+
+            rows = conn.execute(query, params).fetchall()
+            results = []
+            for r in rows:
+                data = json.loads(r["data"]) if r["data"] else {}
+                # Get all tags for this person
+                tags = conn.execute(
+                    "SELECT tag_category, tag_value, confidence FROM capability_tags WHERE material_id = ? ORDER BY tag_category",
+                    (r["id"],),
+                ).fetchall()
+                results.append({
+                    "material_id": r["id"],
+                    "name": r["name"],
+                    "title": data.get("title", ""),
+                    "years": data.get("years_of_practice", ""),
+                    "specialty": data.get("specialty", ""),
+                    "tags": [
+                        {"category": t["tag_category"], "value": t["tag_value"], "confidence": t["confidence"]}
+                        for t in tags
+                    ],
+                })
+            return results
+        finally:
+            conn.close()
+
+    def get_all_tags_summary(self, company: str = None):
+        # type: (str) -> dict
+        """Get summary of all capability tags grouped by category.
+        Returns {category: [{value, count}]}.
+        """
+        conn = self._get_conn()
+        try:
+            query = """
+                SELECT ct.tag_category, ct.tag_value, COUNT(*) as cnt
+                FROM capability_tags ct
+                JOIN materials m ON ct.material_id = m.id
+                WHERE m.category = 'resumes'
+            """
+            params = []
+            if company:
+                query += " AND m.company_id = (SELECT id FROM companies WHERE name = ?)"
+                params.append(company)
+            query += " GROUP BY ct.tag_category, ct.tag_value ORDER BY ct.tag_category, cnt DESC"
+
+            rows = conn.execute(query, params).fetchall()
+            result = {}
+            for r in rows:
+                cat = r["tag_category"]
+                if cat not in result:
+                    result[cat] = []
+                result[cat].append({"value": r["tag_value"], "count": r["cnt"]})
+            return result
+        finally:
+            conn.close()
 
 
 # Singleton instance

@@ -2436,6 +2436,165 @@ async def add_material(req: AddMaterialRequest):
     return {"success": True, "data": store.get_summary()}
 
 
+# ── Capability Tags (Personnel Profiles) ──
+
+@router.post("/materials/extract-capabilities/{material_id}")
+async def extract_capabilities(material_id: int):
+    """Extract capability tags from a single resume using LLM."""
+    from app.core.skills.builtin.material_store import get_material_store
+    from app.core.llm import get_llm
+    from app.core.prompts.capability_prompts import (
+        CAPABILITY_EXTRACTION_SYSTEM, CAPABILITY_EXTRACTION_PROMPT,
+    )
+
+    store = get_material_store()
+    conn = store._get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, name, data FROM materials WHERE id = ? AND category = 'resumes'",
+            (material_id,),
+        ).fetchone()
+        if not row:
+            return {"success": False, "message": f"未找到简历 ID={material_id}"}
+
+        resume_data = row["data"]
+        name = row["name"]
+    finally:
+        conn.close()
+
+    # Call LLM
+    llm = get_llm("qwen")
+    prompt = CAPABILITY_EXTRACTION_PROMPT.format(resume_json=resume_data)
+    response = await llm.generate(prompt, system=CAPABILITY_EXTRACTION_SYSTEM)
+
+    # Parse response
+    import re as _re
+    json_match = _re.search(r'\{[\s\S]*\}', response)
+    if not json_match:
+        return {"success": False, "message": "LLM 未返回有效 JSON"}
+
+    try:
+        result = json.loads(json_match.group())
+        tags = result.get("tags", [])
+    except json.JSONDecodeError:
+        return {"success": False, "message": "JSON 解析失败"}
+
+    # Save tags
+    count = store.save_capability_tags(material_id, tags, source="llm")
+    logger.info(f"[capability] Extracted {count} tags for {name} (material_id={material_id})")
+
+    return {
+        "success": True,
+        "data": {
+            "name": name,
+            "material_id": material_id,
+            "tags_count": count,
+            "tags": tags,
+        },
+    }
+
+
+@router.post("/materials/extract-capabilities-batch")
+async def extract_capabilities_batch(
+    company: str = "",
+):
+    """Batch extract capability tags for all resumes in a company."""
+    from app.core.skills.builtin.material_store import get_material_store
+    from app.core.llm import get_llm
+    from app.core.prompts.capability_prompts import (
+        CAPABILITY_EXTRACTION_SYSTEM, CAPABILITY_EXTRACTION_PROMPT,
+    )
+
+    store = get_material_store()
+    conn = store._get_conn()
+    try:
+        query = "SELECT id, name, data FROM materials WHERE category = 'resumes'"
+        params = []
+        if company:
+            query += " AND company_id = (SELECT id FROM companies WHERE name = ?)"
+            params.append(company)
+        rows = conn.execute(query, params).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return {"success": False, "message": "未找到简历数据"}
+
+    llm = get_llm("qwen")
+    results = []
+    import re as _re
+
+    for row in rows:
+        material_id = row["id"]
+        name = row["name"]
+        resume_data = row["data"]
+
+        try:
+            prompt = CAPABILITY_EXTRACTION_PROMPT.format(resume_json=resume_data)
+            response = await llm.generate(prompt, system=CAPABILITY_EXTRACTION_SYSTEM)
+
+            json_match = _re.search(r'\{[\s\S]*\}', response)
+            if json_match:
+                result = json.loads(json_match.group())
+                tags = result.get("tags", [])
+                count = store.save_capability_tags(material_id, tags, source="llm")
+                results.append({"name": name, "tags_count": count, "status": "ok"})
+                logger.info(f"[capability-batch] {name}: {count} tags")
+            else:
+                results.append({"name": name, "tags_count": 0, "status": "no_json"})
+        except Exception as e:
+            results.append({"name": name, "tags_count": 0, "status": f"error: {str(e)[:50]}"})
+            logger.warning(f"[capability-batch] {name} failed: {e}")
+
+    total = sum(r["tags_count"] for r in results)
+    ok_count = sum(1 for r in results if r["status"] == "ok")
+
+    return {
+        "success": True,
+        "data": {
+            "total_resumes": len(rows),
+            "processed": ok_count,
+            "total_tags": total,
+            "details": results,
+        },
+    }
+
+
+@router.get("/materials/capabilities/{name}")
+async def get_person_capabilities(name: str, company: str = ""):
+    """Get capability tags for a specific person."""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    tags = store.get_capability_tags(person_name=name, company=company or None)
+    return {"success": True, "data": {"name": name, "tags": tags}}
+
+
+@router.get("/materials/capabilities")
+async def get_capabilities_summary(company: str = ""):
+    """Get summary of all capability tags for a company."""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    summary = store.get_all_tags_summary(company=company or None)
+    return {"success": True, "data": summary}
+
+
+@router.get("/materials/search-capability")
+async def search_by_capability(
+    category: str = "",
+    value: str = "",
+    company: str = "",
+):
+    """Search people by capability tags."""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    results = store.search_by_capability(
+        tag_category=category or None,
+        tag_value=value or None,
+        company=company or None,
+    )
+    return {"success": True, "data": results}
+
+
 @router.get("/materials/source-files/{name}")
 async def get_source_files(name: str):
     """查找某个人/项目/资质对应的原始素材文件
