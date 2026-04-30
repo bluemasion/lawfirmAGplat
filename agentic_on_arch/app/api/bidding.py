@@ -652,6 +652,48 @@ async def preview_materials(task_id: str, company: str = "",
         }
     }
 
+@router.get("/check-readiness/{task_id}")
+async def check_material_readiness(task_id: str, company: str = ""):
+    """材料完整性检查 — 检查素材库是否满足招标文件要求。"""
+    task = _get_task(task_id)
+    if not task:
+        return {"success": False, "message": f"任务 {task_id} 不存在"}
+
+    requirements = task.get("requirements", {})
+    eval_criteria = requirements.get("evaluation_criteria", [])
+    if not eval_criteria:
+        return {"success": False, "message": "未找到评分标准数据，请先解析招标文件"}
+    if not company:
+        return {"success": False, "message": "请指定公司名称 (company 参数)"}
+
+    from app.core.skills.builtin.material_store import get_material_store
+    from app.core.skills.builtin.material_readiness import MaterialReadinessChecker
+
+    store = get_material_store()
+    checker = MaterialReadinessChecker(store)
+
+    resumes = store.get_resumes(company=company)
+    team_members = [r.get("name", "") for r in resumes if r.get("name")]
+    team_members = [m for m in team_members
+                   if not any(skip in m for skip in ["公示平台", "执业许可", "资格证", "身份证", "执业证"])]
+
+    result = checker.check_readiness(
+        evaluation_criteria=eval_criteria,
+        company=company,
+        team_members=team_members,
+    )
+
+    return {
+        "success": True,
+        "data": {
+            "task_id": task_id,
+            "company": company,
+            "team_size": len(team_members),
+            **result,
+        },
+    }
+
+
 @router.post("/generate-full/{task_id}")
 async def generate_full_document(task_id: str, req: FullBiddingRequest):
     """逐章节生成完整投标文件 — SSE 流式进度 + 实时内容输出
