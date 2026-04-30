@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { FileText, Loader2, CheckCircle, Download, Upload, Sparkles, RotateCcw, Send, AlertTriangle, ChevronDown, Eye, X, Package, Lock, Unlock, RefreshCw } from 'lucide-react';
+import { FileText, Loader2, CheckCircle, Download, Upload, Sparkles, RotateCcw, Send, AlertTriangle, ChevronDown, Eye, X, Package, Lock, Unlock, RefreshCw, ShieldCheck, ShieldAlert, ShieldX } from 'lucide-react';
 import MaterialPanel from './MaterialPanel';
 
 const API_BASE = `http://${window.location.hostname}:8001`;
@@ -32,6 +32,9 @@ export default function BiddingAgent() {
     const [selectedProjectId, setSelectedProjectId] = useState(null); // selected project id
     const [materialPreview, setMaterialPreview] = useState(null);
     const [loadingPreview, setLoadingPreview] = useState(false);
+    const [readinessCheck, setReadinessCheck] = useState(null); // material readiness report
+    const [loadingReadiness, setLoadingReadiness] = useState(false);
+    const [showReadiness, setShowReadiness] = useState(true); // toggle readiness panel
 
     // Company data for generation
     const [companyData, setCompanyData] = useState({
@@ -1194,6 +1197,14 @@ export default function BiddingAgent() {
                                                 const previewData = await previewRes.json();
                                                 setMaterialPreview(previewData.data);
                                                 setLoadingPreview(false);
+                                                // Auto-load readiness check
+                                                setLoadingReadiness(true);
+                                                try {
+                                                    const readyRes = await fetch(`${API_BASE}/api/bidding/check-readiness/${taskId}?company=${encodeURIComponent(company)}`);
+                                                    const readyData = await readyRes.json();
+                                                    if (readyData.success) setReadinessCheck(readyData.data);
+                                                } catch (err) { console.error('Readiness check failed:', err); }
+                                                setLoadingReadiness(false);
                                             }
                                         } catch (err) {
                                             console.error('Load projects failed:', err);
@@ -1225,6 +1236,16 @@ export default function BiddingAgent() {
                                                 console.error('Preview failed:', err);
                                             }
                                             setLoadingPreview(false);
+                                            // Auto-load readiness check
+                                            if (!readinessCheck && selectedCompany) {
+                                                setLoadingReadiness(true);
+                                                try {
+                                                    const readyRes = await fetch(`${API_BASE}/api/bidding/check-readiness/${taskId}?company=${encodeURIComponent(selectedCompany)}`);
+                                                    const readyData = await readyRes.json();
+                                                    if (readyData.success) setReadinessCheck(readyData.data);
+                                                } catch (err) { console.error('Readiness check failed:', err); }
+                                                setLoadingReadiness(false);
+                                            }
                                         }}
                                         className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2.5 text-[12px] text-zinc-100 focus:outline-none focus:border-purple-500 transition-colors"
                                     >
@@ -1275,6 +1296,97 @@ export default function BiddingAgent() {
                                     <div className="text-center py-6 text-zinc-600 text-[11px]">选择公司后查看素材匹配</div>
                                 )}
                             </div>
+
+                            {/* Material Readiness Check */}
+                            {(readinessCheck || loadingReadiness) && (
+                                <div className="bg-zinc-900/80 backdrop-blur rounded-xl border border-zinc-800 p-4">
+                                    <div className="flex items-center justify-between mb-3 cursor-pointer" onClick={() => setShowReadiness(!showReadiness)}>
+                                        <h3 className="text-[13px] font-bold text-zinc-100 flex items-center">
+                                            {readinessCheck?.overall_status === 'complete'
+                                                ? <ShieldCheck size={14} className="mr-2 text-green-400" />
+                                                : readinessCheck?.overall_status === 'warning'
+                                                    ? <ShieldAlert size={14} className="mr-2 text-amber-400" />
+                                                    : <ShieldX size={14} className="mr-2 text-red-400" />
+                                            }
+                                            材料完整性预检
+                                            {readinessCheck && (
+                                                <span className={`ml-2 text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                                                    readinessCheck.overall_status === 'complete'
+                                                        ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                                                        : readinessCheck.overall_status === 'warning'
+                                                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                                            : 'bg-red-500/20 text-red-400 border border-red-500/30'
+                                                }`}>
+                                                    {readinessCheck.score}%
+                                                </span>
+                                            )}
+                                        </h3>
+                                        <ChevronDown size={14} className={`text-zinc-500 transition-transform ${showReadiness ? 'rotate-180' : ''}`} />
+                                    </div>
+
+                                    {loadingReadiness ? (
+                                        <div className="flex items-center justify-center py-4 text-zinc-500 text-[11px]">
+                                            <Loader2 size={14} className="animate-spin mr-2" /> 检查中...
+                                        </div>
+                                    ) : readinessCheck && showReadiness ? (
+                                        <div className="space-y-1">
+                                            {/* Summary bar */}
+                                            <div className="flex items-center gap-3 px-3 py-2 bg-zinc-800/60 rounded-lg mb-2 text-[10px] text-zinc-400">
+                                                <span className="text-green-400">✅ {readinessCheck.passed}通过</span>
+                                                {readinessCheck.failed > 0 && <span className="text-red-400">❌ {readinessCheck.failed}缺失</span>}
+                                                {readinessCheck.warnings > 0 && <span className="text-amber-400">⚠️ {readinessCheck.warnings}警告</span>}
+                                                <span className="ml-auto text-zinc-500">必要项 {readinessCheck.required_status}</span>
+                                            </div>
+
+                                            {/* Check items — failures first */}
+                                            {[...readinessCheck.items]
+                                                .sort((a, b) => {
+                                                    const order = { fail: 0, warning: 1, pass: 2 };
+                                                    return (order[a.status] ?? 3) - (order[b.status] ?? 3);
+                                                })
+                                                .map((item, i) => (
+                                                <div key={i} className={`flex items-start gap-2 px-3 py-2 rounded text-[11px] ${
+                                                    item.status === 'fail' ? 'bg-red-500/5 border border-red-500/20'
+                                                    : item.status === 'warning' ? 'bg-amber-500/5 border border-amber-500/15'
+                                                    : 'bg-zinc-800/20'
+                                                }`}>
+                                                    <span className="shrink-0 mt-0.5">
+                                                        {item.status === 'pass' ? '✅' : item.status === 'warning' ? '⚠️' : '❌'}
+                                                    </span>
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className={`font-medium ${
+                                                                item.status === 'fail' ? 'text-red-300'
+                                                                : item.status === 'warning' ? 'text-amber-300'
+                                                                : 'text-zinc-300'
+                                                            }`}>{item.description}</span>
+                                                            {item.scoring_item && (
+                                                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-700/60 text-zinc-400">
+                                                                    {item.scoring_item} {item.max_score}分
+                                                                </span>
+                                                            )}
+                                                            {item.severity === 'required' && item.status !== 'pass' && (
+                                                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30">
+                                                                    必要
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        <div className="text-[10px] text-zinc-500 mt-0.5 leading-tight">{item.detail}</div>
+                                                    </div>
+                                                </div>
+                                            ))}
+
+                                            {/* Warning if incomplete */}
+                                            {readinessCheck.overall_status === 'incomplete' && (
+                                                <div className="mt-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-lg text-[10px] text-red-300 flex items-start gap-2">
+                                                    <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                                                    <span>存在必要材料缺失，建议补充后再生成投标文件，否则可能导致废标或扣分。</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ) : null}
+                                </div>
+                            )}
                         </div>
 
                         {/* Footer */}
