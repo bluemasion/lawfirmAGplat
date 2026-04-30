@@ -461,6 +461,7 @@ async def parse_tender_structure(file: UploadFile = File(...),
                         "sections": parse_result["sections"],
                         "llm_provider": llm_provider,
                         "progress_callback": _on_progress,
+                        "tender_filename": filename,
                     })
                     progress_queue.put_nowait(("__RESULT__", result))
                 except Exception as exc:

@@ -94,7 +94,12 @@ class RequirementExtractionSkill(BaseSkill):
         if mode == "analyze":
             # ── V3: Multi-pass tender analysis ──
             progress_cb = params.get("progress_callback", None)
-            result = await self._analyze_and_build(llm, raw_text, sections, progress_cb=progress_cb)
+            tender_filename = params.get("tender_filename", "")
+            result = await self._analyze_and_build(
+                llm, raw_text, sections,
+                progress_cb=progress_cb,
+                tender_filename=tender_filename,
+            )
         elif mode == "structure" and sections:
             # ── V2: Classify parsed section titles ──
             result = await self._structure_from_sections(llm, sections, raw_text)
@@ -114,6 +119,26 @@ class RequirementExtractionSkill(BaseSkill):
         return result
 
     # ── V3: Multi-pass analysis ──
+
+    # ── Lot/package detection patterns ──
+    _LOT_PATTERNS = [
+        # “一标段” “第一标段” “1标段”
+        ('\u4e00标段', '标段一'), ('\u7b2c\u4e00\u6807\u6bb5', '标段一'),
+        ('\u4e8c标段', '标段二'), ('\u7b2c\u4e8c\u6807\u6bb5', '标段二'),
+        ('\u4e09标段', '标段三'), ('\u7b2c\u4e09\u6807\u6bb5', '标段三'),
+        ('1标段', '标段一'), ('2标段', '标段二'), ('3标段', '标段三'),
+    ]
+
+    @staticmethod
+    def _detect_lot_info(filename, raw_text_head=''):
+        # type: (str, str) -> Dict[str, Any]
+        """Detect lot/package info from filename and first ~500 chars of text.
+        Returns dict with lot_name (e.g. '标段一') or empty dict."""
+        search_text = f"{filename} {raw_text_head[:500]}"
+        for pattern, lot_name in RequirementExtractionSkill._LOT_PATTERNS:
+            if pattern in search_text:
+                return {"lot_name": lot_name, "source": "filename" if pattern in filename else "text"}
+        return {}
 
     SCORING_KEYWORDS = [
         '评标', '评审', '评分', '打分', '计分',
@@ -180,8 +205,8 @@ class RequirementExtractionSkill(BaseSkill):
                 rejection_parts.append(part)
         return '\n\n'.join(rejection_parts) if rejection_parts else ''
 
-    async def _analyze_and_build(self, llm, raw_text, sections, progress_cb=None):
-        # type: (Any, str, List[Dict], Any) -> Dict
+    async def _analyze_and_build(self, llm, raw_text, sections, progress_cb=None, tender_filename=''):
+        # type: (Any, str, List[Dict], Any, str) -> Dict
         """V3: Analyze tender → derive bid structure in two passes."""
 
         def _progress(msg):
@@ -257,12 +282,29 @@ class RequirementExtractionSkill(BaseSkill):
                 text_for_analysis += supplement
                 logger.info(f"Appended rejection section: +{len(supplement)} chars")
 
+        # ── Step 0b: Detect lot info from filename ──
+        lot_info = self._detect_lot_info(tender_filename, raw_text[:500])
+        if lot_info:
+            lot_name = lot_info['lot_name']
+            logger.info(f"Lot detected: {lot_name} (source: {lot_info['source']})")
+            _progress(f"🎯 检测到标段信息: {lot_name}")
+
         # ── Pass 1: Deep analysis (with retry) ──
         logger.info("Pass 1: Analyzing tender document...")
         _progress("🧠 Pass 1/3: AI 正在分析招标文件要求（可能需要 2-5 分钟）...")
         analysis = None
         try:
             prompt1 = ANALYSIS_PROMPT.format(tender_text=text_for_analysis)
+            # Inject lot-specific hint if detected
+            if lot_info:
+                lot_hint = (
+                    f"\n\n【重要提示：本次投标为{lot_info['lot_name']}】\n"
+                    f"本招标文件可能包含多个标段的评分表。请只提取{lot_info['lot_name']}的评分标准。\n"
+                    f"不同标段的评分标准可能不同（如标段一\"分所覆盖\"=国内分所，标段二=境外办公室）。\n"
+                    f"evaluation_criteria 中只包含{lot_info['lot_name']}的评分项。"
+                )
+                prompt1 += lot_hint
+                logger.info(f"Injected lot hint for {lot_info['lot_name']}")
             _progress(f"   └─ Prompt 大小: {len(prompt1)} 字符, 模型: {llm.get_model_name()}")
             # Try up to 2 times to handle transient Qwen API timeouts
             for attempt in range(2):
@@ -472,6 +514,10 @@ class RequirementExtractionSkill(BaseSkill):
                         f"deviation table(s), inserted at position {insert_idx + 1}"
                     )
                     _progress(f"📊 自动生成 {len(deviation_sections)} 个评审偏离表")
+
+                # Store lot info in result
+                if lot_info:
+                    structure["lot_info"] = lot_info
 
                 return structure
 

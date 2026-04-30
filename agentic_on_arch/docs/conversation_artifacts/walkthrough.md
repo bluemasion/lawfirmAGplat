@@ -1,49 +1,43 @@
-# Walkthrough: 本地算法模型 + 招标自检索 (Self-RAG)
+# 4/29 开发日志 — 叙述质量跃升 + 评分增强
+
+> 会话 ID: a89a8782 | 版本: v2.2.0-deviation → v2.2.2-scoring-enhance
 
 ## 完成内容
 
-### 1. BGE Embedding 模型部署
-- 模型: BAAI/bge-small-zh-v1.5 (95MB, 512维)
-- 相似度: 8/8 正确 | 分类: 90.9% (20/22)
-- 性能: 12.4ms/条
+### P0-1: 叙述章节质量跃升 ✅
 
-### 2. Pipeline 集成
-| 文件 | 改动 |
-|------|------|
-| `pipeline.py` | embed() → 真实 BGE 向量 |
-| `requirement_extraction.py` | 分类器校正 LLM 章节类型 (conf>0.7) |
-| `template_store.py` | 模板匹配 → 向量语义相似度 |
+5步改造，不换模型（继续用 Qwen-Max），纯后端增强：
 
-### 3. 招标自检索 (Self-RAG) ⭐
+| Step | 改动 | 关键文件 |
+|------|------|---------|
+| 1 | 公司Profile增强 | `company_profile.json` |
+| 2 | Prompt重构(service_plan+quality_control独立) | `content_generation_prompts.py` |
+| 3 | 公司概要注入(618字) | `content_generation.py` |
+| 4 | 历史方案RAG + 自动积累 | `material_store.py` + `bidding.py` |
+| 5 | 评分子项自动拆段 | `content_generation.py` |
 
-核心改动：LLM 生成叙述段落时，不再是"暂无参考资料"，而是从**招标文件自身**向量检索出相关段落作为参考。
+**效果**: 服务方案 1200→2599字(+116%), 质量控制 800→1895字(+137%), 验证分 58→64
+
+### P0-1b: 评分子项提取增强 ✅
+
+| 改动 | 关键文件 |
+|------|---------|
+| Pass 1 prompt 新增 material_evidence + lot_info | `requirement_prompts.py` |
+| eval_items 透传 material_evidence + category | `requirement_extraction.py` |
+| 偏离表新增"材料依据"列 | `requirement_extraction.py` |
+
+**效果**: 材料依据 9/9 提取成功, 偏离表 +29%, Reference RAG 自改进循环验证通过
+
+## 版本标签
 
 ```
-招标文件 → chunk(按章节边界) → BGE embed → numpy 内存索引
-                                              ↓
-生成"应急响应方案"时 → query embed → cosine top-5 → 
-  检索到: "应急响应时间≤2小时得10分" + "服务保障具体可行得10分"
-                                              ↓
-                    LLM 基于这些具体要求写出针对性方案
+v2.2.0-deviation       ← 今天起始版本
+v2.2.1-narrative-enhance ← P0-1 完成
+v2.2.2-scoring-enhance  ← P0-1b 完成 (当前)
 ```
 
-#### 新增文件
-- [tender_index.py](file:///Users/mason/Desktop/code%20/angenimi-agentic/lawfirmAGplat/agentic_on_arch/app/core/rag/tender_index.py) — 内存向量索引
+## 明天计划
 
-#### 修改文件
-- [bidding.py](file:///Users/mason/Desktop/code%20/angenimi-agentic/lawfirmAGplat/agentic_on_arch/app/api/bidding.py):
-  - `parse-structure`: 解析后构建 TenderIndex
-  - `generate-full`: narrative 章节检索 top-5 相关段落
-
-### 4. 结构完整性校验
-
-`parse-structure` 返回 `structure_warnings` 字段：
-- 从招标原文提取"须提供/应包含"等要求
-- 用 Embedding 与提取的章节标题交叉比对
-- 未覆盖项(相似度<0.6)作为警告返回
-
-## 验证结果
-
-- ✅ 服务器重启正常，8 Skills 注册
-- ✅ TenderIndex 构建 + 搜索 + 结构校验全部通过
-- ✅ `reference_data` 从硬编码"暂无参考资料"→ 真实检索结果
+1. **P0-1c 标段识别** (0.3天) — 文件名检测标段号
+2. **P0-1d 隐含子项拆段** (0.5天) — description 解析评分维度
+3. **P0-2 Word排版专业化** (开始) — 封面+目录+页眉页脚+分页

@@ -81,6 +81,10 @@ class DocxAssemblySkill(BaseSkill):
         # Add each section
         sorted_sections = sorted(sections, key=lambda s: s.get("order", 0))
         for i, section in enumerate(sorted_sections):
+            # Page break before each chapter (except the first one,
+            # which already starts on a new page after TOC)
+            if i > 0:
+                doc.add_page_break()
             self._add_section(doc, section, chapter_num=i + 1)
 
         # Save document
@@ -259,22 +263,45 @@ class DocxAssemblySkill(BaseSkill):
             logger.warning(f"Failed to add TOC field, using placeholder: {e}")
             p.text = "[目录 — 请在 Word 中更新域以生成]"
 
-        doc.add_page_break()
+        # Add section break (new page) to start a new Word section
+        # This separates cover+TOC from content, allowing independent
+        # header/footer control
+        new_section = doc.add_section(WD_ORIENT.PORTRAIT)
+        new_section.page_width = Cm(21.0)
+        new_section.page_height = Cm(29.7)
+        new_section.top_margin = Cm(2.54)
+        new_section.bottom_margin = Cm(2.54)
+        new_section.left_margin = Cm(3.17)
+        new_section.right_margin = Cm(3.17)
 
     # ─── Header / Footer ─────────────────────────────────────────
 
     def _add_header_footer(self, doc: Document, title: str):
-        """Add page header (project name) and footer (page number)."""
-        # Get or create a new section (to not affect cover page)
-        section = doc.sections[-1]
+        """Add page header (project name) and footer (page number).
+        
+        Applies to the content section (after cover+TOC).
+        The cover+TOC section (sections[0]) has no header/footer.
+        """
+        # Content section is the last section (after TOC section break)
+        content_section = doc.sections[-1]
+        
+        # Ensure cover section has no header/footer
+        cover_section = doc.sections[0]
+        cover_section.different_first_page_header_footer = False
+        # Clear any header/footer on cover section
+        if cover_section.header.paragraphs:
+            for p in cover_section.header.paragraphs:
+                p.clear()
+        if cover_section.footer.paragraphs:
+            for p in cover_section.footer.paragraphs:
+                p.clear()
 
-        # Different first page (cover has no header/footer)
-        section.different_first_page_header_footer = True
-
-        # Header
-        header = section.header
+        # --- Content section header ---
+        content_section.different_first_page_header_footer = False
+        header = content_section.header
         header.is_linked_to_previous = False
         hp = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
+        hp.text = ""  # Clear default
         hp.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = hp.add_run(title)
         _set_font(run, '仿宋', '仿宋', size=9)
@@ -291,10 +318,11 @@ class DocxAssemblySkill(BaseSkill):
         except Exception:
             pass
 
-        # Footer with page number
-        footer = section.footer
+        # --- Content section footer with page number ---
+        footer = content_section.footer
         footer.is_linked_to_previous = False
         fp = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+        fp.text = ""  # Clear default
         fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = fp.add_run("— ")
         _set_font(run, 'Times New Roman', '仿宋', size=9)
@@ -336,6 +364,16 @@ class DocxAssemblySkill(BaseSkill):
         except Exception as e:
             logger.warning(f"Failed to add page number field: {e}")
             fp.add_run("- 页码 -")
+
+        # --- Restart page numbering from 1 in content section ---
+        try:
+            sectPr = content_section._sectPr
+            pgNumType = parse_xml(
+                '<w:pgNumType {} w:start="1"/>'.format(nsdecls('w'))
+            )
+            sectPr.append(pgNumType)
+        except Exception as e:
+            logger.warning(f"Failed to restart page numbering: {e}")
 
     # ─── Section / Chapter ────────────────────────────────────────
 
