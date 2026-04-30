@@ -1,6 +1,6 @@
 # 智能投标系统 — 上下文恢复文档
 
-> 最后更新: 2026-04-30 18:28 (会话 ID: a89a8782)
+> 最后更新: 2026-04-30 20:15 (会话 ID: a89a8782)
 
 ---
 
@@ -174,6 +174,22 @@
 - 9项评分项 vs 投标文件章节: 8/9 正确对应
 - 缺失项: “分所覆盖情况”(10分) — 无独立章节，待后续处理
 
+### 29. S2+S3 人员能力标签系统 ✅ (4/30)
+- `capability_prompts.py`: LLM提取prompt(7个维度)
+- `material_store.py`: capability_tags 表 + CRUD方法
+- API: 单人提取/批量提取/查询/搜索
+- **测试**: 天元 32人 → 166个标签, 17人投资并购经验
+
+### 30. 产品策略修正 (4/30 19:30-19:45)
+- **能力标签评估**: 对32人小所边际价值低，投标负责人已知道每个人的能力
+- **重新排序**: 材料完整性检查 > 章节编辑 > 能力雷达图
+- **能力标签暂停深入**, 已做的够用
+
+### 31. A1 材料完整性检查 ✅ (4/30)
+- `material_readiness.py`: 13类检查规则(律所级/人员级/业绩级)
+- API: `/check-readiness/{task_id}?company=xxx`
+- **测试**: 天元律所 30%得分, 发现学历/执业/社保证全部缺失, 审计报告缺2025年
+
 ---
 
 ## 五、当前版本标签
@@ -187,7 +203,9 @@
 | `v2.2.0-deviation` | 偏离表 + 评分精确匹配 |
 | `v2.2.1-narrative-enhance` | P0-1 叙述章节质量跃升 |
 | `v2.2.2-scoring-enhance` | P0-1b 材料依据提取 + 偏离表增强 |
-| `v2.2.3-layout-lot` | ✅ **当前版本** — P0-1c标段识别 + P0-2 Word排版 |
+| `v2.2.3-layout-lot` | P0-1c标段识别 + P0-2 Word排版 |
+| `v2.3.0-capability` | 人员能力标签系统 |
+| `v2.3.1-readiness` | ✅ **当前版本** — 材料完整性检查 |
 
 ---
 
@@ -228,39 +246,45 @@
 
 ---
 
-## 六、下一步计划 (4/30 19:00 更新)
+## 六、下一步计划 (4/30 20:15 更新)
 
-> 双线并行: 主线投标管线 + 支线素材库强化
+> 核心原则: 每一步都直接影响投标结果或防止废标
 
-### 🔴 主线: 投标生成管线
-
-| # | 方向 | 预估 | 状态 |
-|---|------|------|------|
-| 1 | ~~叙述章节质量跃升~~ | 3天 | ✅ 已完成 |
-| 1b | ~~评分子项提取增强~~ | 0.5天 | ✅ 已完成 |
-| 1c | ~~标段识别~~ | 0.3天 | ✅ 已完成 |
-| 2 | ~~Word排版 Step1~~ | 0.5天 | ✅ 已完成 |
-| **3** | **章节级编辑+重生成** | 1-2天 | 待做 |
-| **4** | **历史中标方案上传** | 1天 | 待做 |
-
-### 🟠 支线: 素材库强化 (🔥 当前开发中)
+### 🔴 本轮（直接影响中标率）
 
 | # | 方向 | 预估 | 状态 |
 |---|------|------|------|
-| **S1** | **素材管理前端**（列表+CRUD+预览） | 2-3天 | 🔥 开始 |
-| **S2** | **简历智能解析**（LLM提取能力标签） | 1天 | 待做 |
-| **S3** | **能力标签体系 + DB** | 0.5天 | 待做 |
-| S4 | 人-项目关联 | 1天 | 待做 |
-| S5 | 材料完整性检查 | 1天 | 待做 |
+| A1 | ~~材料完整性检查~~ | 1天 | ✅ 已完成 |
+| **A2** | **章节级编辑+重生成** | 1-2天 | 🔥 下一步 |
+| **A3** | **简历自动适配** | 1天 | 待做 |
 
-### 🟢 P2 — 竞争壁垒
+### 🟡 下一轮（提升体验和专业度）
+
+| # | 方向 | 预估 |
+|---|------|------|
+| B1 | Word排版 Step2（封面升级+表格美化） | 1天 |
+| B2 | 分所覆盖数据补全 | 0.5天 |
+| B3 | 历史中标方案上传+智能改写 | 2天 |
+
+### 🟢 有客户后再做
 
 | # | 方向 |
 |---|------|
-| 9 | 多用户/多公司 |
-| 10 | PDF招标文件支持 |
-| 11 | 历史投标学习 |
-| 12 | 智能报价 |
+| C1 | 多用户/权限 |
+| C2 | PDF招标文件支持 |
+| C3 | 能力雷达图/智能组队（等大所客户需求确认） |
+| C4 | 投标结果反馈+学习 |
+
+### 已完成历史
+
+| # | 方向 | 完成日期 |
+|---|------|----------|
+| P0-1 | 叙述章节质量跃升 | 4/29 |
+| P0-1b | 评分子项+材料依据+偏离表 | 4/29 |
+| P0-1c | 标段识别 | 4/30 |
+| P0-2 | Word排版 Step1 | 4/30 |
+| S2+S3 | 人员能力标签系统 | 4/30 |
+| A1 | 材料完整性检查 | 4/30 |
 
 ---
 
@@ -272,14 +296,17 @@
 | `app/api/bidding.py` | 投标 API 主路由 (SSE + 缓存 + 素材 + 删除) |
 | `app/core/skills/builtin/requirement_extraction.py` | V3 多轮分析 (Pass1+2+3+3d偏离表) |
 | `app/core/skills/builtin/content_generation.py` | 内容生成 (5种策略 + 素材注入 + 偏离表直出) |
-| `app/core/skills/builtin/material_store.py` | 素材库 SQLite (5张表 + image_meta + entity_type) |
+| `app/core/skills/builtin/material_store.py` | 素材库 SQLite (5张表 + image_meta + entity_type + capability_tags) |
 | `app/core/skills/builtin/material_matcher.py` | 素材匹配 (entity_type 分流 + 排序策略) |
+| `app/core/skills/builtin/material_readiness.py` | 🆕 材料完整性检查 (13类规则 → 防废标) |
 | `app/core/skills/builtin/bid_document_parser.py` | 历史标书解析 (OCR+分类+证件合并) |
 | `app/core/skills/builtin/tender_parsing.py` | 招标文件 Word 解析 |
+| `app/core/skills/builtin/docx_assembly.py` | 🆕 Word排版组装 (封面+目录+页眉页脚+分页) |
 | `app/core/skills/builtin/bidding_store.py` | 投标任务 SQLite 持久化 |
 | `app/core/prompts/__init__.py` | Prompt 注册中心 + get_prompt() API |
 | `app/core/prompts/content_generation_prompts.py` | 7 个内容生成 prompt |
 | `app/core/prompts/requirement_prompts.py` | 6 个需求分析 prompt |
+| `app/core/prompts/capability_prompts.py` | 🆕 能力标签提取 prompt |
 
 ### 前端 (platform/)
 | 文件 | 说明 |
