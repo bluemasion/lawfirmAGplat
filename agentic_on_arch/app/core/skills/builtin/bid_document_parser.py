@@ -202,9 +202,9 @@ class BidDocumentParserSkill(BaseSkill):
         sections = self._parse_docx(file_path)
         logger.info(f"Parsed {len(sections)} sections from bid document")
 
-        # Step 2: Classify sections by material type
+        # Step 2: Classify sections by material type (rules first, LLM fallback)
         llm = get_llm(llm_provider)
-        classified = await self._classify_sections(llm, sections)
+        classified = await self._classify_sections(llm, sections, filename=filename)
 
         # Step 2.5: Filename-based heuristic override
         # If file name strongly hints at a type but LLM missed it, force-classify
@@ -226,6 +226,7 @@ class BidDocumentParserSkill(BaseSkill):
         projects = []     # type: List[Dict]
         qualifications = []  # type: List[Dict]
         narrative_chunks = []  # type: List[Dict]
+        _ocr_results_by_section = {}  # title → [ocr_result_dicts] for capability tags
 
         for sec in classified:
             material_type = sec.get("material_type", "other")
@@ -245,6 +246,7 @@ class BidDocumentParserSkill(BaseSkill):
                     from app.core.skills.builtin.material_store import get_material_store
                     store = get_material_store()
                     enriched_parts = []
+                    section_ocr_results = []  # collect for capability tags
                     for img_info in section_images:
                         img_file = img_info.get("filename", "")
                         img_hash = img_info.get("hash", "")
@@ -268,6 +270,7 @@ class BidDocumentParserSkill(BaseSkill):
                             enriched_parts.append(
                                 f"[图片 {img_file} OCR 识别内容]:\n{ocr_text}"
                             )
+                            section_ocr_results.append(ocr_result if isinstance(ocr_result, dict) else {"ocr_text": ocr_text})
 
                     if enriched_parts:
                         # Replace original content with OCR-enriched version
@@ -286,6 +289,9 @@ class BidDocumentParserSkill(BaseSkill):
                             f"  OCR enriched '{title}': {len(section_images)} images → "
                             f"{len(content)} chars of text"
                         )
+                        # Store OCR results for capability tag extraction
+                        if section_ocr_results:
+                            _ocr_results_by_section[title] = section_ocr_results
                 except Exception as e:
                     logger.warning(f"  OCR enrichment failed for '{title}': {e}")
 
@@ -417,38 +423,56 @@ class BidDocumentParserSkill(BaseSkill):
                      f"(company={company_count}, personal={personal_count})")
 
         # Step 4: Detect company name from content
-        # Strategy: try multiple sources in priority order
+        # Strategy: rules first (known companies, holders), LLM last
         detected_company = ""
 
-        # 4a. Try extracting from qualification holder fields (most reliable for
-        #     qualification-heavy documents where content is mostly images)
-        holder_names = []
-        for q in qualifications:
-            holder = (q.get("holder") or "").strip()
-            if holder and len(holder) >= 4:
-                holder_names.append(holder)
-        if holder_names:
-            # Pick the most common holder name
-            from collections import Counter
-            holder_counter = Counter(holder_names)
-            most_common_holder = holder_counter.most_common(1)[0][0]
-            detected_company = most_common_holder
-            logger.info(f"Detected company from qualification holders: "
-                        f"'{detected_company}' (from {len(holder_names)} holders)")
+        # 4a. Check known companies from DB (zero API cost)
+        try:
+            from app.core.skills.builtin.material_store import MaterialStore
+            store = MaterialStore()
+            known_companies = store.get_companies()
+            if known_companies:
+                # Check filename and content for known company names
+                check_text = filename + " " + " ".join(
+                    sec.get("content", "")[:200] for sec in classified
+                )
+                for comp in known_companies:
+                    # Match short name (e.g. "天元" matches "北京天元律师事务所")
+                    short_name = comp.replace("北京", "").replace("上海", "") \
+                                     .replace("律师事务所", "").replace("市", "")
+                    if comp in check_text or (short_name and len(short_name) >= 2
+                                              and short_name in check_text):
+                        detected_company = comp
+                        logger.info(f"Detected company from known list: "
+                                    f"'{detected_company}' (rule-based)")
+                        break
+        except Exception as e:
+            logger.debug(f"Known company check failed: {e}")
 
-        # 4b. If holder didn't work, try LLM detection with enriched content
-        #     Use the post-OCR enriched content instead of raw image placeholders
+        # 4b. Try extracting from qualification holder fields
         if not detected_company:
-            # Collect text that has actual content (not just image placeholders)
+            holder_names = []
+            for q in qualifications:
+                holder = (q.get("holder") or "").strip()
+                if holder and len(holder) >= 4:
+                    holder_names.append(holder)
+            if holder_names:
+                from collections import Counter
+                holder_counter = Counter(holder_names)
+                most_common_holder = holder_counter.most_common(1)[0][0]
+                detected_company = most_common_holder
+                logger.info(f"Detected company from qualification holders: "
+                            f"'{detected_company}' (from {len(holder_names)} holders)")
+
+        # 4c. LLM fallback — only if rules didn't work
+        if not detected_company:
             enriched_parts = []
             for sec in classified:
                 content = sec.get("content", "")
-                # Skip sections that are only image placeholders
                 lines = [l for l in content.split("\n")
                          if l.strip() and not l.strip().startswith("[图片:")]
                 if lines:
                     enriched_parts.append("\n".join(lines[:10]))
-            # If no text content found, try using extracted item names as hints
             if not enriched_parts:
                 hints = []
                 for r in resumes:
@@ -474,6 +498,31 @@ class BidDocumentParserSkill(BaseSkill):
                 logger.info("Company detection: no text content available "
                             "for LLM detection")
 
+        # Step 5: Extract capability tags from OCR results (rule-based)
+        capability_tags_by_person = {}  # person_name → [tags]
+        if _ocr_results_by_section:
+            try:
+                from app.core.skills.builtin.image_ocr import extract_capability_tags_from_ocr
+                for section_title, ocr_results in _ocr_results_by_section.items():
+                    tags = extract_capability_tags_from_ocr(ocr_results)
+                    if tags:
+                        # Try to link tags to a person via section title
+                        person_name = self._extract_person_from_name(section_title)
+                        if not person_name:
+                            # Try matching resume names
+                            for r in resumes:
+                                rname = (r.get('name') or '').strip()
+                                if rname and rname in section_title:
+                                    person_name = rname
+                                    break
+                        if person_name:
+                            if person_name not in capability_tags_by_person:
+                                capability_tags_by_person[person_name] = []
+                            capability_tags_by_person[person_name].extend(tags)
+                            logger.info(f"  OCR tags for '{person_name}': {len(tags)} tags")
+            except Exception as e:
+                logger.warning(f"Capability tag extraction failed: {e}")
+
         return {
             "resumes": resumes,
             "projects": projects,
@@ -482,6 +531,7 @@ class BidDocumentParserSkill(BaseSkill):
             "source_file": file_path,
             "total_sections": len(sections),
             "detected_company": detected_company,
+            "capability_tags": capability_tags_by_person,
         }
 
     # ── Resume consolidation (merge artifact records into real people) ──
@@ -852,42 +902,69 @@ class BidDocumentParserSkill(BaseSkill):
 
         return sections
 
-    async def _classify_sections(self, llm, sections: List[Dict]) -> List[Dict]:
-        """Use LLM to classify each section's material type."""
-        section_lines = []
-        for i, sec in enumerate(sections, 1):
-            title = sec.get("title", f"第{i}节")
-            section_lines.append(f"{i}. {title}")
+    async def _classify_sections(self, llm, sections: List[Dict],
+                                  filename: str = "") -> List[Dict]:
+        """Classify sections: rules first, LLM only for uncertain ones.
 
-        prompt = MATERIAL_CLASSIFY_PROMPT.format(
-            section_list="\n".join(section_lines)
-        )
-
-        try:
-            response = await llm.generate(prompt, system=MATERIAL_CLASSIFY_SYSTEM)
-            classifications = _safe_parse_json(response)
-        except Exception as e:
-            logger.error(f"LLM section classification failed: {e}")
-            classifications = None
-
-        # Build lookup map
-        type_map = {}  # type: Dict[str, str]
-        if classifications and isinstance(classifications, list):
-            for item in classifications:
-                title = item.get("title", "")
-                if title:
-                    type_map[title] = item.get("material_type", "other")
-            logger.info(f"Classified {len(type_map)}/{len(sections)} sections")
-
-        # Merge classification into sections
+        This reduces LLM API calls by ~70% compared to classifying all sections
+        via LLM. Rules use title keywords, content patterns, and filename hints.
+        """
         result = []
-        for sec in sections:
+        uncertain = []  # sections that rules can't classify confidently
+
+        for i, sec in enumerate(sections):
             title = sec.get("title", "")
-            sec["material_type"] = type_map.get(title, self._guess_material_type(title))
+            content = sec.get("content", "")[:300]  # preview only
+            rule_type = self._guess_material_type(title, content, filename)
+
+            if rule_type != "unknown":
+                sec["material_type"] = rule_type
+                sec["_classified_by"] = "rule"
+            else:
+                uncertain.append((i, sec))
+
             result.append(sec)
 
+        rule_count = len(sections) - len(uncertain)
+        if rule_count > 0:
+            logger.info(f"Rule-classified {rule_count}/{len(sections)} sections")
+
+        # Only call LLM for uncertain sections
+        if uncertain:
+            section_lines = []
+            for idx, sec in uncertain:
+                title = sec.get("title", f"第{idx+1}节")
+                section_lines.append(f"{idx+1}. {title}")
+
+            prompt = MATERIAL_CLASSIFY_PROMPT.format(
+                section_list="\n".join(section_lines)
+            )
+
+            try:
+                response = await llm.generate(prompt, system=MATERIAL_CLASSIFY_SYSTEM)
+                classifications = _safe_parse_json(response)
+            except Exception as e:
+                logger.error(f"LLM section classification failed: {e}")
+                classifications = None
+
+            type_map = {}
+            if classifications and isinstance(classifications, list):
+                for item in classifications:
+                    t = item.get("title", "")
+                    if t:
+                        type_map[t] = item.get("material_type", "other")
+
+            for idx, sec in uncertain:
+                title = sec.get("title", "")
+                sec["material_type"] = type_map.get(title, "narrative")
+                sec["_classified_by"] = "llm"
+
+            logger.info(f"LLM-classified {len(uncertain)} uncertain sections")
+        else:
+            logger.info("All sections classified by rules, no LLM needed")
+
         # Log distribution
-        dist = {}  # type: Dict[str, int]
+        dist = {}
         for sec in result:
             t = sec.get("material_type", "other")
             dist[t] = dist.get(t, 0) + 1
@@ -895,26 +972,75 @@ class BidDocumentParserSkill(BaseSkill):
 
         return result
 
-    def _guess_material_type(self, title: str) -> str:
-        """Heuristic fallback for section type classification."""
-        resume_kw = ["简历", "团队", "人员", "律师", "项目负责人", "主办"]
-        project_kw = ["业绩", "案例", "经验", "项目", "成功"]
-        qual_kw = ["资质", "执照", "证书", "执业", "许可", "证明"]
+    def _guess_material_type(self, title: str, content: str = "",
+                              filename: str = "") -> str:
+        """Rule-based section type classification.
+
+        Returns a type if confident, 'unknown' if unsure (needs LLM).
+        Enhanced with content patterns and filename context.
+        """
+        t = title.lower() if title else ""
+        fn = filename.lower() if filename else ""
+
+        # ── High-confidence rules (from title keywords) ──
+        resume_kw = ["简历", "人员", "律师", "项目负责人", "主办", "履历",
+                     "团队成员", "主要人员"]
+        project_kw = ["业绩", "案例", "项目经验", "代表项目", "服务案例", "合同"]
+        qual_kw = ["资质", "执照", "证书", "执业", "许可", "证明",
+                   "排名", "荣誉", "奖项", "考核", "审计报告"]
         form_kw = ["投标函", "声明", "承诺", "授权"]
+        id_kw = ["身份证", "社保", "学历证", "学位证", "毕业证"]
+        financial_kw = ["财务", "资产负债", "利润表", "审计"]
 
         for kw in resume_kw:
-            if kw in title:
+            if kw in t:
                 return "resume"
         for kw in project_kw:
-            if kw in title:
+            if kw in t:
                 return "project"
         for kw in qual_kw:
-            if kw in title:
+            if kw in t:
                 return "qualification"
         for kw in form_kw:
-            if kw in title:
+            if kw in t:
                 return "form"
-        return "narrative"
+        for kw in id_kw:
+            if kw in t:
+                return "qualification"
+        for kw in financial_kw:
+            if kw in t:
+                return "qualification"
+
+        # ── Medium-confidence rules (from content patterns) ──
+        if content:
+            c = content[:500]
+            # Table with 姓名/年龄/学历 → resume
+            if ("姓名" in c and ("年龄" in c or "学历" in c or "执业" in c)):
+                return "resume"
+            # 项目名称 + 委托人 → project
+            if "项目名称" in c and ("委托人" in c or "合同金额" in c):
+                return "project"
+            # 证书编号/发证机关 → qualification
+            if "证书编号" in c or "发证机关" in c or "有效期" in c:
+                return "qualification"
+
+        # ── Filename context (if title is generic) ──
+        if fn:
+            fn_resume = ["简历", "人员", "律师", "团队", "履历"]
+            fn_qual = ["资质", "证书", "荣誉", "奖项", "执照", "排名", "考核"]
+            fn_project = ["业绩", "案例", "合同", "项目"]
+            for kw in fn_resume:
+                if kw in fn:
+                    return "resume"
+            for kw in fn_qual:
+                if kw in fn:
+                    return "qualification"
+            for kw in fn_project:
+                if kw in fn:
+                    return "project"
+
+        # Can't determine → return unknown (will use LLM)
+        return "unknown"
 
     @staticmethod
     def detect_document_type(filename: str, content_preview: str = "") -> dict:

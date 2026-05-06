@@ -65,6 +65,18 @@ IMAGE_TYPE_KEYWORDS = {
     "award": [
         "荣誉证书", "表彰", "奖状", "优秀", "先进",
     ],
+    "degree": [
+        "毕业证", "学位证", "学历证", "毕业", "学士",
+        "硕士", "博士", "大学", "学院", "授予",
+    ],
+    "practice_cert": [
+        "执业证", "律师执业", "执业许可", "律师证",
+        "执业证号", "发证日期", "司法厅",
+    ],
+    "social_security": [
+        "社会保险", "社保", "养老保险", "医疗保险",
+        "缴纳证明", "参保", "个人权益",
+    ],
 }
 
 
@@ -203,11 +215,123 @@ def _extract_id_card_fields(text: str) -> Dict[str, str]:
     m = re.search(r'(\d{17}[\dXx])', text)
     if m:
         fields["id_number"] = m.group(1)
+        # Derive birth year, gender from ID number
+        id_num = m.group(1)
+        try:
+            birth_year = int(id_num[6:10])
+            fields["birth_year"] = str(birth_year)
+            # 17th digit: odd=male, even=female
+            gender_code = int(id_num[16])
+            fields["gender"] = "男" if gender_code % 2 == 1 else "女"
+        except (ValueError, IndexError):
+            pass
 
     # Name (usually after 姓名)
-    m = re.search(r'姓\s*名[：:\s]*(.{2,4})', text)
+    m = re.search(r'姓\s*名[：:\s]*([\u4e00-\u9fff]{2,4})', text)
     if m:
         fields["name"] = m.group(1).strip()
+
+    return fields
+
+
+def _extract_degree_fields(text: str) -> Dict[str, str]:
+    """Extract structured fields from degree/graduation certificates."""
+    fields = {}
+
+    # School name
+    for pattern in [
+        r'([\u4e00-\u9fff]{2,15}(?:大学|学院|研究院))',
+        r'学校[：:\s]*([\u4e00-\u9fff]+)',
+    ]:
+        m = re.search(pattern, text)
+        if m:
+            fields["school"] = m.group(1).strip()
+            break
+
+    # Degree level
+    degree_map = {
+        "博士": "博士", "硕士": "硕士", "学士": "学士",
+        "本科": "学士", "研究生": "硕士", "MBA": "硕士",
+        "EMBA": "硕士", "LLM": "硕士", "JD": "博士",
+    }
+    for kw, level in degree_map.items():
+        if kw in text:
+            fields["degree_level"] = level
+            break
+
+    # Major/specialization
+    for pattern in [
+        r'(?:专业|学科)[：:\s]*([\u4e00-\u9fff]{2,15})',
+        r'(法学|法律|经济学|金融学|会计学|管理学|计算机)',
+    ]:
+        m = re.search(pattern, text)
+        if m:
+            fields["major"] = m.group(1).strip()
+            break
+
+    # Graduation date
+    m = re.search(r'(\d{4})\s*年\s*(\d{1,2})\s*月.*(?:毕业|授予|颁发)', text)
+    if m:
+        fields["graduation_date"] = f"{m.group(1)}-{m.group(2).zfill(2)}"
+
+    return fields
+
+
+def _extract_practice_cert_fields(text: str) -> Dict[str, str]:
+    """Extract structured fields from lawyer practice certificates."""
+    fields = {}
+
+    # Practice certificate number
+    for pattern in [
+        r'(?:执业证号|证号|编号)[：:\s]*(\d{10,20})',
+        r'(\d{17})',  # 17-digit practice cert number
+    ]:
+        m = re.search(pattern, text)
+        if m:
+            fields["practice_cert_number"] = m.group(1)
+            break
+
+    # Issue date (practice start)
+    m = re.search(r'(?:发证日期|首次执业|执业日期)[：:\s]*(\d{4})\s*年', text)
+    if m:
+        fields["practice_start_year"] = m.group(1)
+
+    # Any year in the cert that could be the issue year
+    if "practice_start_year" not in fields:
+        years = re.findall(r'(\d{4})\s*年', text)
+        if years:
+            # Usually the earliest year is the practice start
+            valid_years = [int(y) for y in years if 1980 <= int(y) <= 2030]
+            if valid_years:
+                fields["practice_start_year"] = str(min(valid_years))
+
+    # Law firm name
+    m = re.search(r'([\u4e00-\u9fff]{2,20}律师事务所)', text)
+    if m:
+        fields["law_firm"] = m.group(1)
+
+    return fields
+
+
+def _extract_social_security_fields(text: str) -> Dict[str, str]:
+    """Extract structured fields from social security proof."""
+    fields = {}
+
+    # Social security status
+    if any(kw in text for kw in ["正常缴纳", "正常", "参保", "在缴"]):
+        fields["social_security_status"] = "正常缴纳"
+
+    # Name
+    m = re.search(r'(?:姓名|被保险人)[：:\s]*([\u4e00-\u9fff]{2,4})', text)
+    if m:
+        fields["name"] = m.group(1).strip()
+
+    # Period covered
+    dates = re.findall(r'(\d{4})[年\-./](\d{1,2})', text)
+    if dates:
+        fields["period_from"] = f"{dates[0][0]}-{dates[0][1].zfill(2)}"
+        if len(dates) > 1:
+            fields["period_to"] = f"{dates[-1][0]}-{dates[-1][1].zfill(2)}"
 
     return fields
 
@@ -217,7 +341,105 @@ EXTRACTORS = {
     "license": _extract_license_fields,
     "contract": _extract_contract_fields,
     "id_card": _extract_id_card_fields,
+    "degree": _extract_degree_fields,
+    "practice_cert": _extract_practice_cert_fields,
+    "social_security": _extract_social_security_fields,
 }
+
+
+# ── Capability tag extraction from OCR results ──
+
+def extract_capability_tags_from_ocr(ocr_results: List[Dict],
+                                      cert_type: str = "") -> List[Dict]:
+    """Convert OCR-extracted fields into capability tags for personnel library.
+
+    Args:
+        ocr_results: List of OCR result dicts from ocr_image()
+        cert_type: Optional hint about certificate type (from bid_document_parser)
+
+    Returns:
+        List of capability tag dicts: [{category, value, confidence, source}]
+    """
+    tags = []
+    import datetime
+    current_year = datetime.datetime.now().year
+
+    for ocr in ocr_results:
+        text = ocr.get("ocr_text", "")
+        if not text:
+            continue
+
+        # Determine cert type from hint or auto-classification
+        ctype = cert_type or ocr.get("image_type", "")
+
+        # Try all relevant extractors based on cert type
+        if ctype in ("id_card",) or "身份证" in text:
+            fields = _extract_id_card_fields(text)
+            if fields.get("birth_year"):
+                age = current_year - int(fields["birth_year"])
+                tags.append({"category": "age", "value": str(age),
+                             "confidence": 0.95, "source": "ocr_rule"})
+            if fields.get("gender"):
+                tags.append({"category": "gender", "value": fields["gender"],
+                             "confidence": 0.95, "source": "ocr_rule"})
+            if fields.get("id_number"):
+                tags.append({"category": "id_verified", "value": "是",
+                             "confidence": 1.0, "source": "ocr_rule"})
+
+        if ctype in ("degree",) or any(kw in text for kw in ["学历", "毕业", "学位", "大学"]):
+            fields = _extract_degree_fields(text)
+            if fields.get("degree_level"):
+                tags.append({"category": "education_level",
+                             "value": fields["degree_level"],
+                             "confidence": 0.9, "source": "ocr_rule"})
+            if fields.get("school"):
+                tags.append({"category": "school", "value": fields["school"],
+                             "confidence": 0.9, "source": "ocr_rule"})
+            if fields.get("major"):
+                tags.append({"category": "major", "value": fields["major"],
+                             "confidence": 0.85, "source": "ocr_rule"})
+
+        if ctype in ("practice_cert",) or any(kw in text for kw in ["执业", "律师证"]):
+            fields = _extract_practice_cert_fields(text)
+            if fields.get("practice_start_year"):
+                years = current_year - int(fields["practice_start_year"])
+                if years > 20:
+                    exp_range = "20年以上"
+                elif years > 10:
+                    exp_range = "10-20年"
+                elif years > 5:
+                    exp_range = "5-10年"
+                elif years > 3:
+                    exp_range = "3-5年"
+                else:
+                    exp_range = "0-3年"
+                tags.append({"category": "experience_range", "value": exp_range,
+                             "confidence": 0.95, "source": "ocr_rule"})
+                tags.append({"category": "practice_start_year",
+                             "value": fields["practice_start_year"],
+                             "confidence": 0.9, "source": "ocr_rule"})
+            if fields.get("practice_cert_number"):
+                tags.append({"category": "certification",
+                             "value": "律师执业证",
+                             "confidence": 1.0, "source": "ocr_rule"})
+
+        if ctype in ("social_security",) or "社保" in text:
+            fields = _extract_social_security_fields(text)
+            if fields.get("social_security_status"):
+                tags.append({"category": "social_security",
+                             "value": fields["social_security_status"],
+                             "confidence": 0.9, "source": "ocr_rule"})
+
+    # Deduplicate (same category+value)
+    seen = set()
+    unique_tags = []
+    for tag in tags:
+        key = f"{tag['category']}:{tag['value']}"
+        if key not in seen:
+            seen.add(key)
+            unique_tags.append(tag)
+
+    return unique_tags
 
 
 # ── Core OCR function ──

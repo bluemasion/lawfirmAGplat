@@ -1620,6 +1620,26 @@ async def confirm_materials(req: ConfirmMaterialsRequest):
                                        project=project_name)
     logger.info(f"[confirm] ✅ Save complete: {save_counts}")
 
+    # Save capability tags from OCR rules (if any)
+    capability_tags = pending.get("capability_tags", {})
+    if capability_tags:
+        tags_saved = 0
+        for person_name, tags in capability_tags.items():
+            # Find the material_id for this person
+            person_materials = store.search_materials(
+                name=person_name, material_type="resume", company=company
+            )
+            if person_materials:
+                material_id = person_materials[0].get("id")
+                if material_id:
+                    count = store.save_capability_tags(
+                        material_id, tags, source="ocr_rule"
+                    )
+                    tags_saved += count
+        if tags_saved:
+            logger.info(f"[confirm] 🏷️ Saved {tags_saved} OCR capability tags "
+                        f"for {len(capability_tags)} persons")
+
     return {
         "success": True,
         "data": {
@@ -1854,6 +1874,7 @@ async def parse_archive(req: ParseArchiveRequest):
             "qualifications": [],
             "narrative_chunks": [],
         }
+        all_capability_tags = {}  # person_name → [tags] from OCR rules
 
         total = len(selected)
         for idx, rel_path in enumerate(selected, 1):
@@ -2044,6 +2065,11 @@ async def parse_archive(req: ParseArchiveRequest):
                     # Merge into all_materials
                     for cat in all_materials:
                         all_materials[cat].extend(materials.get(cat, []))
+                    # Merge capability tags
+                    for person, tags in materials.get("capability_tags", {}).items():
+                        if person not in all_capability_tags:
+                            all_capability_tags[person] = []
+                        all_capability_tags[person].extend(tags)
 
                 elif ext in (".jpg", ".jpeg", ".png"):
                     # Image: OCR and classify
@@ -2220,6 +2246,7 @@ async def parse_archive(req: ParseArchiveRequest):
         store.save_pending(upload_id, {
             "materials": all_materials,
             "company": resolved_company,
+            "capability_tags": all_capability_tags,
         })
 
         # Send final "complete" event
