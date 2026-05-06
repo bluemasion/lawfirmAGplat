@@ -104,8 +104,6 @@ CREATE TABLE IF NOT EXISTS reference_sections (
 CREATE INDEX IF NOT EXISTS idx_materials_company ON materials(company_id);
 CREATE INDEX IF NOT EXISTS idx_materials_project ON materials(project_id);
 CREATE INDEX IF NOT EXISTS idx_materials_category ON materials(category);
-CREATE INDEX IF NOT EXISTS idx_materials_parent ON materials(parent_person);
-CREATE INDEX IF NOT EXISTS idx_materials_sub ON materials(sub_category);
 CREATE INDEX IF NOT EXISTS idx_narratives_company ON narrative_chunks(company_id);
 CREATE INDEX IF NOT EXISTS idx_image_meta_type ON image_meta(image_type);
 CREATE INDEX IF NOT EXISTS idx_ref_sections_type ON reference_sections(section_type);
