@@ -46,17 +46,19 @@ CREATE TABLE IF NOT EXISTS bid_projects (
 );
 
 CREATE TABLE IF NOT EXISTS materials (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    company_id   INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-    project_id   INTEGER REFERENCES bid_projects(id) ON DELETE SET NULL,
-    category     TEXT NOT NULL,
-    name         TEXT NOT NULL,
-    entity_type  TEXT DEFAULT '',
-    data         TEXT NOT NULL DEFAULT '{}',
-    source_file  TEXT DEFAULT '',
-    source_path  TEXT DEFAULT '',
-    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id     INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    project_id     INTEGER REFERENCES bid_projects(id) ON DELETE SET NULL,
+    category       TEXT NOT NULL,
+    name           TEXT NOT NULL,
+    entity_type    TEXT DEFAULT '',
+    parent_person  TEXT DEFAULT '',
+    sub_category   TEXT DEFAULT '',
+    data           TEXT NOT NULL DEFAULT '{}',
+    source_file    TEXT DEFAULT '',
+    source_path    TEXT DEFAULT '',
+    created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(company_id, category, name)
 );
 
@@ -102,6 +104,8 @@ CREATE TABLE IF NOT EXISTS reference_sections (
 CREATE INDEX IF NOT EXISTS idx_materials_company ON materials(company_id);
 CREATE INDEX IF NOT EXISTS idx_materials_project ON materials(project_id);
 CREATE INDEX IF NOT EXISTS idx_materials_category ON materials(category);
+CREATE INDEX IF NOT EXISTS idx_materials_parent ON materials(parent_person);
+CREATE INDEX IF NOT EXISTS idx_materials_sub ON materials(sub_category);
 CREATE INDEX IF NOT EXISTS idx_narratives_company ON narrative_chunks(company_id);
 CREATE INDEX IF NOT EXISTS idx_image_meta_type ON image_meta(image_type);
 CREATE INDEX IF NOT EXISTS idx_ref_sections_type ON reference_sections(section_type);
@@ -175,8 +179,16 @@ class MaterialStore:
                     pass
             _safe_add_column(conn, "materials", "project_id",
                             "INTEGER REFERENCES bid_projects(id) ON DELETE SET NULL")
+            _safe_add_column(conn, "materials", "parent_person", "TEXT", "''")
+            _safe_add_column(conn, "materials", "sub_category", "TEXT", "''")
             _safe_add_column(conn, "narrative_chunks", "project_id",
                             "INTEGER REFERENCES bid_projects(id) ON DELETE SET NULL")
+            # Indexes for new columns
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_materials_parent ON materials(parent_person)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_materials_sub ON materials(sub_category)")
+            except sqlite3.OperationalError:
+                pass
             conn.commit()
         finally:
             conn.close()
@@ -386,6 +398,47 @@ class MaterialStore:
             conn.close()
 
     # ── Save Methods ──
+
+    # ── Sub-category mapping: entity_type/image_type → (sub_category, label) ──
+    # Fixed mapping, covers all known material types
+    _SUB_CATEGORY_MAP = {
+        # Person certificates (from image_type or entity_type)
+        'id_card':         ('id_proof',        '身份证明'),
+        'degree':          ('education_proof',  '学历证明'),
+        'practice_cert':   ('practice_qual',    '执业资质'),
+        'bar_cert':        ('practice_qual',    '执业资质'),
+        'intern_cert':     ('practice_qual',    '执业资质'),
+        'social_security': ('social_security',  '社保证明'),
+        'personal_cert':   ('personal_cert',    '人员证件'),
+        # Firm-level
+        'ranking':         ('ranking',          '荣誉排名'),
+        'ranking_proof':   ('ranking',          '荣誉排名'),
+        'award':           ('award',            '荣誉奖项'),
+        'firm_license':    ('firm_license',     '企业证照'),
+        'firm_audit':      ('financial',        '财务资料'),
+        'financial_proof': ('financial',        '财务资料'),
+        'bond':            ('bond',             '保证金'),
+        'compliance':      ('compliance',       '诚信证明'),
+    }
+
+    @classmethod
+    def _resolve_sub_category(cls, entity_type, source_file='', item=None):
+        """Resolve sub_category from entity_type and filename hints.
+
+        Returns (sub_category, label) tuple.
+        """
+        # Direct mapping from entity_type
+        if entity_type and entity_type in cls._SUB_CATEGORY_MAP:
+            return cls._SUB_CATEGORY_MAP[entity_type]
+
+        # Filename-based fallback for bond/compliance
+        fname = (source_file or '').lower()
+        if any(kw in fname for kw in ['保证金', '保函', '投标保证']):
+            return ('bond', '保证金')
+        if any(kw in fname for kw in ['诚信', '信用', '无违法']):
+            return ('compliance', '诚信证明')
+
+        return ('', '')
 
     # ── Entity type classification for qualifications ──
     # (keywords, entity_type) — first match wins
@@ -678,6 +731,27 @@ class MaterialStore:
                     if category == "qualifications":
                         entity_type = self._classify_entity_type(name, item)
 
+                    # ── Resolve parent_person ──
+                    parent_person = item.get("_parent_person", "")
+                    if not parent_person and category == "resumes":
+                        parent_person = name  # resume name IS the person
+                    if not parent_person:
+                        # Try extracting from source_file
+                        source_file = item.get("_source_file", "")
+                        parent_person = self._extract_person_name_from_record(
+                            source_file) or ""
+
+                    # ── Resolve sub_category ──
+                    sub_category = item.get("_sub_category", "")
+                    if not sub_category:
+                        sub_category, _ = self._resolve_sub_category(
+                            entity_type,
+                            source_file=item.get("_source_file", ""),
+                            item=item)
+                    # Default sub_category for resumes
+                    if not sub_category and category == "resumes":
+                        sub_category = "resume"
+
                     # Remove internal fields before storing
                     clean = {k: v for k, v in item.items()
                              if not k.startswith("_") or k == "_images"}
@@ -686,10 +760,11 @@ class MaterialStore:
                     conn.execute("""
                         INSERT OR REPLACE INTO materials
                         (company_id, project_id, category, name, entity_type,
+                         parent_person, sub_category,
                          data, source_file, source_path, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                     """, (company_id, project_id, category, name,
-                          entity_type,
+                          entity_type, parent_person, sub_category,
                           json.dumps(clean, ensure_ascii=False),
                           source_file, source_path))
                     saved += 1
@@ -825,6 +900,104 @@ class MaterialStore:
             "qualifications": self.get_qualifications(company, project_id),
             "narrative_chunks": self.get_narrative_chunks(company),
         }
+
+    def get_grouped_materials(self, company: str = "") -> Dict[str, Any]:
+        """Get materials organized by person and sub-category.
+
+        Returns:
+            {
+                "persons": {
+                    "蔡磊": {
+                        "resume": {...},
+                        "id_proof": [...],
+                        "education_proof": [...],
+                        "practice_qual": [...],
+                        "social_security": [...]
+                    },
+                    ...
+                },
+                "firm": {
+                    "ranking": [...],
+                    "award": [...],
+                    "firm_license": [...],
+                    "financial": [...],
+                    "bond": [...],
+                    "compliance": [...]
+                },
+                "unclassified": [...]
+            }
+        """
+        conn = self._get_conn()
+        try:
+            if company:
+                rows = conn.execute("""
+                    SELECT m.*, c.name as company_name
+                    FROM materials m
+                    JOIN companies c ON m.company_id = c.id
+                    WHERE c.name = ?
+                    ORDER BY m.parent_person, m.sub_category, m.name
+                """, (company,)).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT m.*, c.name as company_name
+                    FROM materials m
+                    JOIN companies c ON m.company_id = c.id
+                    ORDER BY m.parent_person, m.sub_category, m.name
+                """).fetchall()
+
+            persons = {}    # person_name -> {sub_cat -> [items]}
+            firm = {}       # sub_cat -> [items]
+            unclassified = []
+
+            # Person-level sub-categories
+            _PERSON_SUB_CATS = {
+                'resume', 'id_proof', 'education_proof',
+                'practice_qual', 'social_security', 'personal_cert'
+            }
+            # Firm-level sub-categories
+            _FIRM_SUB_CATS = {
+                'ranking', 'award', 'firm_license',
+                'financial', 'bond', 'compliance'
+            }
+
+            for row in rows:
+                data = json.loads(row["data"]) if row["data"] else {}
+                item = {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "category": row["category"],
+                    "entity_type": row["entity_type"] or "",
+                    "sub_category": row["sub_category"] or "",
+                    "parent_person": row["parent_person"] or "",
+                    "source_file": row["source_file"] or "",
+                    "data": data,
+                }
+
+                person = row["parent_person"] or ""
+                sub_cat = row["sub_category"] or ""
+
+                if person and sub_cat in _PERSON_SUB_CATS:
+                    if person not in persons:
+                        persons[person] = {}
+                    persons[person].setdefault(sub_cat, []).append(item)
+                elif sub_cat in _FIRM_SUB_CATS:
+                    firm.setdefault(sub_cat, []).append(item)
+                elif person:
+                    # Has person but unknown sub_cat
+                    if person not in persons:
+                        persons[person] = {}
+                    persons[person].setdefault(
+                        sub_cat or "other", []).append(item)
+                else:
+                    unclassified.append(item)
+
+            return {
+                "persons": persons,
+                "firm": firm,
+                "unclassified": unclassified,
+            }
+        finally:
+            conn.close()
 
     def get_summary(self, company: str = "",
                     project_id: int = None) -> Dict[str, int]:

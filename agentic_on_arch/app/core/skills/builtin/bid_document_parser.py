@@ -417,6 +417,33 @@ class BidDocumentParserSkill(BaseSkill):
             if linked_certs:
                 r["certifications"] = linked_certs
 
+        # Step 3d: Tag _parent_person and _sub_category on all items
+        # Person from filename (e.g. "蔡磊律师-TY250609.docx" → "蔡磊")
+        from app.core.skills.builtin.material_store import MaterialStore
+        filename_person = MaterialStore._extract_person_name_from_record(
+            filename) or ""
+
+        for r in resumes:
+            r["_parent_person"] = (r.get("name") or "").strip()
+            r["_sub_category"] = "resume"
+
+        for q in qualifications:
+            # Personal cert → link to cert holder
+            if q.get("cert_type") == "personal":
+                q["_parent_person"] = q.get("cert_holder_name", filename_person)
+            else:
+                q["_parent_person"] = ""  # company-level
+
+            # Sub-category from name/section_title
+            q_name = (q.get("name") or "").lower()
+            cert_type, _ = MaterialStore._classify_cert_type(q_name)
+            sub_cat, _ = MaterialStore._resolve_sub_category(cert_type)
+            q["_sub_category"] = sub_cat
+
+        for p in projects:
+            p["_parent_person"] = ""
+            p["_sub_category"] = ""
+
         # Log classification
         personal_count = sum(1 for q in qualifications if q.get("cert_type") == "personal")
         company_count = len(qualifications) - personal_count

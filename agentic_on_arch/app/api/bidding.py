@@ -2327,6 +2327,42 @@ async def get_companies():
     return {"success": True, "data": {"companies": companies, "default": default}}
 
 
+@router.get("/materials/grouped")
+async def get_grouped_materials(company: str = ""):
+    """获取按人员+子分类分组的素材列表"""
+    from app.core.skills.builtin.material_store import get_material_store
+    store = get_material_store()
+    grouped = store.get_grouped_materials(company)
+
+    # Build summary
+    person_count = len(grouped["persons"])
+    firm_count = sum(len(v) for v in grouped["firm"].values())
+    unclassified_count = len(grouped["unclassified"])
+
+    # Sub-category labels for frontend
+    sub_cat_labels = {
+        'resume': '简历', 'id_proof': '身份证明',
+        'education_proof': '学历证明', 'practice_qual': '执业资质',
+        'social_security': '社保证明', 'personal_cert': '人员证件',
+        'ranking': '荣誉排名', 'award': '荣誉奖项',
+        'firm_license': '企业证照', 'financial': '财务资料',
+        'bond': '保证金', 'compliance': '诚信证明',
+    }
+
+    return {
+        "success": True,
+        "data": {
+            "grouped": grouped,
+            "summary": {
+                "person_count": person_count,
+                "firm_count": firm_count,
+                "unclassified_count": unclassified_count,
+            },
+            "sub_category_labels": sub_cat_labels,
+        }
+    }
+
+
 class SetDefaultCompanyRequest(BaseModel):
     company: str
 
