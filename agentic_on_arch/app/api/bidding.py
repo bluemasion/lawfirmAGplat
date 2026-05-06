@@ -2122,8 +2122,9 @@ async def parse_archive(req: ParseArchiveRequest):
                                     sub_cat, sub_label = sub_cat2, sub_label2
                                     entity_type = cert_type
 
-                        # 4. Extract person name from filename
-                        person_name = MaterialStore._extract_person_name_from_record(fname_base)
+                        # 4. Extract person name from filename + OCR text
+                        person_name = MaterialStore._extract_person_name_from_record(
+                            fname_base, ocr_text=ocr_text or '')
                         # Determine cert_type for storage
                         is_personal = bool(person_name) or entity_type in (
                             'id_card', 'degree', 'practice_cert', 'bar_cert',
@@ -2316,6 +2317,82 @@ async def parse_archive(req: ParseArchiveRequest):
 
             # Send "done" event for this file
             yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total, 'file': fname, 'status': 'done', 'result': result}, ensure_ascii=False)}\n\n"
+
+        # ── LLM fallback: classify qualifications that rules couldn't handle ──
+        unclassified_quals = []
+        for i, q in enumerate(all_materials.get("qualifications", [])):
+            has_person = bool(q.get("parent_person", ""))
+            has_sub = bool(q.get("sub_category", "") or q.get("_sub_category", ""))
+            if not has_person or not has_sub:
+                unclassified_quals.append((i, q))
+
+        if unclassified_quals:
+            logger.info(f"[archive] {len(unclassified_quals)} qualifications need LLM classify")
+            known_persons = [r.get("name", "").strip()
+                             for r in all_materials.get("resumes", [])
+                             if r.get("name")]
+
+            item_descs = []
+            for idx, (orig_i, q) in enumerate(unclassified_quals):
+                item_descs.append(
+                    f"{idx+1}. 名称=\"{q.get('name', '')[:40]}\", "
+                    f"来源文件=\"{q.get('_source_file', '')}\", "
+                    f"当前person=\"{q.get('parent_person', '')}\", "
+                    f"当前sub=\"{q.get('sub_category', '') or q.get('_sub_category', '')}\""
+                )
+
+            sub_cat_options = (
+                "id_proof(身份证明), education_proof(学历证明), "
+                "practice_qual(执业资质), social_security(社保证明), "
+                "ranking(荣誉排名), award(荣誉奖项), "
+                "firm_license(企业证照), financial(财务资料), "
+                "bond(保证金), compliance(诚信证明), other(其他)"
+            )
+
+            prompt = f"""请对以下律师事务所的素材进行分类。已知团队人员: {', '.join(known_persons[:20])}
+
+素材列表:
+{chr(10).join(item_descs)}
+
+请为每个素材判断:
+1. sub_category: 从以下选项中选择: {sub_cat_options}
+2. parent_person: 如果是某个人员的证件/资质，填写人员姓名(尽量匹配已知人员)；如果是企业级素材，留空""
+
+返回JSON数组: [{{"index": 1, "sub_category": "id_proof", "parent_person": "蔡磊"}}, ...]
+只返回JSON。"""
+
+            try:
+                from app.core.llm import get_llm
+                llm = get_llm(req.llm_provider)
+                response = await llm.generate(prompt)
+                import re as _re
+                json_match = _re.search(r'\[.*\]', response, _re.DOTALL)
+                if json_match:
+                    results = json.loads(json_match.group())
+                    applied = 0
+                    for r in results:
+                        if not r or not isinstance(r, dict):
+                            continue
+                        idx = r.get("index", 0) - 1
+                        if 0 <= idx < len(unclassified_quals):
+                            orig_i, q = unclassified_quals[idx]
+                            new_sub = r.get("sub_category", "") or ""
+                            new_person = r.get("parent_person", "") or ""
+                            if new_sub and new_sub != "other" and not q.get("sub_category"):
+                                q["sub_category"] = new_sub
+                                q["_sub_category"] = new_sub
+                                applied += 1
+                            if new_person and not q.get("parent_person"):
+                                q["parent_person"] = new_person
+                                q["_parent_person"] = new_person
+                                applied += 1
+                            logger.info(
+                                f"  LLM classify: \"{q.get('name','')[:25]}\" "
+                                f"→ sub={new_sub}, person={new_person}")
+                    logger.info(f"[archive] LLM fallback applied {applied} fixes "
+                                f"to {len(unclassified_quals)} items")
+            except Exception as e:
+                logger.warning(f"[archive] LLM fallback classify failed: {e}")
 
         # All files parsed — build diff and save pending
         diff = store.diff_materials(all_materials)

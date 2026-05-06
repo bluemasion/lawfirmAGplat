@@ -440,6 +440,7 @@ class MaterialStore:
 
     # ── Entity type classification for qualifications ──
     # (keywords, entity_type) — first match wins
+    # IMPORTANT: More specific rules BEFORE generic ones
     _ENTITY_TYPE_RULES = [
         # Ranking proof with images (screenshots)
         (['排名证明'], 'ranking_proof'),
@@ -453,11 +454,18 @@ class MaterialStore:
         (['营业执照', '执业许可', '律所证'], 'firm_license'),
         # Financial audit reports
         (['审计', '财务', '报表', '审计报告'], 'firm_audit'),
-        # Personal certificates (mixed into qualifications)
-        (['身份证', '学历', '执业证', '资格证', '社保', '实习证',
-          '律师执照', '年检'], 'personal_cert'),
+        # ── Personal certificates: specific types (not lumped) ──
+        (['身份证'], 'id_card'),
+        (['学历', '毕业证', '学位', '学士', '硕士', '博士'], 'degree'),
+        (['执业证', '律师证', '律师执照'], 'practice_cert'),
+        (['资格证', '法律职业'], 'bar_cert'),
+        (['社保', '社会保险', '养老保险', '参保'], 'social_security'),
+        (['实习证', '实习'], 'intern_cert'),
+        (['年检', '年度考核', '考核备案'], 'practice_cert'),
         # Financial/payment related
         (['保证金', '缴费'], 'financial_proof'),
+        # Integrity/compliance
+        (['诚信', '信用', '无违法', '行政处罚'], 'compliance'),
     ]
 
     @classmethod
@@ -503,9 +511,14 @@ class MaterialStore:
         return 'other', '其他证件'
 
     @classmethod
-    def _extract_person_name_from_record(cls, record_name):
-        """Try to extract a real person name from an artifact record name.
-        E.g., '身份证扫描件-钟雨' → '钟雨', '范彩云-硕士毕业证书' → '范彩云'
+    def _extract_person_name_from_record(cls, record_name, ocr_text=''):
+        """Try to extract a real person name from filename and/or OCR text.
+
+        Strategies (in order):
+        1. Separator-based: '身份证扫描件-钟雨' → '钟雨'
+        2. OCR text: '姓名池晓梅' → '池晓梅'
+        3. Filename prefix: '钟雨实习证书首页' → '钟雨'
+        4. Filename suffix: '董宇霆律师2024年...' → '董宇霆'
         """
         import re
         name = record_name.strip()
@@ -518,6 +531,7 @@ class MaterialStore:
             '身份证', '学历', '毕业证', '学位', '执业证', '资格证',
             '证书', '扫描件', '副本', '许可证', '社保', '实习证',
             '律师', '平台', '律所', '事务所', '信息', '记录',
+            '代理人', '简历', '主要人员', '投标', '证明', '缴纳',
         ]
 
         def _is_person_part(part):
@@ -531,14 +545,34 @@ class MaterialStore:
                 return False
             return True
 
-        # Common patterns: "XXX-人名" or "人名-XXX" or "人名 - XXX"
-        # Split by common separators
+        # Strategy 1: Separator-based split (most reliable)
         for sep in ['-', '—', '_', ' ']:
             parts = [p.strip() for p in name.split(sep) if p.strip()]
             if len(parts) >= 2:
                 for part in parts:
                     if _is_person_part(part):
                         return part
+
+        # Strategy 2: Extract from OCR text (e.g. '姓名池晓梅', '姓名 池晓梅')
+        if ocr_text:
+            # Pattern: 姓名 + optional space/colon + 2-4 Chinese chars
+            m = re.search(r'姓[\s名]*[：:\s]*([\u4e00-\u9fff]{2,4})', ocr_text)
+            if m and _is_person_part(m.group(1)):
+                return m.group(1)
+
+        # Strategy 3: Filename prefix — '钟雨实习证书首页' → '钟雨'
+        # Match 2-3 Chinese chars at start, followed by a doc keyword
+        m = re.match(r'^([\u4e00-\u9fff]{2,3})(?:' +
+                     '|'.join(re.escape(kw) for kw in _DOC_KEYWORDS) +
+                     r')', name)
+        if m and _is_person_part(m.group(1)):
+            return m.group(1)
+
+        # Strategy 4: Filename contains person name before '律师/律师事务所'
+        # e.g. '董宇霆律师2024年律师执照年检证明' → '董宇霆'
+        m = re.match(r'^([\u4e00-\u9fff]{2,3})律师', name)
+        if m and _is_person_part(m.group(1)):
+            return m.group(1)
 
         return None
 
