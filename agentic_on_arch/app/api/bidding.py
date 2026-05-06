@@ -2362,14 +2362,19 @@ async def parse_archive(req: ParseArchiveRequest):
             # ── Build per-item description with OCR text ──
             item_descs = []
             for idx, (orig_i, q) in enumerate(unclassified_quals):
+                q_name = (q.get('name') or '')[:40]
+                q_src = q.get('_source_file') or ''
+                q_rel = q.get('_rel_path') or ''
+                q_person = q.get('parent_person') or ''
+                q_sub = q.get('sub_category') or q.get('_sub_category') or ''
                 desc = (
-                    f"{idx+1}. 名称=\"{q.get('name', '')[:40]}\"\n"
-                    f"   来源文件=\"{q.get('_source_file', '')}\"\n"
-                    f"   所在目录=\"{os.path.dirname(q.get('_rel_path', ''))}\"\n"
-                    f"   当前person=\"{q.get('parent_person', '')}\"\n"
-                    f"   当前sub=\"{q.get('sub_category', '') or q.get('_sub_category', '')}\""
+                    f"{idx+1}. 名称=\"{q_name}\"\n"
+                    f"   来源文件=\"{q_src}\"\n"
+                    f"   所在目录=\"{os.path.dirname(q_rel)}\"\n"
+                    f"   当前person=\"{q_person}\"\n"
+                    f"   当前sub=\"{q_sub}\""
                 )
-                ocr = q.get("_ocr_text", "")
+                ocr = q.get("_ocr_text") or ""
                 if ocr:
                     desc += f"\n   OCR文本=\"{ocr[:200]}\""
                 item_descs.append(desc)
