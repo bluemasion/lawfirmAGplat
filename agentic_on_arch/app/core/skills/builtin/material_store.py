@@ -950,16 +950,18 @@ class MaterialStore:
             # Person-level sub-categories
             _PERSON_SUB_CATS = {
                 'resume', 'id_proof', 'education_proof',
-                'practice_qual', 'social_security', 'personal_cert'
+                'practice_qual', 'practice_cert', 'social_security',
+                'personal_cert'
             }
             # Firm-level sub-categories
             _FIRM_SUB_CATS = {
                 'ranking', 'award', 'firm_license',
-                'financial', 'bond', 'compliance'
+                'financial', 'bond', 'compliance', 'integrity'
             }
 
             for row in rows:
                 data = json.loads(row["data"]) if row["data"] else {}
+                # Flatten key fields from nested data to top-level
                 item = {
                     "id": row["id"],
                     "name": row["name"],
@@ -968,11 +970,15 @@ class MaterialStore:
                     "sub_category": row["sub_category"] or "",
                     "parent_person": row["parent_person"] or "",
                     "source_file": row["source_file"] or "",
-                    "data": data,
+                    "number": data.get("number", ""),
+                    "issuer": data.get("issuer", ""),
+                    "valid_until": data.get("valid_until", ""),
+                    "_images": data.get("_images", []),
                 }
 
                 person = row["parent_person"] or ""
                 sub_cat = row["sub_category"] or ""
+                category = row["category"] or ""
 
                 if person and sub_cat in _PERSON_SUB_CATS:
                     if person not in persons:
@@ -986,7 +992,8 @@ class MaterialStore:
                         persons[person] = {}
                     persons[person].setdefault(
                         sub_cat or "other", []).append(item)
-                else:
+                elif category == "qualifications":
+                    # Only qualifications go to unclassified
                     unclassified.append(item)
 
             return {

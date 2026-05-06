@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { X, Plus, Trash2, Edit3, Users, Briefcase, Award, ArrowLeft, Save, Loader2, ChevronDown, ChevronRight, FileText, File, ExternalLink, Upload, CheckCircle2, AlertCircle, RefreshCw, ImageIcon, Building2, Archive, FolderOpen, Check, Square, CheckSquare } from 'lucide-react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { X, Plus, Trash2, Edit3, Users, Briefcase, Award, ArrowLeft, Save, Loader2, ChevronDown, ChevronRight, FileText, File, ExternalLink, Upload, CheckCircle2, AlertCircle, RefreshCw, ImageIcon, Building2, Archive, FolderOpen, Check, Square, CheckSquare, User, Shield, FolderClosed } from 'lucide-react';
 
 const API_BASE = `http://${window.location.hostname}:8001`;
 
@@ -183,6 +183,11 @@ export default function MaterialPanel({ onClose }) {
     const [archiveData, setArchiveData] = useState(null); // { archive_id, file_tree, summary }
     const [archiveStep, setArchiveStep] = useState(0); // 0=idle, 1=uploading, 2=file_list, 3=parsing, 4=done
     const [parseProgress, setParseProgress] = useState([]); // [{file, status, result}]
+
+    // ── Grouped qualifications state ──
+    const [groupedData, setGroupedData] = useState(null); // { persons, firm, unclassified, sub_category_labels }
+    const [groupedLoading, setGroupedLoading] = useState(false);
+    const [expandedFolders, setExpandedFolders] = useState({}); // { 'person:俞芷园': true, 'firm:ranking': true }
 
     const UPLOAD_STEPS = [
         { label: '上传文件', icon: '📤', desc: '正在上传文件到服务器...' },
@@ -520,6 +525,7 @@ export default function MaterialPanel({ onClose }) {
                 }
                 loadMaterials();
                 loadCompanies();
+                loadGroupedQualifications();
             } else {
                 alert(`入库失败: ${result.message}`);
             }
@@ -582,6 +588,30 @@ export default function MaterialPanel({ onClose }) {
             setLoading(false);
         }
     }, [selectedProject]);
+
+    // ── Load grouped qualifications ──
+    const loadGroupedQualifications = useCallback(async () => {
+        if (!selectedCompany) return;
+        setGroupedLoading(true);
+        try {
+            const res = await fetch(`${API_BASE}/api/bidding/materials/grouped?company=${encodeURIComponent(selectedCompany)}`);
+            const data = await res.json();
+            if (data.success) {
+                setGroupedData(data.data);
+            }
+        } catch (e) {
+            console.error('Failed to load grouped qualifications:', e);
+        } finally {
+            setGroupedLoading(false);
+        }
+    }, [selectedCompany]);
+
+    // Load grouped data when switching to qualifications tab
+    useEffect(() => {
+        if (activeTab === 'qualifications' && selectedCompany) {
+            loadGroupedQualifications();
+        }
+    }, [activeTab, selectedCompany, loadGroupedQualifications]);
 
     // ── Load bid projects for selected company ──
     const loadBidProjects = useCallback(async () => {
@@ -674,8 +704,249 @@ export default function MaterialPanel({ onClose }) {
         }
     };
 
+    // ── Qualifications Grouped View ──
+    const renderGroupedQualifications = () => {
+        if (groupedLoading) {
+            return (
+                <div className="flex items-center justify-center py-16 text-zinc-500">
+                    <Loader2 size={20} className="animate-spin mr-2" />
+                    加载分组数据...
+                </div>
+            );
+        }
+
+        if (!groupedData) {
+            return (
+                <div className="text-center py-16 text-zinc-500 text-sm">
+                    暂无分组数据
+                </div>
+            );
+        }
+
+        const { grouped, sub_category_labels: labels, summary: gSummary } = groupedData;
+        const { persons, firm, unclassified } = grouped;
+
+        const toggleFolder = (key) => {
+            setExpandedFolders(prev => ({ ...prev, [key]: !prev[key] }));
+        };
+
+        // Sub-category icon map
+        const subIcon = (sub) => {
+            const map = {
+                id_proof: '🪪', education_proof: '🎓', practice_cert: '📜', practice_qual: '⚖️',
+                social_security: '🏥', ranking: '🏆', award: '🥇', bond: '💰',
+                integrity: '✅', financial: '📊', firm_license: '🏛️', resume: '👤',
+                personal_cert: '📋', other: '📎',
+            };
+            return map[sub] || '📄';
+        };
+
+        // Render a single qualification item
+        const renderQualItem = (item) => {
+            const isExp = expandedIdx === item.id;
+            return (
+                <div key={item.id} className="border-b border-zinc-800/30 last:border-0">
+                    <div
+                        className={`flex items-center justify-between px-4 py-2.5 cursor-pointer transition-colors ${isExp ? 'bg-zinc-800/60' : 'hover:bg-zinc-800/40'}`}
+                        onClick={() => {
+                            if (isExp) { setExpandedIdx(null); return; }
+                            setExpandedIdx(item.id);
+                        }}
+                    >
+                        <div className="flex items-center space-x-2 min-w-0 flex-1">
+                            {isExp ? <ChevronDown size={12} className="text-orange-400 shrink-0" /> : <ChevronRight size={12} className="text-zinc-600 shrink-0" />}
+                            <span className="text-[12px] text-zinc-200 truncate">{item.name || '未命名'}</span>
+                        </div>
+                        <div className="flex items-center space-x-2 shrink-0">
+                            {item._images?.length > 0 && (
+                                <span className="text-[10px] text-orange-400/70 flex items-center gap-0.5">🖼️ {item._images.length}</span>
+                            )}
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setEditingItem({ mode: 'edit', data: { ...item } }); }}
+                                className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors"
+                            >
+                                <Edit3 size={12} />
+                            </button>
+                        </div>
+                    </div>
+                    {isExp && (
+                        <div className="bg-zinc-900/80 border-t border-zinc-700/30">
+                            <div className="px-5 py-3">
+                                <table className="w-full text-[12px]">
+                                    <tbody>
+                                        {[
+                                            ['资质编号', item.number],
+                                            ['颁发机构', item.issuer],
+                                            ['有效期至', item.valid_until],
+                                        ].filter(([, v]) => v).map(([label, val], i) => (
+                                            <tr key={i} className={i % 2 === 0 ? 'bg-zinc-800/30' : ''}>
+                                                <td className="px-3 py-1.5 text-zinc-500 w-24 whitespace-nowrap">{label}</td>
+                                                <td className="px-3 py-1.5 text-zinc-200">{val}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <ImagesBlock images={item._images} />
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // Persons with qualifications (not just resumes)
+        const personsWithQuals = Object.entries(persons).filter(([, cats]) => {
+            return Object.keys(cats).some(k => k !== 'resume');
+        });
+
+        return (
+            <div className="divide-y divide-zinc-700/50">
+                {/* ━━ Summary Bar ━━ */}
+                <div className="px-4 py-3 bg-gradient-to-r from-zinc-800/80 to-zinc-900/80 flex items-center gap-4 text-[11px]">
+                    <span className="text-zinc-400">📊 分组统计</span>
+                    <span className="text-amber-300">👤 {personsWithQuals.length} 人员资质</span>
+                    <span className="text-sky-300">🏢 {gSummary.firm_count} 企业资质</span>
+                    {gSummary.unclassified_count > 0 && <span className="text-zinc-500">❓ {gSummary.unclassified_count} 未分类</span>}
+                </div>
+
+                {/* ━━ Person Folders ━━ */}
+                {personsWithQuals.length > 0 && (
+                    <div>
+                        <div className="px-4 py-2 bg-amber-500/5 border-b border-amber-500/20 flex items-center gap-2">
+                            <User size={13} className="text-amber-400" />
+                            <span className="text-[12px] font-semibold text-amber-300">人员资质</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300">{personsWithQuals.length}</span>
+                        </div>
+                        {personsWithQuals.map(([personName, cats]) => {
+                            const folderKey = `person:${personName}`;
+                            const isOpen = expandedFolders[folderKey];
+                            const qualCats = Object.entries(cats).filter(([k]) => k !== 'resume');
+                            const totalItems = qualCats.reduce((sum, [, items]) => sum + items.length, 0);
+
+                            return (
+                                <div key={folderKey}>
+                                    <div
+                                        className={`flex items-center justify-between px-4 py-2.5 cursor-pointer transition-colors border-b border-zinc-800/30 ${isOpen ? 'bg-zinc-800/50' : 'hover:bg-zinc-800/30'}`}
+                                        onClick={() => toggleFolder(folderKey)}
+                                    >
+                                        <div className="flex items-center space-x-2">
+                                            {isOpen ? <FolderOpen size={14} className="text-amber-400" /> : <FolderClosed size={14} className="text-amber-500/60" />}
+                                            <span className="text-[13px] font-medium text-zinc-100">{personName}</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            {qualCats.map(([sub, items]) => (
+                                                <span key={sub} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-700/60 text-zinc-400">
+                                                    {subIcon(sub)} {labels[sub] || sub} ({items.length})
+                                                </span>
+                                            ))}
+                                            <span className="text-[10px] text-zinc-600">{totalItems}项</span>
+                                            {isOpen ? <ChevronDown size={14} className="text-zinc-500" /> : <ChevronRight size={14} className="text-zinc-600" />}
+                                        </div>
+                                    </div>
+                                    {isOpen && (
+                                        <div className="bg-zinc-900/40">
+                                            {qualCats.map(([sub, items]) => (
+                                                <div key={sub}>
+                                                    <div className="px-6 py-1.5 bg-zinc-800/30 border-b border-zinc-800/40 flex items-center gap-1.5">
+                                                        <span className="text-[11px]">{subIcon(sub)}</span>
+                                                        <span className="text-[11px] text-zinc-400 font-medium">{labels[sub] || sub}</span>
+                                                        <span className="text-[10px] text-zinc-600">({items.length})</span>
+                                                    </div>
+                                                    <div className="pl-4">
+                                                        {items.map(renderQualItem)}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+
+                {/* ━━ Firm Folders ━━ */}
+                {Object.keys(firm).length > 0 && (
+                    <div>
+                        <div className="px-4 py-2 bg-sky-500/5 border-b border-sky-500/20 flex items-center gap-2">
+                            <Building2 size={13} className="text-sky-400" />
+                            <span className="text-[12px] font-semibold text-sky-300">企业资质</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-sky-500/20 text-sky-300">{gSummary.firm_count}</span>
+                        </div>
+                        {Object.entries(firm).map(([sub, items]) => {
+                            const folderKey = `firm:${sub}`;
+                            const isOpen = expandedFolders[folderKey];
+                            return (
+                                <div key={folderKey}>
+                                    <div
+                                        className={`flex items-center justify-between px-4 py-2.5 cursor-pointer transition-colors border-b border-zinc-800/30 ${isOpen ? 'bg-zinc-800/50' : 'hover:bg-zinc-800/30'}`}
+                                        onClick={() => toggleFolder(folderKey)}
+                                    >
+                                        <div className="flex items-center space-x-2">
+                                            {isOpen ? <FolderOpen size={14} className="text-sky-400" /> : <FolderClosed size={14} className="text-sky-500/60" />}
+                                            <span className="text-[11px]">{subIcon(sub)}</span>
+                                            <span className="text-[13px] font-medium text-zinc-100">{labels[sub] || sub}</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-[10px] text-zinc-600">{items.length}项</span>
+                                            {isOpen ? <ChevronDown size={14} className="text-zinc-500" /> : <ChevronRight size={14} className="text-zinc-600" />}
+                                        </div>
+                                    </div>
+                                    {isOpen && (
+                                        <div className="bg-zinc-900/40 pl-2">
+                                            {items.map(renderQualItem)}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+
+                {/* ━━ Unclassified ━━ */}
+                {unclassified.length > 0 && (
+                    <div>
+                        <div className="px-4 py-2 bg-zinc-700/20 border-b border-zinc-700/30 flex items-center gap-2">
+                            <AlertCircle size={13} className="text-zinc-500" />
+                            <span className="text-[12px] font-medium text-zinc-500">未分类</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-zinc-600/30 text-zinc-500">{unclassified.length}</span>
+                        </div>
+                        {(() => {
+                            const folderKey = 'unclassified';
+                            const isOpen = expandedFolders[folderKey];
+                            return (
+                                <>
+                                    <div
+                                        className={`flex items-center justify-between px-4 py-2 cursor-pointer transition-colors ${isOpen ? 'bg-zinc-800/40' : 'hover:bg-zinc-800/30'}`}
+                                        onClick={() => toggleFolder(folderKey)}
+                                    >
+                                        <div className="flex items-center space-x-2">
+                                            {isOpen ? <FolderOpen size={14} className="text-zinc-500" /> : <FolderClosed size={14} className="text-zinc-600" />}
+                                            <span className="text-[12px] text-zinc-400">查看全部 ({unclassified.length})</span>
+                                        </div>
+                                        {isOpen ? <ChevronDown size={14} className="text-zinc-600" /> : <ChevronRight size={14} className="text-zinc-700" />}
+                                    </div>
+                                    {isOpen && (
+                                        <div className="bg-zinc-900/40 pl-2">
+                                            {unclassified.map(renderQualItem)}
+                                        </div>
+                                    )}
+                                </>
+                            );
+                        })()}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
     // ── Render item list ──
     const renderList = () => {
+        // Special grouped view for qualifications
+        if (activeTab === 'qualifications' && groupedData) {
+            return renderGroupedQualifications();
+        }
+
         const items = materials[activeTab] || [];
         const fields = FIELD_MAP[activeTab];
         const keyField = KEY_FIELD[activeTab];
