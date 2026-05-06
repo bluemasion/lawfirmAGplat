@@ -418,31 +418,51 @@ class BidDocumentParserSkill(BaseSkill):
                 r["certifications"] = linked_certs
 
         # Step 3d: Tag _parent_person and _sub_category on all items
-        # Person from filename (e.g. "蔡磊律师-TY250609.docx" → "蔡磊")
+        # Strategy: rules first → LLM batch fallback for unknowns
         from app.core.skills.builtin.material_store import MaterialStore
         filename_person = MaterialStore._extract_person_name_from_record(
             filename) or ""
+
+        # ── 3d-1: Rule-based tagging ──
+        needs_llm = []  # items that rules couldn't classify
 
         for r in resumes:
             r["_parent_person"] = (r.get("name") or "").strip()
             r["_sub_category"] = "resume"
 
         for q in qualifications:
-            # Personal cert → link to cert holder
+            # Person: from cert_holder or filename
             if q.get("cert_type") == "personal":
                 q["_parent_person"] = q.get("cert_holder_name", filename_person)
             else:
-                q["_parent_person"] = ""  # company-level
+                q["_parent_person"] = ""
 
-            # Sub-category from name/section_title
+            # Sub-category: try rules
             q_name = (q.get("name") or "").lower()
             cert_type, _ = MaterialStore._classify_cert_type(q_name)
             sub_cat, _ = MaterialStore._resolve_sub_category(cert_type)
             q["_sub_category"] = sub_cat
 
+            # If rules couldn't determine sub_category, mark for LLM
+            if not sub_cat or sub_cat == "other":
+                needs_llm.append(("qualification", q))
+
         for p in projects:
             p["_parent_person"] = ""
             p["_sub_category"] = ""
+
+        # ── 3d-2: LLM batch fallback for unknowns ──
+        if needs_llm:
+            logger.info(f"  {len(needs_llm)} items need LLM classification")
+            try:
+                llm_classified = await self._llm_batch_classify(
+                    llm, needs_llm, resumes)
+                rule_count = len(qualifications) + len(projects) - len(needs_llm)
+                logger.info(
+                    f"  Classification: {rule_count} by rules, "
+                    f"{len(needs_llm)} by LLM")
+            except Exception as e:
+                logger.warning(f"  LLM batch classify failed: {e}")
 
         # Log classification
         personal_count = sum(1 for q in qualifications if q.get("cert_type") == "personal")
@@ -584,6 +604,84 @@ class BidDocumentParserSkill(BaseSkill):
         (['社保', '社会保险'], 'social_security', '社保证明'),
         (['实习证', '实习'], 'intern_cert', '实习证'),
     ]
+
+    async def _llm_batch_classify(self, llm, items, resumes):
+        """Batch-classify items that rules couldn't handle.
+
+        Uses a single LLM call to determine sub_category and parent_person
+        for all unknown items at once.
+
+        Args:
+            llm: LLM provider instance
+            items: list of (category_name, item_dict) tuples
+            resumes: list of resume dicts (for person name matching)
+        """
+        if not items:
+            return
+
+        # Build known person list from resumes
+        known_persons = [r.get("name", "").strip() for r in resumes
+                         if r.get("name")]
+
+        # Prepare batch prompt
+        item_descs = []
+        for i, (cat, item) in enumerate(items):
+            name = item.get("name", "")
+            holder = item.get("holder", "")
+            source = item.get("_source_file", "")
+            item_descs.append(
+                f"{i+1}. 名称=\"{name}\", 持有人=\"{holder}\", "
+                f"来源文件=\"{source}\""
+            )
+
+        # Sub-category options
+        sub_cat_options = (
+            "id_proof(身份证明), education_proof(学历证明), "
+            "practice_qual(执业资质), social_security(社保证明), "
+            "ranking(荣誉排名), award(荣誉奖项), "
+            "firm_license(企业证照), financial(财务资料), "
+            "bond(保证金), compliance(诚信证明), other(其他)"
+        )
+
+        prompt = f"""请对以下素材进行分类。已知人员列表: {', '.join(known_persons[:20])}
+
+素材列表:
+{chr(10).join(item_descs)}
+
+请为每个素材判断:
+1. sub_category: 从以下选项中选择: {sub_cat_options}
+2. parent_person: 如果该素材属于某个人员，填写人员姓名；如果是企业级素材，留空
+
+返回JSON数组，格式:
+[{{"index": 1, "sub_category": "practice_qual", "parent_person": "蔡磊"}}, ...]
+
+只返回JSON，不要其他内容。"""
+
+        try:
+            from app.core.llm import get_llm
+            response = await llm.aask(prompt)
+            # Parse response
+            import re
+            json_match = re.search(r'\[.*\]', response, re.DOTALL)
+            if json_match:
+                results = json.loads(json_match.group())
+                for r in results:
+                    idx = r.get("index", 0) - 1
+                    if 0 <= idx < len(items):
+                        cat, item = items[idx]
+                        new_sub = r.get("sub_category", "")
+                        new_person = r.get("parent_person", "")
+                        if new_sub and new_sub != "other":
+                            item["_sub_category"] = new_sub
+                        if new_person:
+                            item["_parent_person"] = new_person
+                        logger.info(
+                            f"  LLM classified: \"{item.get('name', '')[:20]}\" "
+                            f"→ sub={new_sub}, person={new_person}")
+                return results
+        except Exception as e:
+            logger.warning(f"  LLM batch classify parse error: {e}")
+            return []
 
     def _consolidate_resumes(self, resumes):
         """Merge artifact records (like '身份证扫描件-钟雨') into their
