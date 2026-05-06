@@ -199,6 +199,8 @@ class BidDocumentParserSkill(BaseSkill):
         logger.info(f"Parsing historical bid document: {file_path}")
 
         # Step 1: Parse document structure (reuse tender_parsing logic)
+        import os
+        filename = os.path.basename(file_path)
         sections = self._parse_docx(file_path)
         logger.info(f"Parsed {len(sections)} sections from bid document")
 
@@ -208,8 +210,6 @@ class BidDocumentParserSkill(BaseSkill):
 
         # Step 2.5: Filename-based heuristic override
         # If file name strongly hints at a type but LLM missed it, force-classify
-        import os
-        filename = os.path.basename(file_path)
         filename_type = self._detect_type_from_filename(filename)
         if filename_type:
             typed_sections = [s for s in classified
@@ -254,10 +254,12 @@ class BidDocumentParserSkill(BaseSkill):
 
                         # Try DB cache first, then live OCR
                         ocr_text = ""
+                        ocr_result = {}
                         if store:
                             meta = store.get_image_meta(img_hash)
                             if meta:
                                 ocr_text = meta.get("ocr_text", "")
+                                ocr_result = {"ocr_text": ocr_text, "image_type": meta.get("image_type", "")}
 
                         if not ocr_text and os.path.exists(img_path):
                             ocr_result = ocr_image(img_path)
@@ -270,7 +272,7 @@ class BidDocumentParserSkill(BaseSkill):
                             enriched_parts.append(
                                 f"[图片 {img_file} OCR 识别内容]:\n{ocr_text}"
                             )
-                            section_ocr_results.append(ocr_result if isinstance(ocr_result, dict) else {"ocr_text": ocr_text})
+                            section_ocr_results.append(ocr_result)
 
                     if enriched_parts:
                         # Replace original content with OCR-enriched version
@@ -430,7 +432,10 @@ class BidDocumentParserSkill(BaseSkill):
         try:
             from app.core.skills.builtin.material_store import MaterialStore
             store = MaterialStore()
-            known_companies = store.get_companies()
+            known_companies_raw = store.get_companies()
+            # get_companies returns [{name: ..., total: ...}], extract name strings
+            known_companies = [c["name"] if isinstance(c, dict) else c
+                               for c in known_companies_raw]
             if known_companies:
                 # Check filename and content for known company names
                 check_text = filename + " " + " ".join(
