@@ -2335,9 +2335,9 @@ async def parse_archive(req: ParseArchiveRequest):
         if unclassified_quals:
             logger.info(f"[archive] {len(unclassified_quals)} qualifications need LLM classify")
             known_persons = list(dict.fromkeys(
-                r.get("name", "").strip()
+                (r.get("name") or "").strip()
                 for r in all_materials.get("resumes", [])
-                if r.get("name", "").strip()
+                if (r.get("name") or "").strip()
             ))
 
             # ── Build directory context: group ALL files by folder ──
