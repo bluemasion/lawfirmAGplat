@@ -2155,6 +2155,8 @@ async def parse_archive(req: ParseArchiveRequest):
                             "_images": [img_filename],
                             "_source_file": fname,
                             "_source_path": fpath,
+                            "_ocr_text": (ocr_text or "")[:500],
+                            "_rel_path": rel_path,
                         }
 
                         all_materials["qualifications"].append(qual_entry)
@@ -2269,6 +2271,8 @@ async def parse_archive(req: ParseArchiveRequest):
                                 "sub_category": pdf_sub_cat,
                                 "parent_person": pdf_person,
                                 "_source_file": fname,
+                                "_ocr_text": (pdf_text or "")[:500],
+                                "_rel_path": rel_path,
                             }
                             if page_image_files:
                                 entry["_images"] = page_image_files
@@ -2291,6 +2295,8 @@ async def parse_archive(req: ParseArchiveRequest):
                                 "sub_category": pdf_sub_cat,
                                 "parent_person": pdf_person,
                                 "_source_file": fname,
+                                "_ocr_text": (pdf_text or "")[:500],
+                                "_rel_path": rel_path,
                             }
                             if page_image_files:
                                 entry["_images"] = page_image_files
@@ -2328,18 +2334,45 @@ async def parse_archive(req: ParseArchiveRequest):
 
         if unclassified_quals:
             logger.info(f"[archive] {len(unclassified_quals)} qualifications need LLM classify")
-            known_persons = [r.get("name", "").strip()
-                             for r in all_materials.get("resumes", [])
-                             if r.get("name")]
+            known_persons = list(dict.fromkeys(
+                r.get("name", "").strip()
+                for r in all_materials.get("resumes", [])
+                if r.get("name", "").strip()
+            ))
 
+            # ── Build directory context: group ALL files by folder ──
+            from collections import defaultdict
+            dir_files = defaultdict(list)
+            for q2 in all_materials.get("qualifications", []):
+                rp = q2.get("_rel_path", q2.get("_source_file", ""))
+                folder = os.path.dirname(rp) or "根目录"
+                fname2 = os.path.basename(rp)
+                person2 = q2.get("parent_person", "")
+                sub2 = q2.get("sub_category", "") or q2.get("_sub_category", "")
+                dir_files[folder].append(
+                    f"{fname2} [person={person2}, sub={sub2}]"
+                    if person2 or sub2 else fname2
+                )
+
+            dir_context = "\n".join(
+                f"📁 {folder}/\n  " + "\n  ".join(files)
+                for folder, files in sorted(dir_files.items())
+            )
+
+            # ── Build per-item description with OCR text ──
             item_descs = []
             for idx, (orig_i, q) in enumerate(unclassified_quals):
-                item_descs.append(
-                    f"{idx+1}. 名称=\"{q.get('name', '')[:40]}\", "
-                    f"来源文件=\"{q.get('_source_file', '')}\", "
-                    f"当前person=\"{q.get('parent_person', '')}\", "
-                    f"当前sub=\"{q.get('sub_category', '') or q.get('_sub_category', '')}\""
+                desc = (
+                    f"{idx+1}. 名称=\"{q.get('name', '')[:40]}\"\n"
+                    f"   来源文件=\"{q.get('_source_file', '')}\"\n"
+                    f"   所在目录=\"{os.path.dirname(q.get('_rel_path', ''))}\"\n"
+                    f"   当前person=\"{q.get('parent_person', '')}\"\n"
+                    f"   当前sub=\"{q.get('sub_category', '') or q.get('_sub_category', '')}\""
                 )
+                ocr = q.get("_ocr_text", "")
+                if ocr:
+                    desc += f"\n   OCR文本=\"{ocr[:200]}\""
+                item_descs.append(desc)
 
             sub_cat_options = (
                 "id_proof(身份证明), education_proof(学历证明), "
@@ -2349,16 +2382,23 @@ async def parse_archive(req: ParseArchiveRequest):
                 "bond(保证金), compliance(诚信证明), other(其他)"
             )
 
-            prompt = f"""请对以下律师事务所的素材进行分类。已知团队人员: {', '.join(known_persons[:20])}
+            prompt = f"""你是律师事务所素材分类专家。请对以下无法自动分类的素材进行判断。
 
-素材列表:
+已知团队人员: {', '.join(known_persons[:30])}
+
+目录结构与已分类文件(供参考):
+{dir_context}
+
+待分类素材:
 {chr(10).join(item_descs)}
 
-请为每个素材判断:
-1. sub_category: 从以下选项中选择: {sub_cat_options}
-2. parent_person: 如果是某个人员的证件/资质，填写人员姓名(尽量匹配已知人员)；如果是企业级素材，留空""
+分类要求:
+1. sub_category: 从以下选项选择: {sub_cat_options}
+2. parent_person: 如果属于某个人员，填人名(优先匹配已知人员)；企业级素材留空""
+3. 利用同目录其他文件推断归属(例如同目录下有"钟雨-身份证.pdf"，那未标注的文件可能也是钟雨的)
+4. 利用OCR文本中的"姓名""持证人"等线索判断人员归属
 
-返回JSON数组: [{{"index": 1, "sub_category": "id_proof", "parent_person": "蔡磊"}}, ...]
+返回JSON数组: [{{"index": 1, "sub_category": "id_proof", "parent_person": "池晓梅"}}, ...]
 只返回JSON。"""
 
             try:
