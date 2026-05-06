@@ -730,7 +730,7 @@ class MaterialStore:
                         entity_type = self._classify_entity_type(name, item)
 
                     # ── Resolve parent_person ──
-                    parent_person = item.get("_parent_person", "")
+                    parent_person = item.get("_parent_person", "") or item.get("parent_person", "")
                     if not parent_person and category == "resumes":
                         parent_person = name  # resume name IS the person
                     if not parent_person:
@@ -740,7 +740,7 @@ class MaterialStore:
                             source_file) or ""
 
                     # ── Resolve sub_category ──
-                    sub_category = item.get("_sub_category", "")
+                    sub_category = item.get("_sub_category", "") or item.get("sub_category", "")
                     if not sub_category:
                         sub_category, _ = self._resolve_sub_category(
                             entity_type,

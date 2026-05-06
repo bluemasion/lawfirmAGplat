@@ -2077,9 +2077,10 @@ async def parse_archive(req: ParseArchiveRequest):
                         all_capability_tags[person].extend(tags)
 
                 elif ext in (".jpg", ".jpeg", ".png"):
-                    # Image: OCR and classify
+                    # Image: OCR and classify with entity_type + person extraction
                     try:
                         from app.core.skills.builtin.image_ocr import ocr_image
+                        from app.core.skills.builtin.material_store import MaterialStore
                         ocr_result = ocr_image(fpath)
                         ocr_text = ocr_result.get("ocr_text", "")
 
@@ -2100,23 +2101,68 @@ async def parse_archive(req: ParseArchiveRequest):
                         if not os.path.exists(dest_path):
                             shutil.copy2(fpath, dest_path)
 
-                        # Classify as qualification
+                        # ── Smart classification from filename + OCR ──
+                        fname_base = fname.rsplit(".", 1)[0]
+                        # Use filename + rel_path for classification (more info)
+                        classify_text = f"{rel_path} {fname_base}"
+                        if ocr_text and len(ocr_text) > 5:
+                            classify_text += f" {ocr_text[:200]}"
+
+                        # 1. Classify entity type (ranking/award/id_card/degree/etc.)
+                        entity_type = MaterialStore._classify_entity_type(classify_text)
+                        # 2. Resolve to sub_category
+                        sub_cat, sub_label = MaterialStore._resolve_sub_category(
+                            entity_type, source_file=fname)
+                        # 3. Also try cert_type rules (身份证/学历/执业证)
+                        if not sub_cat:
+                            cert_type, cert_label = MaterialStore._classify_cert_type(classify_text)
+                            if cert_type != 'other':
+                                sub_cat2, sub_label2 = MaterialStore._resolve_sub_category(cert_type)
+                                if sub_cat2:
+                                    sub_cat, sub_label = sub_cat2, sub_label2
+                                    entity_type = cert_type
+
+                        # 4. Extract person name from filename
+                        person_name = MaterialStore._extract_person_name_from_record(fname_base)
+                        # Determine cert_type for storage
+                        is_personal = bool(person_name) or entity_type in (
+                            'id_card', 'degree', 'practice_cert', 'bar_cert',
+                            'intern_cert', 'social_security', 'personal_cert')
+
+                        # Build a good name: prefer OCR first line, fallback filename
+                        qual_name = fname_base
+                        if ocr_text and len(ocr_text) > 5:
+                            lines = [l.strip() for l in ocr_text.split("\n") if l.strip()]
+                            if lines:
+                                # Use first meaningful line but cap length
+                                first_line = lines[0][:50]
+                                # If person detected, append to name
+                                if person_name and person_name not in first_line:
+                                    qual_name = f"{first_line} — {person_name}"
+                                else:
+                                    qual_name = first_line
+                        elif person_name:
+                            qual_name = f"{fname_base} — {person_name}"
+
                         qual_entry = {
-                            "name": fname.rsplit(".", 1)[0],
+                            "name": qual_name,
                             "issuer": "",
-                            "cert_type": "enterprise",
+                            "entity_type": entity_type,
+                            "cert_type": "personal" if is_personal else "enterprise",
+                            "sub_category": sub_cat,
+                            "parent_person": person_name,
                             "_images": [img_filename],
                             "_source_file": fname,
                             "_source_path": fpath,
                         }
-                        if ocr_text and len(ocr_text) > 5:
-                            lines = [l.strip() for l in ocr_text.split("\n") if l.strip()]
-                            if lines:
-                                qual_entry["name"] = lines[0][:50]
 
                         all_materials["qualifications"].append(qual_entry)
                         result = {"qualifications": 1}
                         store.save_image_meta([ocr_result])
+                        logger.info(
+                            f"[archive] Image classified: {fname} → "
+                            f"entity={entity_type}, sub={sub_cat}, "
+                            f"person={person_name or '-'}, name={qual_name[:30]}")
 
                     except Exception as ocr_err:
                         logger.warning(f"[archive] OCR failed for {fname}: {ocr_err}")
@@ -2179,11 +2225,33 @@ async def parse_archive(req: ParseArchiveRequest):
                                 pass
 
                         # Build material entry with page images
+                        # ── Smart classification for PDFs ──
+                        from app.core.skills.builtin.material_store import MaterialStore
+                        classify_text = f"{rel_path} {title}"
+                        if pdf_text and len(pdf_text) > 10:
+                            classify_text += f" {pdf_text[:300]}"
+                        pdf_entity_type = MaterialStore._classify_entity_type(classify_text)
+                        pdf_sub_cat, _ = MaterialStore._resolve_sub_category(
+                            pdf_entity_type, source_file=fname)
+                        if not pdf_sub_cat:
+                            cert_type, _ = MaterialStore._classify_cert_type(classify_text)
+                            if cert_type != 'other':
+                                pdf_sub_cat, _ = MaterialStore._resolve_sub_category(cert_type)
+                                if pdf_sub_cat:
+                                    pdf_entity_type = cert_type
+                        pdf_person = MaterialStore._extract_person_name_from_record(title)
+                        pdf_is_personal = bool(pdf_person) or pdf_entity_type in (
+                            'id_card', 'degree', 'practice_cert', 'bar_cert',
+                            'intern_cert', 'social_security', 'personal_cert')
+
                         if auto_cat_pdf == "resume":
                             entry = {
                                 "name": title,
                                 "title": "",
                                 "brief_bio": pdf_text[:300].strip(),
+                                "entity_type": pdf_entity_type,
+                                "sub_category": pdf_sub_cat,
+                                "parent_person": pdf_person,
                                 "_source_file": fname,
                                 "_source_path": fpath,
                             }
@@ -2195,7 +2263,10 @@ async def parse_archive(req: ParseArchiveRequest):
                             entry = {
                                 "name": title,
                                 "issuer": "",
-                                "cert_type": "enterprise",
+                                "entity_type": pdf_entity_type,
+                                "cert_type": "personal" if pdf_is_personal else "enterprise",
+                                "sub_category": pdf_sub_cat,
+                                "parent_person": pdf_person,
                                 "_source_file": fname,
                             }
                             if page_image_files:
@@ -2210,11 +2281,14 @@ async def parse_archive(req: ParseArchiveRequest):
                             })
                             result = {"narrative_chunks": 1}
                         else:
-                            # General: still save with images
+                            # General: still save with images + classification
                             entry = {
                                 "name": title,
                                 "issuer": "",
-                                "cert_type": "enterprise",
+                                "entity_type": pdf_entity_type,
+                                "cert_type": "personal" if pdf_is_personal else "enterprise",
+                                "sub_category": pdf_sub_cat,
+                                "parent_person": pdf_person,
                                 "_source_file": fname,
                             }
                             if page_image_files:
