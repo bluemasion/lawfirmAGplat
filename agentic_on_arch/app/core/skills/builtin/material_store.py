@@ -1733,8 +1733,16 @@ class MaterialStore:
                     if field in _SKIP_FIELDS:
                         continue
                     if field == "_images":
-                        old_imgs = set(old.get("_images") or [])
-                        new_imgs = set(new_val or [])
+                        def _img_names(lst):
+                            result = []
+                            for x in (lst or []):
+                                if isinstance(x, dict):
+                                    result.append(x.get("filename", x.get("name", str(x))))
+                                else:
+                                    result.append(str(x))
+                            return set(result)
+                        old_imgs = _img_names(old.get("_images"))
+                        new_imgs = _img_names(new_val)
                         if old_imgs != new_imgs:
                             added = new_imgs - old_imgs
                             removed = old_imgs - new_imgs
