@@ -1875,6 +1875,7 @@ async def parse_archive(req: ParseArchiveRequest):
             "narrative_chunks": [],
         }
         all_capability_tags = {}  # person_name → [tags] from OCR rules
+        detected_companies = []  # collect detected company names from each file
 
         total = len(selected)
         for idx, rel_path in enumerate(selected, 1):
@@ -2065,6 +2066,10 @@ async def parse_archive(req: ParseArchiveRequest):
                     # Merge into all_materials
                     for cat in all_materials:
                         all_materials[cat].extend(materials.get(cat, []))
+                    # Collect detected company name
+                    doc_company = materials.pop("detected_company", "") or ""
+                    if doc_company:
+                        detected_companies.append(doc_company)
                     # Merge capability tags
                     for person, tags in materials.get("capability_tags", {}).items():
                         if person not in all_capability_tags:
@@ -2242,7 +2247,20 @@ async def parse_archive(req: ParseArchiveRequest):
         diff = store.diff_materials(all_materials)
 
         upload_id = f"upload_{int(_time.time())}"
-        resolved_company = req.company or store.get_default_company() or ""
+
+        # Resolve company: form field > detected from docs > default
+        detected_company = ""
+        if detected_companies:
+            # Majority vote: pick the most frequent company name
+            from collections import Counter
+            company_votes = Counter(detected_companies)
+            detected_company = company_votes.most_common(1)[0][0]
+            logger.info(f"[archive] Detected companies: {dict(company_votes)}, "
+                        f"winner='{detected_company}'")
+
+        resolved_company = req.company or detected_company or store.get_default_company() or ""
+        logger.info(f"[archive] Resolved company: '{resolved_company}' "
+                    f"(form='{req.company}', detected='{detected_company}')")
         store.save_pending(upload_id, {
             "materials": all_materials,
             "company": resolved_company,
