@@ -2432,14 +2432,47 @@ async def parse_archive(req: ParseArchiveRequest):
                                 q["_parent_person"] = new_person
                                 applied += 1
                             logger.info(
-                                f"  LLM classify: \"{q.get('name','')[:25]}\" "
+                                f"  LLM classify: \"{(q.get('name') or '')[:25]}\" "
                                 f"→ sub={new_sub}, person={new_person}")
                     logger.info(f"[archive] LLM fallback applied {applied} fixes "
                                 f"to {len(unclassified_quals)} items")
             except Exception as e:
                 logger.warning(f"[archive] LLM fallback classify failed: {e}")
 
-        # All files parsed — build diff and save pending
+        # ── Person propagation: fill missing person from same-dir neighbors ──
+        quals = all_materials.get("qualifications", [])
+        still_missing = [q for q in quals if not q.get("parent_person")]
+        if still_missing:
+            from collections import defaultdict
+            # Build index: (directory, entity_type) → person
+            dir_type_person = defaultdict(set)
+            for q in quals:
+                person = q.get("parent_person", "")
+                if person:
+                    rp = q.get("_rel_path") or q.get("_source_file") or ""
+                    folder = os.path.dirname(rp) or "root"
+                    etype = q.get("entity_type", "")
+                    if etype:
+                        dir_type_person[(folder, etype)].add(person)
+
+            propagated = 0
+            for q in still_missing:
+                rp = q.get("_rel_path") or q.get("_source_file") or ""
+                folder = os.path.dirname(rp) or "root"
+                etype = q.get("entity_type", "")
+                # Try exact match: same folder + same entity_type
+                key = (folder, etype)
+                if key in dir_type_person and len(dir_type_person[key]) == 1:
+                    person = list(dir_type_person[key])[0]
+                    q["parent_person"] = person
+                    q["_parent_person"] = person
+                    propagated += 1
+                    logger.info(
+                        f"  Person propagated: \"{(q.get('name') or '')[:25]}\" "
+                        f"→ {person} (same dir+type)")
+            if propagated:
+                logger.info(f"[archive] Person propagation: {propagated} items fixed")
+
         diff = store.diff_materials(all_materials)
 
         upload_id = f"upload_{int(_time.time())}"
