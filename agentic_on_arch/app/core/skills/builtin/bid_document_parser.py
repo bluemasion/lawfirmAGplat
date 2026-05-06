@@ -659,18 +659,20 @@ class BidDocumentParserSkill(BaseSkill):
 
         try:
             from app.core.llm import get_llm
-            response = await llm.aask(prompt)
+            response = await llm.generate(prompt)
             # Parse response
             import re
             json_match = re.search(r'\[.*\]', response, re.DOTALL)
             if json_match:
                 results = json.loads(json_match.group())
                 for r in results:
+                    if not r or not isinstance(r, dict):
+                        continue
                     idx = r.get("index", 0) - 1
                     if 0 <= idx < len(items):
                         cat, item = items[idx]
-                        new_sub = r.get("sub_category", "")
-                        new_person = r.get("parent_person", "")
+                        new_sub = r.get("sub_category", "") or ""
+                        new_person = r.get("parent_person", "") or ""
                         if new_sub and new_sub != "other":
                             item["_sub_category"] = new_sub
                         if new_person:
