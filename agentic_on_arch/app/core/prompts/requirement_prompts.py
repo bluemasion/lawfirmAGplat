@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Requirement extraction prompts — separated from business logic.
 
 This file contains all prompt templates used by requirement_extraction.py

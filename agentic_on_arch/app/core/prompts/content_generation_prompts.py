@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Content generation prompts — separated from business logic.
 
 This file contains all prompt templates used by content_generation.py.

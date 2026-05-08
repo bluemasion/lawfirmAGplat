@@ -25,8 +25,8 @@ def _get_material_store():
         return None
 
 
-# ── Prompts are now managed separately in app/core/prompts/ ──
-# To modify prompt behavior, edit: app/core/prompts/content_generation_prompts.py
+# ── Prompts are now managed via PromptSkill system ──
+# Legacy prompts kept for backward compatibility (non-streaming path)
 from app.core.prompts.content_generation_prompts import (
     SECTION_GENERATION_SYSTEM,
     PROMPT_FIRM_INTRO,
@@ -37,6 +37,8 @@ from app.core.prompts.content_generation_prompts import (
     NARRATIVE_PROMPT,
     PROMPT_ROUTING,
 )
+# New PromptSkill system (used in streaming path)
+from app.core.prompts.prompt_skill import get_prompt_registry
 
 
 def _route_prompt(title, return_type=False):
@@ -849,27 +851,43 @@ class ContentGenerationSkill(BaseSkill):
             scoring_context = "\n".join(scoring_parts)
             logger.info(f"  Scoring context injected: {len(scoring_context)}字")
 
-        selected_prompt = _route_prompt(title)
+        # ── Build prompt via PromptSkill (dynamic, company-aware) ──
+        prompt_registry = get_prompt_registry()
+        prompt_skill = prompt_registry.match(title)
 
-        # If we have a deterministic block, instruct LLM to write only the
-        # analytical/response part, since company data is already composed
-        if deterministic_block:
-            llm_instruction = (
-                "\n\n⚠️ 重要：以下真实数据块将直接出现在最终文档中，你不需要重复这些内容。"
-                "\n你只需要撰写：1) 章节开头的总述段落 2) 针对招标要求的逐项回应 "
-                "3) 服务方案/措施的具体描述。"
-                "\n不要包含团队介绍表格、业绩列表或资质清单，这些已经有了。\n"
-            )
-            skeleton_hint = skeleton_hint + outline_hint + material_context + scoring_context + llm_instruction
-        else:
-            skeleton_hint = skeleton_hint + outline_hint + material_context + scoring_context + structured_context
+        # Build context for PromptSkill
+        prompt_context = {
+            "company_info": company_info,
+            "reference_data": reference,
+            "skeleton_hint": skeleton_hint,
+        }
 
-        prompt = selected_prompt.format(
-            section_title=title,
-            content_hints=hints or "按照招标要求撰写",
-            reference_data=reference,
-            company_info=company_info,
-            skeleton_hint=skeleton_hint,
+        # Inject team/projects/qualifications from store into context
+        store = _get_material_store()
+        if store and company:
+            try:
+                prompt_context["team"] = store.get_resumes(
+                    company=company, project_id=project_id
+                )
+                prompt_context["projects"] = store.get_projects(
+                    company=company, project_id=project_id
+                )
+                prompt_context["qualifications"] = store.get_qualifications(
+                    company=company, project_id=project_id
+                )
+            except Exception as e:
+                logger.warning(f"  PromptSkill context build error: {e}")
+
+        section_dict = {
+            "title": title,
+            "content_hints": hints or "按照招标要求撰写",
+        }
+        prompt = prompt_skill.build_prompt(section_dict, prompt_context)
+        system_prompt = prompt_skill.get_system_prompt()
+
+        logger.info(
+            f"  PromptSkill '{prompt_skill.name}' built prompt: "
+            f"{len(prompt)}字, system: {len(system_prompt)}字"
         )
 
         # Stream from LLM, accumulate full content
@@ -883,7 +901,7 @@ class ContentGenerationSkill(BaseSkill):
 
         # Then: stream LLM-generated analytical content
         try:
-            async for token in llm.stream(prompt, system=SECTION_GENERATION_SYSTEM):
+            async for token in llm.stream(prompt, system=system_prompt):
                 full_content.append(token)
                 if chunk_callback:
                     await chunk_callback(token)

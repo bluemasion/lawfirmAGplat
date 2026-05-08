@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # ── Prompt Registry ──
 # Central registry for all prompt templates.
 # Prompts are loaded from individual module files for clean separation.
