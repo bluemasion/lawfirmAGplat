@@ -299,7 +299,8 @@ class ContentGenerationSkill(BaseSkill):
 
         # ── narrative → LLM ──
         content = await self._generate_narrative_section(
-            title, content_hints, reference_data, company_info, llm_provider, skeleton
+            title, content_hints, reference_data, company_info, llm_provider, skeleton,
+            company=params.get("company", "")
         )
         missing = self._scan_missing(content)
         return self._result(title, content, missing, "generated")
@@ -540,7 +541,8 @@ class ContentGenerationSkill(BaseSkill):
                         )
                     elif allowed_cats is not None and "company_profile" in allowed_cats:
                         # Special: inject company profile summary (not full materials)
-                        profile = self._data_retrieval.get_company_profile()
+                        # Use company-aware profile to avoid leaking default firm data
+                        profile = self._build_company_profile(company, project_id=project_id)
                         cp_parts = ["\n【我方律所核心信息（真实数据，必须在方案中引用）】"]
                         cp_parts.append(
                             f"- 律所名称：{profile.get('company_name', '?')}，"
@@ -1165,7 +1167,8 @@ class ContentGenerationSkill(BaseSkill):
     async def _generate_narrative_section(self, title: str, hints: str,
                                            reference: str, company_info: str,
                                            llm_provider: str,
-                                           skeleton: Optional[str] = None) -> str:
+                                           skeleton: Optional[str] = None,
+                                           company: str = "") -> str:
         """Generate narrative section using LLM (the only LLM-calling path)."""
         llm = get_llm(llm_provider)
 
@@ -1178,7 +1181,7 @@ class ContentGenerationSkill(BaseSkill):
         store = _get_material_store()
         if store:
             try:
-                relevant = await store.search_narratives(title, top_k=3)
+                relevant = await store.search_narratives(title, top_k=3, company=company)
                 if relevant:
                     material_context = "\n【来自历史投标文件的参考范文】\n"
                     for chunk in relevant:
@@ -1200,7 +1203,7 @@ class ContentGenerationSkill(BaseSkill):
                 team_kws = ["团队介绍", "人员介绍", "律师团队", "拟投入人员",
                             "项目团队", "核心团队", "服务团队", "人员配置"]
                 if any(kw in title_lower for kw in team_kws):
-                    resumes = store.get_resumes()
+                    resumes = store.get_resumes(company=company)
                     if resumes:
                         structured_context = "\n【素材库：律师简历数据】\n"
                         for r in resumes[:8]:
@@ -1221,7 +1224,7 @@ class ContentGenerationSkill(BaseSkill):
                 proj_kws = ["业绩介绍", "类似业绩", "项目经验", "服务案例",
                             "成功案例", "代表业绩", "项目业绩"]
                 if any(kw in title_lower for kw in proj_kws):
-                    projects = store.get_projects()
+                    projects = store.get_projects(company=company)
                     if projects:
                         structured_context = "\n【素材库：项目业绩数据】\n"
                         for p in projects[:6]:
@@ -1241,7 +1244,7 @@ class ContentGenerationSkill(BaseSkill):
                 # Qualification chapters → inject real cert data
                 qual_kws = ["资质", "资格", "荣誉", "证书"]
                 if any(kw in title_lower for kw in qual_kws):
-                    quals = store.get_qualifications()
+                    quals = store.get_qualifications(company=company)
                     if quals:
                         structured_context = "\n【素材库：资质证书数据】\n"
                         for q in quals[:10]:
