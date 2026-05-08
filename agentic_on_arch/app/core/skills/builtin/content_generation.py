@@ -543,9 +543,9 @@ class ContentGenerationSkill(BaseSkill):
                         # Special: inject company profile summary (not full materials)
                         # Use company-aware profile to avoid leaking default firm data
                         profile = self._build_company_profile(company, project_id=project_id)
-                        cp_parts = ["\n【我方律所核心信息（真实数据，必须在方案中引用）】"]
+                        cp_parts = ["\n【我方公司核心信息（真实数据，必须在方案中引用）】"]
                         cp_parts.append(
-                            f"- 律所名称：{profile.get('company_name', '?')}，"
+                            f"- 公司名称：{profile.get('company_name', '?')}，"
                             f"成立于{profile.get('established_year', '?')}年"
                         )
                         highlight = profile.get('history_highlight', '')
@@ -579,8 +579,8 @@ class ContentGenerationSkill(BaseSkill):
                                 cp_parts.append(f"- {v}")
                         structured_context = "\n".join(cp_parts)
                         structured_context += (
-                            "\n\n⚠️ 重要：以上是我方律所的真实数据和制度。"
-                            "请在方案中自然引用这些信息（特别是分所数、团队规模、"
+                            "\n\n⚠️ 重要：以上是我方公司的真实数据和制度。"
+                            "请在方案中自然引用这些信息（特别是团队规模、"
                             "管理制度），不要使用泛泛的承诺性语言。\n"
                         )
                         logger.info(
