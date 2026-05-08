@@ -167,6 +167,50 @@ def _safe_parse_json(text: str) -> Any:
         return None
 
 
+def _sanitize_records(records: List[Dict], required_fields: Dict[str, str] = None) -> List[Dict]:
+    """Sanitize LLM-extracted records to prevent downstream crashes.
+    
+    Fixes:
+    - None values → "" for string fields
+    - Missing required fields → default values
+    - Strip whitespace from string values
+    
+    Args:
+        records: List of dicts from LLM JSON output
+        required_fields: {field_name: default_value} for fields that must exist
+    """
+    if not records:
+        return records
+    
+    sanitized = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        
+        # Replace None with "" for all string-expected fields
+        for key, value in record.items():
+            if value is None:
+                record[key] = ""
+            elif isinstance(value, str):
+                record[key] = value.strip()
+        
+        # Ensure required fields exist with defaults
+        if required_fields:
+            for field, default in required_fields.items():
+                if field not in record or not record[field]:
+                    record[field] = default
+        
+        sanitized.append(record)
+    
+    return sanitized
+
+
+# Required field defaults for each entity type
+_RESUME_FIELDS = {"name": "[未知姓名]", "title": "", "specialty": ""}
+_PROJECT_FIELDS = {"project_name": "[未知项目]", "client": "", "description": ""}
+_QUALIFICATION_FIELDS = {"name": "[未知资质]", "number": "", "issuer": ""}
+
+
 class BidDocumentParserSkill(BaseSkill):
     """Parse historical bid documents to extract reusable materials."""
 
@@ -1282,6 +1326,7 @@ class BidDocumentParserSkill(BaseSkill):
             response = await llm.generate(prompt, system=EXTRACT_RESUMES_SYSTEM)
             result = _safe_parse_json(response)
             if isinstance(result, list):
+                result = _sanitize_records(result, _RESUME_FIELDS)
                 # Add source info
                 for item in result:
                     item["_source_section"] = title
@@ -1301,6 +1346,7 @@ class BidDocumentParserSkill(BaseSkill):
             response = await llm.generate(prompt, system=EXTRACT_PROJECTS_SYSTEM)
             result = _safe_parse_json(response)
             if isinstance(result, list):
+                result = _sanitize_records(result, _PROJECT_FIELDS)
                 for item in result:
                     item["_source_section"] = title
                 return result
@@ -1319,6 +1365,7 @@ class BidDocumentParserSkill(BaseSkill):
             response = await llm.generate(prompt, system=EXTRACT_QUALIFICATIONS_SYSTEM)
             result = _safe_parse_json(response)
             if isinstance(result, list):
+                result = _sanitize_records(result, _QUALIFICATION_FIELDS)
                 for item in result:
                     item["_source_section"] = title
                 return result
