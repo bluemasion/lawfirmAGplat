@@ -11,12 +11,14 @@ import SecuritiesAgent from './agents/SecuritiesAgent';
 import LegalTranslation from './agents/LegalTranslation';
 import ConflictSearch from './agents/ConflictSearch';
 import BiddingAgent from './agents/BiddingAgent';
+import ProcurementAgent from './agents/ProcurementAgent';
 
 const agentComponents = {
   securities: SecuritiesAgent,
   translation: LegalTranslation,
   conflict: ConflictSearch,
   bidding: BiddingAgent,
+  procurement: ProcurementAgent,
 };
 
 export default function App() {

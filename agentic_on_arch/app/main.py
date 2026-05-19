@@ -73,7 +73,7 @@ def create_app() -> FastAPI:
     app.add_middleware(BiddingRequestLogger)
 
     # --- Routers ---
-    from app.api import auth, agent, chat, knowledge, file, bidding, company
+    from app.api import auth, agent, chat, knowledge, file, bidding, company, procurement
     app.include_router(auth.router, prefix="/api/auth", tags=["认证"])
     app.include_router(agent.router, prefix="/api/agent", tags=["Agent"])
     app.include_router(chat.router, prefix="/api/chat", tags=["对话"])
@@ -81,6 +81,7 @@ def create_app() -> FastAPI:
     app.include_router(file.router, prefix="/api/file", tags=["文件"])
     app.include_router(bidding.router, prefix="/api/bidding", tags=["投标"])
     app.include_router(company.router, prefix="/api/company", tags=["律所数据"])
+    app.include_router(procurement.router, prefix="/api/procurement", tags=["采购"])
 
     # --- Health check ---
     @app.get("/health", tags=["系统"])
