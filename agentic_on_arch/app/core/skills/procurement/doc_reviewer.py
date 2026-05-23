@@ -247,13 +247,17 @@ class DocReviewer:
         for category_key, category_label in [("commercial_items", "商务"), ("technical_items", "技术")]:
             items = scoring.get(category_key, [])
             if items and dist:
-                items_total = sum(item.get("default_score", 0) for item in items)
+                # items may be dicts or string IDs — only sum if dicts
+                dict_items = [i for i in items if isinstance(i, dict)]
+                if not dict_items:
+                    continue
+                items_total = sum(item.get("default_score", 0) for item in dict_items)
                 expected = dist.get(category_key.replace("_items", ""), 0)
                 if expected > 0 and items_total != expected:
                     issues.append(ReviewIssue(
                         category="logic", severity="ERROR",
                         title=f"{category_label}评分子项合计({items_total}) ≠ {category_label}总分({expected})",
-                        detail=f"{category_label}评分共{len(items)}项，子项分值合计{items_total}分，但{category_label}总分设为{expected}分",
+                        detail=f"{category_label}评分共{len(dict_items)}项，子项分值合计{items_total}分，但{category_label}总分设为{expected}分",
                         suggestion=f"调整{category_label}评分子项分值使合计等于{expected}",
                         location="第三章 评标办法",
                     ))
@@ -361,6 +365,8 @@ class DocReviewer:
         # A4: 评分项分值为0或负数
         for category in ["commercial_items", "technical_items"]:
             for item in scoring.get(category, []):
+                if not isinstance(item, dict):
+                    continue  # skip string IDs
                 score = item.get("default_score", 0)
                 if score <= 0:
                     issues.append(ReviewIssue(
