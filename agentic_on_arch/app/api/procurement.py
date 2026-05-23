@@ -245,11 +245,27 @@ async def generate_document(req: GenerateDocRequest):
     """生成采购文件 Word 文档"""
     from app.core.skills.procurement.template_engine import TemplateEngine
     from app.core.skills.procurement.doc_builder import DocBuilder
+    from app.core.skills.procurement.scoring_template import ScoringTemplateLibrary
 
     engine = TemplateEngine()
     params = {**req.parameters}
-    if req.scoring_criteria:
-        params["scoring_criteria"] = req.scoring_criteria
+
+    # Resolve scoring criteria: if items are ID strings, expand to full objects
+    scoring_input = req.scoring_criteria or {}
+    if scoring_input:
+        commercial_items = scoring_input.get("commercial_items", [])
+        technical_items = scoring_input.get("technical_items", [])
+        if commercial_items and isinstance(commercial_items[0], str):
+            lib = ScoringTemplateLibrary()
+            resolved = lib.build_scoring_criteria(
+                commercial_item_ids=commercial_items,
+                technical_item_ids=technical_items if technical_items and isinstance(technical_items[0], str) else [],
+                score_distribution=scoring_input.get("score_distribution", {"commercial": 30, "technical": 40, "price": 30}),
+                price_formula=scoring_input.get("price_formula", "arithmetic_mean"),
+            )
+            params["scoring_criteria"] = resolved
+        else:
+            params["scoring_criteria"] = scoring_input
 
     document = engine.fill_template(params)
     builder = DocBuilder()
@@ -273,12 +289,29 @@ async def review_document(req: ReviewRequest):
     """智能审核采购文件"""
     from app.core.skills.procurement.template_engine import TemplateEngine
     from app.core.skills.procurement.doc_reviewer import DocReviewer, ReviewReportGenerator
+    from app.core.skills.procurement.scoring_template import ScoringTemplateLibrary
 
     engine = TemplateEngine()
     params = {**req.parameters}
-    if req.scoring_criteria:
-        params["scoring_criteria"] = req.scoring_criteria
 
+    # Resolve scoring criteria: if items are ID strings, expand to full objects
+    scoring_input = req.scoring_criteria or {}
+    if scoring_input:
+        commercial_items = scoring_input.get("commercial_items", [])
+        technical_items = scoring_input.get("technical_items", [])
+        # Check if items are string IDs (from frontend) vs dict objects
+        if commercial_items and isinstance(commercial_items[0], str):
+            lib = ScoringTemplateLibrary()
+            resolved = lib.build_scoring_criteria(
+                commercial_item_ids=commercial_items,
+                technical_item_ids=technical_items if technical_items and isinstance(technical_items[0], str) else [],
+                score_distribution=scoring_input.get("score_distribution", {"commercial": 30, "technical": 40, "price": 30}),
+                price_formula=scoring_input.get("price_formula", "arithmetic_mean"),
+            )
+            params["scoring_criteria"] = resolved
+        else:
+            params["scoring_criteria"] = scoring_input
+    
     document = engine.fill_template(params)
     reviewer = DocReviewer()
     result = reviewer.review(document)
