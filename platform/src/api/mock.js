@@ -42,6 +42,7 @@ export const agentApps = [
     { id: 'translation', title: '法律高保真翻译', desc: '1:1 格式还原翻译，支持印章排版深度对齐及术语库对齐。', status: '稳定' },
     { id: 'conflict', title: '利冲检索助手', desc: '基于私有化语义模型，实现穿透式别名识别及关联方冲突研判。', status: '稳定' },
     { id: 'bidding', title: '智能投标中心', desc: '自动抓取案管数据及律师履历，智能补全招标文件强制响应项。', status: '在线' },
+    { id: 'procurement', title: '智能采购文件编制', desc: '采购文件模板引擎+参数化填充+评分标准配置+AI三维智能审核，一键生成合规招标文件。', status: '在线' },
 ];
 
 export const conflictMockResult = {

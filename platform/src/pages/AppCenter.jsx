@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
-import { FileCheck, Languages, Search, FileSignature, ChevronRight } from 'lucide-react';
+import { FileCheck, Languages, Search, FileSignature, ClipboardList, ChevronRight } from 'lucide-react';
 import { getAgentApps } from '../api/services';
 
-const iconMap = { securities: FileCheck, translation: Languages, conflict: Search, bidding: FileSignature };
+const iconMap = { securities: FileCheck, translation: Languages, conflict: Search, bidding: FileSignature, procurement: ClipboardList };
 
 export default function AppCenter({ onSelectAgent }) {
     const [apps, setApps] = useState([]);
