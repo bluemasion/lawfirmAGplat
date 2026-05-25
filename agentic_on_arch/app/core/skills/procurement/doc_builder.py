@@ -209,6 +209,9 @@ class DocBuilder:
 
         # 商务评分项
         commercial_items = scoring.get("commercial_items", [])
+        # Resolve string IDs to full objects if needed
+        if commercial_items and isinstance(commercial_items[0], str):
+            commercial_items = self._resolve_items(commercial_items)
         if commercial_items:
             doc.add_paragraph("")
             heading = doc.add_paragraph("商务评分标准")
@@ -224,6 +227,8 @@ class DocBuilder:
                     self._set_run_font(run, "黑体", 11, bold=True)
 
             for idx, item in enumerate(commercial_items, 1):
+                if not isinstance(item, dict):
+                    continue
                 row = table.add_row()
                 row.cells[0].text = str(idx)
                 row.cells[1].text = item.get("name", "")
@@ -232,6 +237,9 @@ class DocBuilder:
 
         # 技术评分项
         technical_items = scoring.get("technical_items", [])
+        # Resolve string IDs to full objects if needed
+        if technical_items and isinstance(technical_items[0], str):
+            technical_items = self._resolve_items(technical_items)
         if technical_items:
             doc.add_paragraph("")
             heading = doc.add_paragraph("技术评分标准")
@@ -247,6 +255,8 @@ class DocBuilder:
                     self._set_run_font(run, "黑体", 11, bold=True)
 
             for idx, item in enumerate(technical_items, 1):
+                if not isinstance(item, dict):
+                    continue
                 row = table.add_row()
                 row.cells[0].text = str(idx)
                 row.cells[1].text = item.get("name", "")
@@ -267,6 +277,18 @@ class DocBuilder:
                     para = doc.add_paragraph(val)
                     for run in para.runs:
                         self._set_run_font(run, "仿宋", 12)
+
+    @staticmethod
+    def _resolve_items(item_ids):
+        """Resolve string IDs to full scoring item dicts."""
+        try:
+            from app.core.skills.procurement.scoring_template import (
+                COMMERCIAL_SCORING_ITEMS, TECHNICAL_SCORING_ITEMS,
+            )
+            all_items = {item["id"]: item for items in [COMMERCIAL_SCORING_ITEMS, TECHNICAL_SCORING_ITEMS] for item in items}
+            return [all_items[i] for i in item_ids if i in all_items]
+        except Exception:
+            return []
 
     def _set_run_font(self, run, font_name: str, size: int, bold: bool = False):
         """设置run的字体"""
