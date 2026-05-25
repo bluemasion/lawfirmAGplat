@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { FileText, ChevronDown, ChevronRight, Check, AlertTriangle, AlertCircle, Download, Loader2, RotateCcw, Sparkles, ArrowLeft, ArrowRight, ClipboardList, Settings2, ShieldCheck, Zap } from 'lucide-react';
 
 const API_BASE = `http://${window.location.hostname}:8001`;
@@ -94,6 +94,13 @@ export default function ProcurementAgent({ onBack }) {
 
   // ── Load projects on mount ──
   useEffect(() => { loadProjects(); }, []);
+
+  // Auto-load preview when entering Step 4
+  useEffect(() => {
+    if (step === 4 && !previewDoc) {
+      previewDocument();
+    }
+  }, [step]);
 
   const loadProjects = async () => {
     setLoadingProjects(true);
@@ -837,30 +844,49 @@ export default function ProcurementAgent({ onBack }) {
         </div>
 
         {/* Document Preview */}
-        {previewDoc && (
-          <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-3">
-            <div className="text-[10px] text-zinc-500 mb-2">📄 文档结构预览</div>
-            <div className="space-y-1">
-              {(previewDoc.chapters || []).map((ch, i) => (
-                <div key={i} className="flex items-center gap-2 py-1 border-b border-zinc-800/50 last:border-0">
-                  <span className="text-[11px] text-zinc-300 font-medium">{ch.title}</span>
-                  <span className="text-[9px] text-zinc-600 ml-auto">
-                    {ch.content ? `${ch.content.length} 字` : '空'}
-                  </span>
-                </div>
-              ))}
-            </div>
-            {previewDoc.metadata && (
-              <div className="mt-2 pt-2 border-t border-zinc-800/50">
-                <div className="flex gap-4">
-                  <span className="text-[10px] text-zinc-500">项目: {previewDoc.metadata.project_name}</span>
-                  <span className="text-[10px] text-zinc-500">招标人: {previewDoc.metadata.purchaser_name}</span>
-                  <span className="text-[10px] text-zinc-500">评标方法: {previewDoc.metadata.eval_method}</span>
-                </div>
-              </div>
-            )}
+        {!previewDoc && (
+          <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-6 text-center">
+            <Loader2 size={20} className="animate-spin text-blue-400 mx-auto mb-2" />
+            <div className="text-[11px] text-zinc-500">正在加载文档预览...</div>
           </div>
         )}
+        {previewDoc && (() => {
+          const chapters = previewDoc.chapters || [];
+          const totalChars = chapters.reduce((sum, ch) => sum + (ch.content?.length || 0), 0);
+          const filledCount = chapters.filter(ch => ch.content && ch.content.length > 0).length;
+          return (
+            <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-3">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <FileText size={14} className="text-violet-400" />
+                  <span className="text-[11px] font-semibold text-zinc-200">文档预览</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] text-zinc-500">共 {chapters.length} 章</span>
+                  <span className="text-[10px] text-zinc-500">约 {(totalChars / 1000).toFixed(1)}K 字</span>
+                  <span className="text-[10px] text-emerald-400">{filledCount}/{chapters.length} 已填充</span>
+                  <button onClick={previewDocument} className="text-[9px] text-blue-400 hover:text-blue-300 flex items-center gap-0.5">
+                    <RotateCcw size={9} /> 刷新
+                  </button>
+                </div>
+              </div>
+              <div className="space-y-1">
+                {chapters.map((ch, i) => (
+                  <ChapterPreview key={i} chapter={ch} index={i} />
+                ))}
+              </div>
+              {previewDoc.metadata && (
+                <div className="mt-3 pt-2 border-t border-zinc-800/50">
+                  <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    <span className="text-[10px] text-zinc-500">📌 {previewDoc.metadata.project_name}</span>
+                    <span className="text-[10px] text-zinc-500">🏢 {previewDoc.metadata.purchaser_name}</span>
+                    <span className="text-[10px] text-zinc-500">📊 {previewDoc.metadata.eval_method}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* AI Review */}
         <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-3">
@@ -993,6 +1019,46 @@ function FormField({ label, required, children }) {
         {label} {required && <span className="text-red-400">*</span>}
       </label>
       {children}
+    </div>
+  );
+}
+
+function ChapterPreview({ chapter, index }) {
+  const [expanded, setExpanded] = useState(false);
+  const content = chapter.content || '';
+  const charCount = content.length;
+  const hasContent = charCount > 0;
+  const lineCount = content ? content.split('\n').filter(l => l.trim()).length : 0;
+
+  const statusColor = hasContent
+    ? charCount > 1000 ? 'text-emerald-400' : 'text-amber-400'
+    : 'text-zinc-600';
+
+  return (
+    <div className="border border-zinc-800/50 rounded-md overflow-hidden">
+      <button
+        onClick={() => hasContent && setExpanded(!expanded)}
+        className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-all ${
+          hasContent ? 'hover:bg-zinc-800/40 cursor-pointer' : 'cursor-default opacity-60'
+        } ${expanded ? 'bg-zinc-800/30' : ''}`}
+      >
+        {hasContent ? (
+          expanded ? <ChevronDown size={10} className="text-zinc-500 shrink-0" /> : <ChevronRight size={10} className="text-zinc-500 shrink-0" />
+        ) : (
+          <span className="w-2.5 shrink-0" />
+        )}
+        <span className="text-[11px] text-zinc-300 font-medium flex-1">{chapter.title}</span>
+        <span className={`text-[9px] ${statusColor} font-mono`}>
+          {hasContent ? `${charCount} 字 · ${lineCount} 行` : '空'}
+        </span>
+      </button>
+      {expanded && hasContent && (
+        <div className="px-3 pb-2.5 border-t border-zinc-800/30">
+          <pre className="text-[10px] text-zinc-400 whitespace-pre-wrap mt-2 max-h-48 overflow-y-auto leading-relaxed font-sans">
+            {content.length > 2000 ? content.slice(0, 2000) + '\n\n... (内容较长，已截取前 2000 字)' : content}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }
