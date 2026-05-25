@@ -241,6 +241,21 @@ class TemplateEngine:
         eval_method = parameters.get("eval_method", "综合评估法")
         eval_template = EVAL_METHOD_TEMPLATES.get(eval_method, EVAL_METHOD_TEMPLATES["综合评估法"])
 
+        # Resolve scoring_criteria: if items are string IDs, expand to full objects
+        scoring_criteria = parameters.get("scoring_criteria", {})
+        if scoring_criteria:
+            commercial_items = scoring_criteria.get("commercial_items", [])
+            technical_items = scoring_criteria.get("technical_items", [])
+            if commercial_items and isinstance(commercial_items[0], str):
+                from app.core.skills.procurement.scoring_template import ScoringTemplateLibrary
+                lib = ScoringTemplateLibrary()
+                scoring_criteria = lib.build_scoring_criteria(
+                    commercial_item_ids=commercial_items,
+                    technical_item_ids=technical_items if technical_items and isinstance(technical_items[0], str) else [],
+                    score_distribution=scoring_criteria.get("score_distribution", {"commercial": 30, "technical": 40, "price": 30}),
+                    price_formula=scoring_criteria.get("price_formula", "arithmetic_mean"),
+                )
+
         document = {
             "metadata": {
                 "project_name": parameters.get("project_name", ""),
@@ -252,7 +267,7 @@ class TemplateEngine:
             "parameters": parameters,
             "skeleton": skeleton,
             "eval_template": eval_template,
-            "scoring_criteria": parameters.get("scoring_criteria", {}),
+            "scoring_criteria": scoring_criteria,
             "chapters": self._generate_chapters(parameters, eval_template),
         }
 

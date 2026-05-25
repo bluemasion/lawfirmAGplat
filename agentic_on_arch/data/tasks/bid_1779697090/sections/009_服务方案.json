@@ -1,0 +1,40 @@
+{
+  "title": "服务方案",
+  "content": "",
+  "missing_fields": [],
+  "status": "generated",
+  "order": 10,
+  "type": "narrative",
+  "level": 2,
+  "linked_scoring": [
+    {
+      "item": "服务方案编制情况",
+      "max_score": 40,
+      "description": "根据律所编写的服务方案质量进行打分。服务方案应包括但不限于如下内容：对外沟通协调机制；对内资源统筹机制；服务快速反应机制；增值服务情况。优秀40-21分，良好20-11分，一般10-0分。",
+      "sub_criteria": [
+        {
+          "name": "对外沟通协调机制",
+          "score": 10,
+          "scoring_rule": "优秀10-8分，良好7-4分，一般3-0分"
+        },
+        {
+          "name": "对内资源统筹机制",
+          "score": 10,
+          "scoring_rule": "优秀10-8分，良好7-4分，一般3-0分"
+        },
+        {
+          "name": "服务快速反应机制",
+          "score": 10,
+          "scoring_rule": "优秀10-8分，良好7-4分，一般3-0分"
+        },
+        {
+          "name": "增值服务情况",
+          "score": 10,
+          "scoring_rule": "优秀10-8分，良好7-4分，一般3-0分"
+        }
+      ]
+    }
+  ],
+  "linked_rejection": [],
+  "linked_total_score": 40
+}

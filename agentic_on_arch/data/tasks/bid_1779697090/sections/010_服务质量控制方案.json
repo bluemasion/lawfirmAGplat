@@ -1,0 +1,25 @@
+{
+  "title": "服务质量控制方案",
+  "content": "",
+  "missing_fields": [],
+  "status": "generated",
+  "order": 11,
+  "type": "narrative",
+  "level": 2,
+  "linked_scoring": [
+    {
+      "item": "服务质量控制",
+      "max_score": 20,
+      "description": "根据律所服务质量控制方案进行综合评审，包括律所组织机构健全程度，内部控制制度完善程度以及是否得到有效执行情况，服务质量及保障措施、保密措施等进行评分：优秀20-14分，良好13-7分，一般6-0分。",
+      "sub_criteria": [
+        {
+          "name": "服务质量控制",
+          "score": 20,
+          "scoring_rule": "优秀20-14分，良好13-7分，一般6-0分"
+        }
+      ]
+    }
+  ],
+  "linked_rejection": [],
+  "linked_total_score": 20
+}
