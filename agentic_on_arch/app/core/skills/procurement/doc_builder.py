@@ -265,7 +265,14 @@ class DocBuilder:
 
         # 价格评分公式
         price_formula = scoring.get("price_formula", {})
-        if price_formula:
+        # Resolve string ID to full formula dict if needed
+        if isinstance(price_formula, str) and price_formula:
+            try:
+                from app.core.skills.procurement.scoring_template import PRICE_FORMULA_TEMPLATES
+                price_formula = PRICE_FORMULA_TEMPLATES.get(price_formula, {})
+            except Exception:
+                price_formula = {}
+        if price_formula and isinstance(price_formula, dict):
             doc.add_paragraph("")
             heading = doc.add_paragraph("价格评分方法")
             for run in heading.runs:
