@@ -97,10 +97,10 @@ export default function ProcurementAgent({ onBack }) {
 
   // Auto-load preview when entering Step 4
   useEffect(() => {
-    if (step === 4 && !previewDoc) {
+    if (currentStep === 4 && !previewDoc) {
       previewDocument();
     }
-  }, [step]);
+  }, [currentStep]);
 
   const loadProjects = async () => {
     setLoadingProjects(true);
