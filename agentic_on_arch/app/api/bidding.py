@@ -393,6 +393,7 @@ class FullBiddingRequest(BaseModel):
     company_data: Optional[Dict[str, str]] = None
     llm_provider: str = "qwen"
     project_id: Optional[int] = None
+    skip_cache: bool = False
 
 
 @router.post("/parse-structure")
@@ -723,6 +724,13 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
     # ── Section cache directory ──
     import hashlib
     cache_dir = os.path.join("data", "tasks", task_id, "sections")
+
+    # Clear cache if user requested fresh generation
+    if req.skip_cache and os.path.exists(cache_dir):
+        import shutil
+        shutil.rmtree(cache_dir)
+        logger.info(f"[generate-full] Cache cleared (skip_cache=True)")
+
     os.makedirs(cache_dir, exist_ok=True)
 
     def _section_cache_path(idx, title):
@@ -1233,6 +1241,22 @@ async def regenerate_section(task_id: str, req: RegenerateSectionRequest):
                 "error": str(e),
                 "elapsed": round(elapsed, 1),
             })
+
+        # ── Re-run verification after regen ──
+        try:
+            all_sections = task.get("generated_sections", [])
+            if all_sections:
+                re_verification = await _verifier.execute({
+                    "tender_requirements": task.get("requirements", {}),
+                    "generated_sections": all_sections,
+                })
+                task["verification"] = re_verification
+                yield _sse({
+                    "type": "re_verify",
+                    "verification": re_verification,
+                })
+        except Exception as ve:
+            logger.warning(f"[regenerate] Re-verify failed: {ve}")
 
         yield "data: [DONE]\n\n"
 

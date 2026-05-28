@@ -35,6 +35,7 @@ export default function BiddingAgent() {
     const [readinessCheck, setReadinessCheck] = useState(null); // material readiness report
     const [loadingReadiness, setLoadingReadiness] = useState(false);
     const [showReadiness, setShowReadiness] = useState(true); // toggle readiness panel
+    const [useCache, setUseCache] = useState(true); // global cache toggle (B)
 
     // Company data for generation
     const [companyData, setCompanyData] = useState({
@@ -456,7 +457,7 @@ export default function BiddingAgent() {
             const res = await fetch(`${API_BASE}/api/bidding/generate-full/${taskId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ company_data: effectiveCompanyData, llm_provider: 'qwen', project_id: selectedProjectId }),
+                body: JSON.stringify({ company_data: effectiveCompanyData, llm_provider: 'qwen', project_id: selectedProjectId, skip_cache: !useCache }),
             });
 
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -598,6 +599,12 @@ export default function BiddingAgent() {
                                     ...p.sections,
                                     [sectionTitle]: { ...p.sections[sectionTitle], status: 'done', chars: finalContent.length },
                                 },
+                            }));
+                        } else if (ev.type === 're_verify') {
+                            // Update QC report with fresh verification
+                            setGenProgress(p => ({
+                                ...p,
+                                verification: ev.verification,
                             }));
                         }
                     } catch {}
@@ -1501,6 +1508,12 @@ export default function BiddingAgent() {
                                     <span>{selectedProjectId ? '开始生成投标文件' : '请先选择项目'}</span>
                                 </button>
                             </div>
+                            <label className="flex items-center gap-1.5 cursor-pointer select-none px-1">
+                                <input type="checkbox" checked={useCache}
+                                    onChange={(e) => setUseCache(e.target.checked)}
+                                    className="w-3 h-3 rounded border-zinc-600 bg-zinc-800 text-orange-500 focus:ring-0 focus:ring-offset-0 cursor-pointer" />
+                                <span className="text-[10px] text-zinc-500">使用缓存（跳过未修改章节）</span>
+                            </label>
                         </div>
                     </div>
 
@@ -1732,6 +1745,127 @@ export default function BiddingAgent() {
                                     <span>下载 Word 文件</span>
                                 </button>
                             </div>
+
+                            {/* ── Quality Check Report Panel ── */}
+                            {genProgress.verification && (() => {
+                                const v = genProgress.verification;
+                                const checks = v.checks || [];
+                                const score = v.overall_score ?? 0;
+                                const errors = checks.filter(c => c.status === 'ERROR');
+                                const warnings = checks.filter(c => c.status === 'WARNING');
+                                const passes = checks.filter(c => c.status === 'PASS');
+
+                                // Score ring color
+                                const scoreColor = score >= 80 ? '#10b981' : score >= 50 ? '#f59e0b' : '#ef4444';
+                                const scoreGradient = `conic-gradient(${scoreColor} ${score * 3.6}deg, rgba(39,39,42,0.5) 0deg)`;
+
+                                // Check type labels
+                                const typeLabels = {
+                                    structure: '结构', order: '顺序', gap: '缺项', compliance: '合规',
+                                    quality: '质量', image_dedup: '图片去重', text_dedup: '文本去重',
+                                    attribution: '素材归属', scoring_coverage: '评分覆盖',
+                                    rejection_coverage: '废标响应', personnel: '人员一致', amount: '金额一致',
+                                };
+
+                                return (
+                                    <div className="border-b border-zinc-800">
+                                        {/* Score header */}
+                                        <div className="px-4 py-3 flex items-center gap-3 cursor-pointer hover:bg-zinc-800/30 transition-colors"
+                                            onClick={() => {
+                                                const el = document.getElementById('qc-report-body');
+                                                if (el) el.classList.toggle('hidden');
+                                            }}>
+                                            {/* Score ring */}
+                                            <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+                                                style={{ background: scoreGradient }}>
+                                                <div className="w-7 h-7 rounded-full bg-zinc-900 flex items-center justify-center">
+                                                    <span className="text-[10px] font-bold" style={{ color: scoreColor }}>{score}</span>
+                                                </div>
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="text-[11px] font-bold text-zinc-200 flex items-center gap-1.5">
+                                                    📊 质检报告
+                                                    <span className="text-[9px] px-1.5 py-0.5 rounded font-normal"
+                                                        style={{ background: `${scoreColor}15`, color: scoreColor, border: `1px solid ${scoreColor}30` }}>
+                                                        {v.overall_status === 'PASS' ? '通过' : v.overall_status === 'WARNING' ? '有警告' : '有问题'}
+                                                    </span>
+                                                </div>
+                                                <div className="flex items-center gap-2 mt-0.5">
+                                                    {errors.length > 0 && <span className="text-[9px] text-red-400">❌{errors.length}</span>}
+                                                    {warnings.length > 0 && <span className="text-[9px] text-amber-400">⚠️{warnings.length}</span>}
+                                                    <span className="text-[9px] text-emerald-400">✅{passes.length}</span>
+                                                    <span className="text-[9px] text-zinc-600">{checks.length}项检查</span>
+                                                </div>
+                                            </div>
+                                            <span className="text-[9px] text-zinc-600 shrink-0">▼</span>
+                                        </div>
+
+                                        {/* Expanded detail */}
+                                        <div id="qc-report-body" className="hidden px-3 pb-3 space-y-2 max-h-[300px] overflow-y-auto border-t border-zinc-800/50">
+                                            {/* Errors */}
+                                            {errors.length > 0 && (
+                                                <div className="mt-2">
+                                                    <div className="text-[10px] font-bold text-red-400 mb-1 flex items-center gap-1">
+                                                        <ShieldX size={11} /> 严重问题 ({errors.length})
+                                                    </div>
+                                                    {errors.map((c, i) => (
+                                                        <div key={`e-${i}`} className="flex items-start gap-1.5 text-[10px] py-1 pl-2 border-l-2 border-red-500/30 mb-0.5">
+                                                            <span className="text-[8px] px-1 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/20 shrink-0 mt-0.5">
+                                                                {typeLabels[c.check_type] || c.check_type}
+                                                            </span>
+                                                            <span className="text-zinc-300 leading-relaxed">{c.message}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            {/* Warnings */}
+                                            {warnings.length > 0 && (
+                                                <div className="mt-1">
+                                                    <div className="text-[10px] font-bold text-amber-400 mb-1 flex items-center gap-1">
+                                                        <ShieldAlert size={11} /> 需要关注 ({warnings.length})
+                                                    </div>
+                                                    {warnings.map((c, i) => (
+                                                        <div key={`w-${i}`} className="flex items-start gap-1.5 text-[10px] py-1 pl-2 border-l-2 border-amber-500/20 mb-0.5 group/qc">
+                                                            <span className="text-[8px] px-1 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 shrink-0 mt-0.5">
+                                                                {typeLabels[c.check_type] || c.check_type}
+                                                            </span>
+                                                            <span className="text-zinc-400 leading-relaxed flex-1">{c.message.length > 60 ? c.message.slice(0, 60) + '...' : c.message}</span>
+                                                            {/* Regen button for section-specific warnings */}
+                                                            {c.target && c.target !== '跨章节' && c.target !== '全部章节' && c.target !== '素材归属' && c.target !== '评分覆盖' && c.target !== '废标条款' && c.target !== '人员一致性' && c.target !== '金额一致性' && (
+                                                                <button
+                                                                    onClick={() => {
+                                                                        if (lockedSections[c.target]) { alert('该章节已锁定'); return; }
+                                                                        if (confirm(`重新生成「${c.target}」？`)) regenerateSection(c.target);
+                                                                    }}
+                                                                    className="opacity-0 group-hover/qc:opacity-100 text-[8px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20 hover:bg-orange-500/20 transition-all shrink-0"
+                                                                    title={`重新生成 ${c.target}`}>
+                                                                    🔄
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            {/* Passes */}
+                                            {passes.length > 0 && (
+                                                <div className="mt-1">
+                                                    <div className="text-[10px] font-bold text-emerald-400 mb-1 flex items-center gap-1">
+                                                        <ShieldCheck size={11} /> 已通过 ({passes.length})
+                                                    </div>
+                                                    {passes.map((c, i) => (
+                                                        <div key={`p-${i}`} className="text-[10px] text-zinc-500 py-0.5 pl-2 flex items-center gap-1.5">
+                                                            <span className="text-emerald-500/50">✓</span>
+                                                            <span>{typeLabels[c.check_type] || c.check_type}: {c.message}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })()}
 
                             {/* Section list with lock/regen */}
                             <div className="flex-1 overflow-y-auto">
