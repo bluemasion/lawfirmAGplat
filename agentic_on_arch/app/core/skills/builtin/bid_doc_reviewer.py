@@ -131,7 +131,6 @@ class BidDocReviewerSkill(BaseSkill):
         self, overview: str, req_summary: str, provider: str
     ) -> List[Dict]:
         """Call LLM to perform semantic review."""
-        from app.core.llm import get_llm_service
 
         prompt = f"""你是一位资深投标文件审查专家。请审查以下投标文件的各章节摘要，找出以下问题：
 

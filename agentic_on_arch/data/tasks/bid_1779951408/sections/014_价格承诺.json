@@ -1,0 +1,15 @@
+{
+  "title": "价格承诺",
+  "content": "## 价格承诺\n\n| 项目 | 内容 |\n|------|------|\n| [待补充] | [待补充] |\n",
+  "missing_fields": [
+    "",
+    ""
+  ],
+  "status": "template",
+  "order": 15,
+  "type": "table",
+  "level": 2,
+  "linked_scoring": [],
+  "linked_rejection": [],
+  "linked_total_score": 0
+}
