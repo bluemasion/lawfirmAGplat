@@ -70,12 +70,17 @@ class MaterialMatcher:
         self.store = store
 
     def match_for_section(self, section: dict, company: str = "",
-                          project_id: int = None) -> dict:
+                          project_id: int = None,
+                          used_material_ids: set = None) -> dict:
         """Match materials for a single bid section.
 
         Args:
             section: Dict with title, type, material_refs, content_outline
             company: Company name to filter materials by
+            project_id: Project ID to filter materials by
+            used_material_ids: Set of material IDs already used by previous
+                chapters. Matched materials whose ID is in this set will be
+                excluded to prevent cross-chapter duplication.
 
         Returns:
             Dict with matched materials:
@@ -126,6 +131,21 @@ class MaterialMatcher:
         result["projects"] = _dedup_by_key(result["projects"], "project_name")
         result["qualifications"] = _dedup_by_key(result["qualifications"], "name")
 
+        # ── Cross-chapter dedup: exclude materials already used ──
+        if used_material_ids:
+            for mat_type in ["resumes", "projects", "qualifications"]:
+                before = len(result[mat_type])
+                result[mat_type] = [
+                    m for m in result[mat_type]
+                    if self._material_id(m) not in used_material_ids
+                ]
+                removed = before - len(result[mat_type])
+                if removed:
+                    logger.info(
+                        f"  MaterialMatcher [{title}]: excluded {removed} "
+                        f"already-used {mat_type}"
+                    )
+
         # Build summary
         parts = []
         if result["resumes"]:
@@ -140,6 +160,33 @@ class MaterialMatcher:
             logger.info(f"  MaterialMatcher [{title}]: {result['match_summary']}")
 
         return result
+
+    @staticmethod
+    def _material_id(material: dict) -> str:
+        """Generate a stable ID for a material record for dedup tracking."""
+        # Use name + first image path as composite key
+        name = material.get("name") or material.get("project_name") or ""
+        images = material.get("_images", [])
+        img_key = ""
+        if images:
+            first_img = images[0]
+            img_key = first_img.get("file", first_img) if isinstance(first_img, dict) else str(first_img)
+        return f"{name}::{img_key}"
+
+    @staticmethod
+    def collect_material_ids(matched: dict) -> set:
+        """Collect all material IDs from a match result for dedup tracking.
+
+        Call this after match_for_section() and add results to used_material_ids
+        before processing the next section.
+        """
+        ids = set()
+        for mat_type in ["resumes", "projects", "qualifications"]:
+            for m in matched.get(mat_type, []):
+                mid = MaterialMatcher._material_id(m)
+                if mid:
+                    ids.add(mid)
+        return ids
 
     # Keywords indicating a record is a document/file, not a real person
     _NON_PERSON_KEYWORDS = [

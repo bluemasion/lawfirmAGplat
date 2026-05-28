@@ -64,6 +64,12 @@ class DocxAssemblySkill(BaseSkill):
 
         os.makedirs(output_dir, exist_ok=True)
 
+        # ── Global dedup state: track images used across chapters ──
+        # Maps image_path → chapter_title (first chapter that used it)
+        self._used_images = {}  # type: Dict[str, str]
+        self._current_chapter = ""  # set per-chapter in _add_section
+        self._dedup_stats = {"total_images": 0, "deduped": 0}
+
         doc = Document()
 
         # Apply document-level formatting
@@ -87,6 +93,12 @@ class DocxAssemblySkill(BaseSkill):
                 doc.add_page_break()
             self._add_section(doc, section, chapter_num=i + 1)
 
+        if self._dedup_stats["deduped"] > 0:
+            logger.info(
+                f"Image dedup: {self._dedup_stats['deduped']} duplicates removed "
+                f"out of {self._dedup_stats['total_images']} total images"
+            )
+
         # Save document
         timestamp = int(time.time())
         filename = f"bid_document_{timestamp}.docx"
@@ -104,6 +116,7 @@ class DocxAssemblySkill(BaseSkill):
             "filename": filename,
             "page_count_estimate": page_estimate,
             "section_count": len(sections),
+            "dedup_stats": self._dedup_stats,
         }
 
     # ─── Document setup ───────────────────────────────────────────
@@ -382,6 +395,9 @@ class DocxAssemblySkill(BaseSkill):
         title = section.get("title", "")
         content = section.get("content", "")
 
+        # Track current chapter for cross-reference in dedup
+        self._current_chapter = title
+
         # Chapter heading (Heading 1 with number)
         heading_text = f"第{self._to_chinese_num(chapter_num)}章  {title}"
         heading = doc.add_heading(heading_text, level=1)
@@ -475,9 +491,32 @@ class DocxAssemblySkill(BaseSkill):
                         img_path = os.path.normpath(
                             os.path.join(project_root, img_path)
                         )
+
+                    self._dedup_stats["total_images"] += 1
+
+                    # ── Cross-chapter image dedup ──
+                    norm_path = os.path.normpath(img_path)
+                    if norm_path in self._used_images:
+                        first_chapter = self._used_images[norm_path]
+                        if first_chapter != self._current_chapter:
+                            # Skip duplicate — add cross-reference instead
+                            self._dedup_stats["deduped"] += 1
+                            para = doc.add_paragraph()
+                            ref_text = (
+                                f"（{caption or '相关证明'}"
+                                f"详见\u201c{first_chapter}\u201d章节）"
+                            )
+                            run = para.add_run(ref_text)
+                            _set_font(run, '仿宋', '仿宋', size=10.5)
+                            run.italic = True
+                            run.font.color.rgb = RGBColor(100, 100, 100)
+                            continue
+
                     if os.path.exists(img_path):
                         try:
                             doc.add_picture(img_path, width=Cm(14))
+                            # Register this image as used by current chapter
+                            self._used_images[norm_path] = self._current_chapter
                             # Add centered caption
                             if caption:
                                 cap_para = doc.add_paragraph()

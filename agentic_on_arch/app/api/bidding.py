@@ -806,10 +806,18 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
                            f"{mat_summary.get('qualifications',0)}项资质",
             })
             matched_count = 0
+            used_material_ids = set()  # Track across chapters for dedup
             for sec in all_sections:
-                matched = matcher.match_for_section(sec, company=company_name,
-                                                     project_id=project_id)
+                matched = matcher.match_for_section(
+                    sec, company=company_name,
+                    project_id=project_id,
+                    used_material_ids=used_material_ids,
+                )
                 sec["pre_matched_materials"] = matched
+                # Accumulate used IDs so next section won't reuse them
+                used_material_ids.update(
+                    MaterialMatcher.collect_material_ids(matched)
+                )
                 summary = matched.get("match_summary", "")
                 if summary:
                     matched_count += 1
@@ -817,7 +825,8 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
             if matched_count:
                 yield _sse({
                     "type": "log",
-                    "message": f"🎯 素材匹配: {matched_count}/{total_sections} 个章节匹配到素材",
+                    "message": f"🎯 素材匹配: {matched_count}/{total_sections} 个章节匹配到素材"
+                               f" (去重跟踪: {len(used_material_ids)} 项)",
                 })
                 for part in material_summary_parts[:5]:
                     yield _sse({"type": "log", "message": f"   └─ {part}"})
