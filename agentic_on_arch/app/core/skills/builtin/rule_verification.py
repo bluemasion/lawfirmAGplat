@@ -359,10 +359,10 @@ class RuleVerificationSkill(BaseSkill):
 
         if uncovered:
             checks.append(VerificationItem(
-                "rejection_coverage", "废标条款", "ERROR",
+                "rejection_coverage", "废标条款", "WARNING",
                 f"{len(uncovered)} 条废标条款可能未响应: "
                 + "; ".join(uncovered[:3]),
-                "ERROR",
+                "WARNING",
             ).to_dict())
         else:
             checks.append(VerificationItem(

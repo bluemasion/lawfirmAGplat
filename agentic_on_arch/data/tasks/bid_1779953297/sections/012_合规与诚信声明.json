@@ -1,0 +1,14 @@
+{
+  "title": "合规与诚信声明",
+  "content": "## 合规与诚信声明\n\n提供无处罚、无失信声明及相关证明材料。不写其他内容。\n\n声明单位（盖章）：北京市天元律师事务所\n法定代表人（签字）：朱小辉\n日期：[待补充：日期]\n",
+  "missing_fields": [
+    "日期"
+  ],
+  "status": "template",
+  "order": 13,
+  "type": "form",
+  "level": 2,
+  "linked_scoring": [],
+  "linked_rejection": [],
+  "linked_total_score": 0
+}
