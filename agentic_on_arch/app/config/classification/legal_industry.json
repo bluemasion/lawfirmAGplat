@@ -1,0 +1,75 @@
+{
+  "industry": "法律",
+  "version": "1.0",
+  "description": "法律行业投标文件素材分类规则",
+
+  "entity_type_rules": [
+    {"keywords": ["排名证明"], "type": "ranking_proof"},
+    {"keywords": ["Legal 500", "LEGALBAND", "IFLR", "钱伯斯", "Chambers", "ALB", "亚洲法律", "榜单", "排名", "等"], "type": "ranking"},
+    {"keywords": ["优秀律师事务所", "先进集体", "荣誉", "奖", "表彰", "破产管理人考核"], "type": "award"},
+    {"keywords": ["营业执照", "执业许可", "律所证"], "type": "firm_license"},
+    {"keywords": ["审计", "财务", "报表", "审计报告"], "type": "firm_audit"},
+    {"keywords": ["身份证"], "type": "id_card"},
+    {"keywords": ["学历", "毕业证", "学位", "学士", "硕士", "博士"], "type": "degree"},
+    {"keywords": ["执业证", "律师证", "律师执照"], "type": "practice_cert"},
+    {"keywords": ["资格证", "法律职业"], "type": "bar_cert"},
+    {"keywords": ["社保", "社会保险", "养老保险", "参保"], "type": "social_security"},
+    {"keywords": ["实习证", "实习"], "type": "intern_cert"},
+    {"keywords": ["年检", "年度考核", "考核备案"], "type": "practice_cert"},
+    {"keywords": ["保证金", "缴费"], "type": "financial_proof"},
+    {"keywords": ["诚信", "信用", "无违法", "行政处罚"], "type": "compliance"}
+  ],
+
+  "sub_category_map": {
+    "id_card":         ["id_proof",        "身份证明"],
+    "degree":          ["education_proof",  "学历证明"],
+    "practice_cert":   ["practice_qual",    "执业资质"],
+    "bar_cert":        ["practice_qual",    "执业资质"],
+    "intern_cert":     ["practice_qual",    "执业资质"],
+    "social_security": ["social_security",  "社保证明"],
+    "personal_cert":   ["personal_cert",    "人员证件"],
+    "ranking":         ["ranking",          "荣誉排名"],
+    "ranking_proof":   ["ranking",          "荣誉排名"],
+    "award":           ["award",            "荣誉奖项"],
+    "firm_license":    ["firm_license",     "企业证照"],
+    "firm_audit":      ["financial",        "财务资料"],
+    "financial_proof": ["financial",        "财务资料"],
+    "bond":            ["bond",             "保证金"],
+    "compliance":      ["compliance",       "诚信证明"]
+  },
+
+  "cert_type_rules": [
+    {"keywords": ["身份证"], "type": "id_card", "label": "身份证"},
+    {"keywords": ["学历", "毕业证", "学位"], "type": "degree", "label": "学历证书"},
+    {"keywords": ["执业证", "律师证"], "type": "practice_cert", "label": "律师执业证"},
+    {"keywords": ["资格证", "法律职业"], "type": "bar_cert", "label": "法律职业资格证"},
+    {"keywords": ["社保", "社会保险"], "type": "social_security", "label": "社保证明"},
+    {"keywords": ["实习证", "实习"], "type": "intern_cert", "label": "实习证"}
+  ],
+
+  "material_attribution": {
+    "排名": "荣誉", "榜单": "荣誉", "ALB": "荣誉", "钱伯斯": "荣誉",
+    "Legal 500": "荣誉", "LEGALBAND": "荣誉", "获奖": "荣誉",
+    "身份证": "团队", "学历": "团队", "学位": "团队",
+    "MBA": "团队", "LLM": "团队", "简历": "团队", "执业证": "团队",
+    "营业执照": "资格", "审计报告": "资格", "税务登记": "资格"
+  },
+
+  "matcher_routing": {
+    "award_keywords": ["荣誉", "奖项", "排名", "榜单", "ALB", "钱伯斯", "Legal 500", "LEGALBAND", "IFLR", "表彰"],
+    "license_keywords": ["资格审查", "营业执照", "执业许可", "执照", "许可证", "审计", "财务"]
+  },
+
+  "prohibited_terms": [
+    ["全国第一", "建议改为\"处于行业领先地位\""],
+    ["绝对安全", "建议改为\"最大程度保障安全\""],
+    ["零风险", "建议改为\"最大程度降低风险\""],
+    ["确保", "建议改为\"积极推进/尽最大努力\""],
+    ["保证不会", "建议改为\"采取措施防范\""],
+    ["唯一", "建议改为\"具有独特优势\""],
+    ["100%", "建议改为\"尽可能全面覆盖\""],
+    ["绝无", "建议改为\"极力避免\""],
+    ["最好的", "建议改为\"优质的/高水平的\""],
+    ["最强的", "建议改为\"具有突出实力的\""]
+  ]
+}

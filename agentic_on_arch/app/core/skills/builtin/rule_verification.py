@@ -28,40 +28,14 @@ class VerificationItem:
         }
 
 
-# Words that should not appear in bidding documents
-PROHIBITED_TERMS = [
-    ("全国第一", '建议改为"处于行业领先地位"'),
-    ("绝对安全", '建议改为"最大程度保障安全"'),
-    ("零风险", '建议改为"最大程度降低风险"'),
-    ("确保", '建议改为"积极推进/尽最大努力"'),
-    ("保证不会", '建议改为"采取措施防范"'),
-    ("唯一", '建议改为"具有独特优势"'),
-    ("100%", '建议改为"尽可能全面覆盖"'),
-    ("绝无", '建议改为"极力避免"'),
-    ("最好的", '建议改为"优质的/高水平的"'),
-    ("最强的", '建议改为"具有突出实力的"'),
-]
+# Prohibited terms and material attribution — loaded from ClassificationEngine
+def _get_prohibited_terms():
+    from app.core.skills.builtin.classification_engine import get_engine
+    return get_engine().get_prohibited_terms()
 
-# Material attribution rules: keyword → expected section type
-_MATERIAL_ATTRIBUTION = {
-    "排名": "荣誉",
-    "榜单": "荣誉",
-    "ALB": "荣誉",
-    "钱伯斯": "荣誉",
-    "Legal 500": "荣誉",
-    "LEGALBAND": "荣誉",
-    "获奖": "荣誉",
-    "身份证": "团队",
-    "学历": "团队",
-    "学位": "团队",
-    "MBA": "团队",
-    "LLM": "团队",
-    "简历": "团队",
-    "执业证": "团队",
-    "营业执照": "资格",
-    "审计报告": "资格",
-    "税务登记": "资格",
-}
+def _get_material_attribution():
+    from app.core.skills.builtin.classification_engine import get_engine
+    return get_engine().get_material_attribution()
 
 
 class RuleVerificationSkill(BaseSkill):
@@ -215,7 +189,7 @@ class RuleVerificationSkill(BaseSkill):
         for section in generated:
             content = section.get("content", "")
             title = section.get("title", "")
-            for term, suggestion in PROHIBITED_TERMS:
+            for term, suggestion in _get_prohibited_terms():
                 if term in content:
                     checks.append(VerificationItem(
                         "compliance", title, "WARNING",
@@ -310,7 +284,7 @@ class RuleVerificationSkill(BaseSkill):
         for section in generated:
             content = section.get("content", "")
             title = section.get("title", "")
-            for keyword, expected in _MATERIAL_ATTRIBUTION.items():
+            for keyword, expected in _get_material_attribution().items():
                 if keyword in content and expected not in title:
                     count = content.count(keyword)
                     if count >= 2:

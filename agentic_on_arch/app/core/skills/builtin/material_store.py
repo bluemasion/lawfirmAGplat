@@ -397,118 +397,29 @@ class MaterialStore:
 
     # ── Save Methods ──
 
-    # ── Sub-category mapping: entity_type/image_type → (sub_category, label) ──
-    # Fixed mapping, covers all known material types
-    _SUB_CATEGORY_MAP = {
-        # Person certificates (from image_type or entity_type)
-        'id_card':         ('id_proof',        '身份证明'),
-        'degree':          ('education_proof',  '学历证明'),
-        'practice_cert':   ('practice_qual',    '执业资质'),
-        'bar_cert':        ('practice_qual',    '执业资质'),
-        'intern_cert':     ('practice_qual',    '执业资质'),
-        'social_security': ('social_security',  '社保证明'),
-        'personal_cert':   ('personal_cert',    '人员证件'),
-        # Firm-level
-        'ranking':         ('ranking',          '荣誉排名'),
-        'ranking_proof':   ('ranking',          '荣誉排名'),
-        'award':           ('award',            '荣誉奖项'),
-        'firm_license':    ('firm_license',     '企业证照'),
-        'firm_audit':      ('financial',        '财务资料'),
-        'financial_proof': ('financial',        '财务资料'),
-        'bond':            ('bond',             '保证金'),
-        'compliance':      ('compliance',       '诚信证明'),
-    }
+    # ── Sub-category mapping: delegated to ClassificationEngine ──
 
     @classmethod
     def _resolve_sub_category(cls, entity_type, source_file='', item=None):
-        """Resolve sub_category from entity_type and filename hints.
+        """Resolve sub_category from entity_type and filename hints."""
+        from app.core.skills.builtin.classification_engine import get_engine
+        return get_engine().resolve_sub_category(entity_type, source_file, item)
 
-        Returns (sub_category, label) tuple.
-        """
-        # Direct mapping from entity_type
-        if entity_type and entity_type in cls._SUB_CATEGORY_MAP:
-            return cls._SUB_CATEGORY_MAP[entity_type]
-
-        # Filename-based fallback for bond/compliance
-        fname = (source_file or '').lower()
-        if any(kw in fname for kw in ['保证金', '保函', '投标保证']):
-            return ('bond', '保证金')
-        if any(kw in fname for kw in ['诚信', '信用', '无违法']):
-            return ('compliance', '诚信证明')
-
-        return ('', '')
-
-    # ── Entity type classification for qualifications ──
-    # (keywords, entity_type) — first match wins
-    # IMPORTANT: More specific rules BEFORE generic ones
-    _ENTITY_TYPE_RULES = [
-        # Ranking proof with images (screenshots)
-        (['排名证明'], 'ranking_proof'),
-        # Rankings/ratings from authoritative sources
-        (['Legal 500', 'LEGALBAND', 'IFLR', '钱伯斯', 'Chambers',
-          'ALB', '亚洲法律', '榜单', '排名', '等'], 'ranking'),
-        # Awards and honors
-        (['优秀律师事务所', '先进集体', '荣誉', '奖', '表彰',
-          '破产管理人考核'], 'award'),
-        # Firm-level qualifications
-        (['营业执照', '执业许可', '律所证'], 'firm_license'),
-        # Financial audit reports
-        (['审计', '财务', '报表', '审计报告'], 'firm_audit'),
-        # ── Personal certificates: specific types (not lumped) ──
-        (['身份证'], 'id_card'),
-        (['学历', '毕业证', '学位', '学士', '硕士', '博士'], 'degree'),
-        (['执业证', '律师证', '律师执照'], 'practice_cert'),
-        (['资格证', '法律职业'], 'bar_cert'),
-        (['社保', '社会保险', '养老保险', '参保'], 'social_security'),
-        (['实习证', '实习'], 'intern_cert'),
-        (['年检', '年度考核', '考核备案'], 'practice_cert'),
-        # Financial/payment related
-        (['保证金', '缴费'], 'financial_proof'),
-        # Integrity/compliance
-        (['诚信', '信用', '无违法', '行政处罚'], 'compliance'),
-    ]
+    # ── Entity type classification: delegated to ClassificationEngine ──
 
     @classmethod
     def _classify_entity_type(cls, name, item=None):
-        """Classify a qualification record into a sub-type.
+        """Classify a qualification record into a sub-type."""
+        from app.core.skills.builtin.classification_engine import get_engine
+        return get_engine().classify_entity_type(name, item)
 
-        Args:
-            name: Material name/title
-            item: Full item dict (optional, for issuer-based hints)
-
-        Returns:
-            entity_type string like 'award', 'ranking', 'firm_license', etc.
-        """
-        # Combine name + issuer for broader keyword matching
-        text = name
-        if item:
-            issuer = item.get('issuer', '') or ''
-            text = f"{name} {issuer}"
-
-        for keywords, etype in cls._ENTITY_TYPE_RULES:
-            if any(kw in text for kw in keywords):
-                return etype
-
-        return 'other_qual'
-
-    # ── Image certificate type classification rules ──
-    _CERT_TYPE_RULES = [
-        # (keywords_in_name, cert_type, label)
-        (['身份证'], 'id_card', '身份证'),
-        (['学历', '毕业证', '学位'], 'degree', '学历证书'),
-        (['执业证', '律师证'], 'practice_cert', '律师执业证'),
-        (['资格证', '法律职业'], 'bar_cert', '法律职业资格证'),
-        (['社保', '社会保险'], 'social_security', '社保证明'),
-        (['实习证', '实习'], 'intern_cert', '实习证'),
-    ]
+    # ── Certificate type classification: delegated to ClassificationEngine ──
 
     @classmethod
     def _classify_cert_type(cls, name_or_title):
         """Classify certificate type from a record name or section title."""
-        for keywords, cert_type, label in cls._CERT_TYPE_RULES:
-            if any(kw in name_or_title for kw in keywords):
-                return cert_type, label
-        return 'other', '其他证件'
+        from app.core.skills.builtin.classification_engine import get_engine
+        return get_engine().classify_cert_type(name_or_title)
 
     @classmethod
     def _extract_person_name_from_record(cls, record_name, ocr_text=''):

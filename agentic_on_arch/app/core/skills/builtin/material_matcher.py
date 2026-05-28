@@ -354,12 +354,11 @@ class MaterialMatcher:
         context = f"{ref} {' '.join(filters)}"
         entity_type_filter = ""
 
-        # Honor/award context → only awards and rankings with evidence
-        _AWARD_KW = ['荣誉', '奖项', '排名', '榜单', 'ALB', '钱伯斯',
-                     'Legal 500', 'LEGALBAND', 'IFLR', '表彰']
-        # Qualification/license context → firm-level docs
-        _LICENSE_KW = ['资格审查', '营业执照', '执业许可', '执照', '许可证',
-                       '审计', '财务']
+        # Use ClassificationEngine for routing keywords
+        from app.core.skills.builtin.classification_engine import get_engine
+        routing = get_engine().get_matcher_routing()
+        _AWARD_KW = routing.get("award_keywords", [])
+        _LICENSE_KW = routing.get("license_keywords", [])
 
         if any(kw in context for kw in _AWARD_KW):
             entity_type_filter = "award,ranking,ranking_proof"
