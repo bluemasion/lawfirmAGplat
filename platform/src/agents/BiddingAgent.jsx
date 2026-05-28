@@ -533,6 +533,12 @@ export default function BiddingAgent() {
                         } else if (ev.type === 'assembling') {
                             setGenProgress(p => ({ ...p, current: '📦 组装文件...' }));
                             setLiveContent({ title: '📦 正在组装 Word 文档...', text: '', index: 0 });
+                        } else if (ev.type === 'verifying') {
+                            setGenProgress(p => ({ ...p, current: '🔍 校验中...' }));
+                            setLiveContent({ title: '🔍 正在校验投标文件...', text: '', index: 0 });
+                        } else if (ev.type === 'reviewing') {
+                            setGenProgress(p => ({ ...p, current: '🤖 AI审查中...' }));
+                            setLiveContent({ title: '🤖 AI 深度审查中...', text: '', index: 0 });
                         } else if (ev.type === 'complete') {
                             setOutputFilename(ev.file_path);
                             setGenProgress(p => ({
@@ -1862,6 +1868,46 @@ export default function BiddingAgent() {
                                                     ))}
                                                 </div>
                                             )}
+
+                                            {/* LLM Deep Review */}
+                                            {v.llm_review && (() => {
+                                                const lr = v.llm_review;
+                                                const llmIssues = lr.issues || [];
+                                                const catLabels = {
+                                                    semantic_dedup: '语义重复', contradiction: '逻辑矛盾',
+                                                    coverage: '需求覆盖', quality: '表述质量',
+                                                };
+                                                const catColors = {
+                                                    semantic_dedup: 'text-purple-400', contradiction: 'text-red-400',
+                                                    coverage: 'text-blue-400', quality: 'text-zinc-400',
+                                                };
+                                                return (
+                                                    <div className="mt-2 pt-2 border-t border-zinc-800/50">
+                                                        <div className="text-[10px] font-bold text-purple-400 mb-1 flex items-center gap-1">
+                                                            🤖 AI 审查 ({llmIssues.length}项)
+                                                            {lr.elapsed > 0 && <span className="text-[8px] text-zinc-600 font-normal ml-1">{lr.elapsed}s</span>}
+                                                        </div>
+                                                        {llmIssues.length === 0 ? (
+                                                            <div className="text-[10px] text-zinc-500 pl-2">{lr.overall_assessment || 'AI审查通过'}</div>
+                                                        ) : (
+                                                            llmIssues.map((issue, i) => (
+                                                                <div key={`llm-${i}`} className="flex items-start gap-1.5 text-[10px] py-1 pl-2 border-l-2 border-purple-500/20 mb-0.5">
+                                                                    <span className={`text-[8px] px-1 py-0.5 rounded bg-purple-500/10 border border-purple-500/20 shrink-0 mt-0.5 ${catColors[issue.category] || 'text-zinc-400'}`}>
+                                                                        {catLabels[issue.category] || issue.category}
+                                                                    </span>
+                                                                    <div className="flex-1">
+                                                                        <span className="text-zinc-300">{issue.title}</span>
+                                                                        {issue.detail && <span className="text-zinc-500 ml-1">— {issue.detail}</span>}
+                                                                        {issue.chapters?.length > 0 && (
+                                                                            <div className="text-[8px] text-zinc-600 mt-0.5">📍 {issue.chapters.join(', ')}</div>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            ))
+                                                        )}
+                                                    </div>
+                                                );
+                                            })()}
                                         </div>
                                     </div>
                                 );

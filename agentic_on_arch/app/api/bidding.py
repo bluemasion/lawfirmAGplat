@@ -1065,6 +1065,31 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
             logger.error(f"Verification error: {e}")
             verification = {"overall_status": "ERROR", "error": str(e)}
 
+        # Run LLM deep review (4th layer)
+        yield _sse({"type": "reviewing", "message": "AI 深度审查中..."})
+
+        try:
+            from app.core.skills.builtin.bid_doc_reviewer import BidDocReviewerSkill
+            _reviewer = BidDocReviewerSkill()
+            llm_review = await _reviewer.execute({
+                "generated_sections": generated_sections,
+                "tender_requirements": requirements,
+                "llm_provider": llm_provider,
+            })
+            verification["llm_review"] = llm_review
+            task["verification"] = verification
+            logger.info(
+                f"[generate-full] LLM review: {llm_review.get('summary', {}).get('total', 0)} "
+                f"issues in {llm_review.get('elapsed', 0)}s"
+            )
+        except Exception as e:
+            logger.warning(f"LLM review failed (non-fatal): {e}")
+            verification["llm_review"] = {
+                "issues": [], "summary": {"total": 0},
+                "overall_assessment": f"AI审查跳过: {str(e)[:50]}",
+                "elapsed": 0,
+            }
+
         # Persist to SQLite
         _bid_store.update_status(
             task_id, "done",
