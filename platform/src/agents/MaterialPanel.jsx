@@ -199,19 +199,23 @@ export default function MaterialPanel({ onClose }) {
     // ── File Upload Handler (auto-routes .docx vs .zip) ──
     const handleFileUpload = async (e) => {
         const file = e.target.files?.[0];
+        console.log('[MaterialPanel] handleFileUpload triggered, file:', file?.name, file?.size);
         if (!file) return;
         e.target.value = ''; // reset input
 
         // Route by file extension
         if (file.name.toLowerCase().endsWith('.zip')) {
+            console.log('[MaterialPanel] Routing to ZIP upload');
             return handleArchiveUpload(file);
         }
         // Default: .docx flow (existing)
+        console.log('[MaterialPanel] Routing to DOCX upload');
         return handleDocxUpload(file);
     };
 
     // ── Archive (ZIP) Upload Handler ──
     const handleArchiveUpload = async (file) => {
+        console.log('[MaterialPanel] handleArchiveUpload start:', file.name, file.size, 'bytes');
         setUploading(true);
         setUploadFileName(file.name);
         setArchiveStep(1); // uploading
@@ -220,6 +224,7 @@ export default function MaterialPanel({ onClose }) {
             const formData = new FormData();
             formData.append('file', file);
             if (selectedCompany) formData.append('company', selectedCompany);
+            console.log('[MaterialPanel] Sending fetch to', `${API_BASE}/api/bidding/upload-archive`);
 
             const res = await fetch(`${API_BASE}/api/bidding/upload-archive`, {
                 method: 'POST',
@@ -274,6 +279,7 @@ export default function MaterialPanel({ onClose }) {
                     archive_id: archiveData.archive_id,
                     company: archiveData.company || selectedCompany || '',
                     selected_files: selectedFiles,
+                    folder_companies: archiveData.folder_companies || {},
                 }),
             });
 
@@ -1835,12 +1841,36 @@ export default function MaterialPanel({ onClose }) {
                             });
                             const catLabels = { resume: '简历', project: '业绩', qualification: '资质', company_intro: '介绍', general: '其他' };
                             const catColors = { resume: 'bg-blue-500/20 text-blue-300 border-blue-500/30', project: 'bg-purple-500/20 text-purple-300 border-purple-500/30', qualification: 'bg-amber-500/20 text-amber-300 border-amber-500/30', company_intro: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30', general: 'bg-zinc-700 text-zinc-400 border-zinc-600' };
-                            return Object.entries(grouped).map(([folder, files]) => (
+                            const folderCompanies = archiveData.folder_companies || {};
+                            return Object.entries(grouped).map(([folder, files]) => {
+                                const detectedCompany = folderCompanies[folder] || '';
+                                return (
                                 <div key={folder}>
                                     <div className="px-4 py-2 bg-zinc-800/60 flex items-center gap-2">
                                         <FolderOpen size={12} className="text-zinc-500" />
                                         <span className="text-[11px] font-medium text-zinc-400">{folder}</span>
                                         <span className="text-[10px] text-zinc-600">({files.length})</span>
+                                        {folder !== '根目录' && (
+                                            <div className="flex items-center gap-1.5 ml-auto">
+                                                <Building2 size={10} className="text-emerald-500/70" />
+                                                <input
+                                                    type="text"
+                                                    value={detectedCompany}
+                                                    placeholder="公司名称"
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    onChange={(e) => {
+                                                        setArchiveData(prev => ({
+                                                            ...prev,
+                                                            folder_companies: {
+                                                                ...prev.folder_companies,
+                                                                [folder]: e.target.value,
+                                                            },
+                                                        }));
+                                                    }}
+                                                    className="text-[10px] px-2 py-0.5 rounded bg-zinc-700/60 border border-emerald-500/30 text-emerald-300 w-48 outline-none focus:border-emerald-400 placeholder-zinc-600"
+                                                />
+                                            </div>
+                                        )}
                                     </div>
                                     {files.map(f => (
                                         <div key={f.path} className="flex items-center px-4 py-2.5 hover:bg-zinc-800/40 cursor-pointer transition-colors"
@@ -1859,7 +1889,8 @@ export default function MaterialPanel({ onClose }) {
                                         </div>
                                     ))}
                                 </div>
-                            ));
+                                );
+                            });
                         })()}
                         {archiveData.summary.skipped_count > 0 && (
                             <div className="px-4 py-2 bg-zinc-900/80">
