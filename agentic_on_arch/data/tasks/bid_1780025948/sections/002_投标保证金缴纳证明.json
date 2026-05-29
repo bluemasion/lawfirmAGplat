@@ -1,0 +1,15 @@
+{
+  "title": "投标保证金缴纳证明",
+  "content": "## 投标保证金承诺\n\n致：[待补充：招标方名称]\n\n北京市天元律师事务所了解并承诺：若我方在投标有效期内撤回投标文件，或中标后未按规定签订合同，贵方有权不予退还投标保证金。\n\n投标人（盖章）：北京市天元律师事务所\n法定代表人或其授权代理人（签字）：\n日期：[待补充：日期]\n",
+  "missing_fields": [
+    "招标方名称",
+    "日期"
+  ],
+  "status": "template",
+  "order": 3,
+  "type": "form",
+  "level": 2,
+  "linked_scoring": [],
+  "linked_rejection": [],
+  "linked_total_score": 0
+}

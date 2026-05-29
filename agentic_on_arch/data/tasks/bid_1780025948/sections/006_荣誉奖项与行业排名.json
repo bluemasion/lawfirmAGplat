@@ -1,0 +1,37 @@
+{
+  "title": "荣誉奖项与行业排名",
+  "content": "## 荣誉奖项与行业排名\n\n以下为我方相关资质证书清单：\n\n| 序号 | 资质/证书名称 | 证书编号 | 颁发机构 | 有效期 |\n|------|--------------|---------|---------|--------|\n| 1 | 排名证明_The Legal 500香港排名2026 | - |  | - |\n| 2 | 2024年度北京市破产管理人考核“优秀等级” — 天元 | None | 北京市高级人民法院 | None |\n| 3 | 2026 ALB China合规业务榜单第二级别 | None | 亚洲法律杂志（ALB, Asian Legal Business） | None |\n| 4 | 《钱伯斯全球指南2026》9项业务及行业领域推荐 | None | 钱伯斯（Chambers & Partners） | None |\n| 5 | 《钱伯斯大中华区2026指南》14项业务及行业领域推荐 | None | 钱伯斯（Chambers & Partners） | None |\n\n\n#### 排名证明_The Legal 500香港排名2026 — 证书扫描件\n\n![排名证明_The Legal 500香港排名2026](/Users/mason/Desktop/code /angenimi-agentic/lawfirmAGplat/agentic_on_arch/data/materials/images/42a6340998b9.png)\n![排名证明_The Legal 500香港排名2026](/Users/mason/Desktop/code /angenimi-agentic/lawfirmAGplat/agentic_on_arch/data/materials/images/2832579dcd90.png)\n\n",
+  "missing_fields": [
+    "荣誉奖项与行业排名"
+  ],
+  "status": "placeholder",
+  "order": 7,
+  "type": "qualification",
+  "level": 2,
+  "linked_scoring": [
+    {
+      "item": "荣誉奖项",
+      "max_score": 20,
+      "description": "根据律所近五年获得党中央、国务院、全国司法行政机关、全国律师协会、省级司法行政机关、省级律师协会年入选钱伯斯（Chambers & Partners）、亚洲法律杂志（ALB, Asian Legal Business）等权威榜单排名情况综合评审",
+      "sub_criteria": [
+        {
+          "name": "优秀",
+          "score": 20,
+          "scoring_rule": "得分20-11分"
+        },
+        {
+          "name": "良好",
+          "score": 10,
+          "scoring_rule": "得分10-6分"
+        },
+        {
+          "name": "一般",
+          "score": 5,
+          "scoring_rule": "得分5-0分"
+        }
+      ]
+    }
+  ],
+  "linked_rejection": [],
+  "linked_total_score": 20
+}

@@ -1,0 +1,14 @@
+{
+  "title": "价格承诺",
+  "content": "## 价格承诺\n\n| 服务小时费率 |\n| --- |\n| [待补充：服务小时费率] |\n",
+  "missing_fields": [
+    "服务小时费率"
+  ],
+  "status": "template",
+  "order": 12,
+  "type": "table",
+  "level": 2,
+  "linked_scoring": [],
+  "linked_rejection": [],
+  "linked_total_score": 0
+}
