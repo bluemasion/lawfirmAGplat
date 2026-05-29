@@ -435,6 +435,20 @@ class ContentGenerationSkill(BaseSkill):
             missing = self._scan_missing(content)
             return self._result(title, content, missing, "data_driven")
 
+        # ── Degradation guard: warn if expected data-driven section has no materials ──
+        is_team_section = any(kw in title_lower for kw in team_kws)
+        is_project_section = any(kw in title_lower for kw in project_kws)
+        if is_team_section and not matched_materials.get("resumes"):
+            logger.warning(
+                f"  ⚠️ DEGRADATION: '{title}' is a team section but has 0 resumes! "
+                f"Falling back to LLM generation. Check material dedup or uploads."
+            )
+        if is_project_section and not matched_materials.get("projects"):
+            logger.warning(
+                f"  ⚠️ DEGRADATION: '{title}' is a project section but has 0 projects! "
+                f"Falling back to LLM generation. Check material dedup or uploads."
+            )
+
         # ── narrative → LLM streaming (with enhanced prompt) ──
         task_id = params.get("task_id", "")
         content = await self._generate_narrative_section_streaming(

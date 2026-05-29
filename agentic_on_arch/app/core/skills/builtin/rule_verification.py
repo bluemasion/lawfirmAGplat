@@ -65,6 +65,7 @@ class RuleVerificationSkill(BaseSkill):
         checks.extend(self._check_rejection_coverage(requirements, generated))
         checks.extend(self._check_personnel_consistency(generated))
         checks.extend(self._check_amount_consistency(generated))
+        checks.extend(self._check_data_driven_degradation(generated))
 
         # Calculate overall status
         error_count = sum(1 for c in checks if c["status"] == "ERROR")
@@ -427,4 +428,57 @@ class RuleVerificationSkill(BaseSkill):
             "amount", "金额一致性", "PASS",
             f"检查了 {len(amounts_by_section)} 个包含金额的章节",
         ).to_dict())
+        return checks
+
+    def _check_data_driven_degradation(self, generated):
+        """13. Detect team/project sections that degraded from data-driven to LLM.
+
+        These sections should normally have 3000+ chars with real data.
+        If they're under 2000 chars, it likely means materials weren't
+        matched (e.g. due to dedup or missing uploads).
+        """
+        checks = []
+        team_kws = ["团队", "人员", "律师", "成员", "配置"]
+        project_kws = ["业绩", "案例", "经验"]
+
+        # Minimum expected content length for data-driven sections
+        MIN_TEAM_CHARS = 2000
+        MIN_PROJECT_CHARS = 2000
+
+        for section in generated:
+            title = section.get("title", "")
+            content = section.get("content", "")
+            status = section.get("status", "")
+            title_lower = title.lower()
+
+            # Check team sections
+            if any(kw in title_lower for kw in team_kws):
+                if len(content) < MIN_TEAM_CHARS:
+                    checks.append(VerificationItem(
+                        "degradation", title, "WARNING",
+                        f"'{title}' 内容仅 {len(content)} 字（预期 >{MIN_TEAM_CHARS}），"
+                        f"可能未匹配到简历素材，建议检查素材库",
+                        "WARNING",
+                    ).to_dict())
+                else:
+                    checks.append(VerificationItem(
+                        "degradation", title, "PASS",
+                        f"'{title}' 内容 {len(content)} 字，素材匹配正常",
+                    ).to_dict())
+
+            # Check project sections
+            if any(kw in title_lower for kw in project_kws):
+                if len(content) < MIN_PROJECT_CHARS:
+                    checks.append(VerificationItem(
+                        "degradation", title, "WARNING",
+                        f"'{title}' 内容仅 {len(content)} 字（预期 >{MIN_PROJECT_CHARS}），"
+                        f"可能未匹配到业绩素材，建议检查素材库",
+                        "WARNING",
+                    ).to_dict())
+                else:
+                    checks.append(VerificationItem(
+                        "degradation", title, "PASS",
+                        f"'{title}' 内容 {len(content)} 字，素材匹配正常",
+                    ).to_dict())
+
         return checks

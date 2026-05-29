@@ -144,10 +144,19 @@ class MaterialMatcher:
                 ]
                 removed = before - len(result[mat_type])
                 if removed:
-                    logger.info(
-                        f"  MaterialMatcher [{title}]: excluded {removed} "
-                        f"already-used {mat_type}"
-                    )
+                    remaining = len(result[mat_type])
+                    if remaining == 0 and before > 0:
+                        # All items removed — this may cause downstream degradation
+                        logger.warning(
+                            f"  ⚠️ MaterialMatcher [{title}]: ALL {before} "
+                            f"{mat_type} excluded by cross-chapter dedup! "
+                            f"Section may degrade to LLM fallback."
+                        )
+                    else:
+                        logger.info(
+                            f"  MaterialMatcher [{title}]: excluded {removed} "
+                            f"already-used {mat_type} ({remaining} remaining)"
+                        )
 
         # Build summary
         parts = []
