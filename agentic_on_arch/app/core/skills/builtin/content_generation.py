@@ -860,6 +860,7 @@ class ContentGenerationSkill(BaseSkill):
             "company_info": company_info,
             "reference_data": reference,
             "skeleton_hint": skeleton_hint,
+            "scoring_context": scoring_context,
         }
 
         # Inject team/projects/qualifications from store into context
@@ -920,7 +921,27 @@ class ContentGenerationSkill(BaseSkill):
                 if chunk_callback:
                     await chunk_callback(img_block)
 
-        return "".join(full_content)
+        final_content = "".join(full_content)
+
+        # ── Collect training data for future SFT fine-tuning ──
+        try:
+            from app.core.skills.builtin.training_collector import save_training_sample
+            task_id = params.get("task_id", "")
+            save_training_sample(
+                task_id=task_id,
+                section_title=title,
+                prompt_skill=prompt_skill.name,
+                prompt=prompt,
+                system=system_prompt,
+                output=final_content,
+                llm_provider=llm_provider,
+                section_type="narrative",
+                scoring_weight=linked_total_score,
+            )
+        except Exception as _train_err:
+            logger.debug(f"Training data collection failed: {_train_err}")
+
+        return final_content
 
     # ── Material image embedding helper ──
 

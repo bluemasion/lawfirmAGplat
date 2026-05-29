@@ -224,6 +224,12 @@ class ServicePlanPromptSkill(PromptSkill):
         team_block = _build_team_block(context)
         projects_block = _build_projects_block(context)
         skeleton = context.get("skeleton_hint", "")
+        scoring = context.get("scoring_context", "")
+
+        # Determine word count based on scoring weight
+        scoring_hint = ""
+        if scoring:
+            scoring_hint = "\n【本章节对应的评分标准（必须逐项响应）】\n" + scoring
 
         return """请为投标文件撰写以下章节：
 
@@ -232,6 +238,7 @@ class ServicePlanPromptSkill(PromptSkill):
 【招标要求（必须逐项回应）】{hints}
 
 【来自招标文件的原文参考】{reference}
+{scoring_hint}
 
 【我方公司信息（真实数据，直接引用）】
 {company}
@@ -242,32 +249,41 @@ class ServicePlanPromptSkill(PromptSkill):
 
 # 写作策略：评分导向型服务方案
 
-## 核心原则：每个评分子项 = 一个独立段落
-如果上方【评分标准】中列出了子评分项，你必须为每个子评分项撰写独立段落。
+## 核心原则
+1. **评分项 = 段落**：如果上方有评分标准，你必须为每个评分子项撰写独立段落，段落标题直接引用评分项名称
+2. **严禁重复**：不同段落不得出现重复或高度相似的内容。每个段落必须有独特的核心观点
+3. **行业适配**：本项目为法律服务采购，内容必须贴合法律行业实际，不要使用制造业、IT行业的术语和认证（如ISO认证）
 
 ## 文章结构
 
 ### 开头（200-300字）
-- 对项目的深入理解，总体服务理念和方法论
+- 表达对本项目的深入理解（引用招标文件中的具体要求）
+- 阐述服务理念和总体方法论
+- 点明服务团队的核心竞争力
 
-### 主体：按评分子项逐一展开
-每段 400-600 字，必须包含：
-1. **方法论**：阐述总体思路和方法
-2. **具体措施**：3-5 条可操作、可验证的具体措施
-3. **数据支撑**：引用上方提供的真实数据
-4. **量化承诺**：至少 1 个可量化的承诺
+### 主体：逐项展开
+按评分子项或招标要求逐一展开，每段 500-800 字，必须包含：
+1. **对需求的理解**：先复述该评分项的要求，表明理解
+2. **方法论**：阐述针对该项的总体思路
+3. **具体措施**：3-5 条可操作、可验证的具体措施，体现专业性
+4. **数据支撑**：引用上方提供的团队成员、项目业绩等真实数据
+5. **量化承诺**：至少 1 个可量化的服务承诺（响应时间、人员配置等）
 
-### 结尾（100-150字）
-- 服务承诺总结，衔接后续章节
+### 结尾（150-200字）
+- 总结服务承诺和预期成效
+- 表达长期合作意愿
 
 ## 写作禁忌
-- 不要编造公司数据（成立年份、员工人数等）
-- 不要泛泛承诺，用具体措施说明
+- ❌ 不要编造公司数据（成立年份、员工人数、资质编号等）
+- ❌ 不要泛泛承诺（"提供优质服务"），用具体措施说明
+- ❌ 不要出现 ISO 认证、CMMI 等与法律行业无关的认证
+- ❌ 不要在不同段落中重复相同的服务承诺或措施
 
-总字数：1500-2500字""".format(
+总字数：2500-3500字""".format(
             title=section.get("title", ""),
             hints=section.get("content_hints", ""),
             reference=context.get("reference_data", ""),
+            scoring_hint=scoring_hint,
             company=company_block,
             team=team_block,
             projects=projects_block,
