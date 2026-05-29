@@ -1,0 +1,19 @@
+{
+  "title": "价格承诺",
+  "content": "## 价格承诺\n\n| 服务小时费率 |\n| --- |\n| [待补充：服务小时费率] |\n",
+  "missing_fields": [
+    "服务小时费率"
+  ],
+  "status": "template",
+  "order": 12,
+  "type": "table",
+  "level": 2,
+  "linked_scoring": [],
+  "linked_rejection": [
+    {
+      "condition": "同一投标人未提交两个以上不同的投标文件或者投标报价，但招标文件要求提交备选投标的除外。",
+      "source": "评标办法前附表"
+    }
+  ],
+  "linked_total_score": 0
+}

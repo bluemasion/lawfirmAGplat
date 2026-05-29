@@ -436,6 +436,7 @@ class ContentGenerationSkill(BaseSkill):
             return self._result(title, content, missing, "data_driven")
 
         # ── narrative → LLM streaming (with enhanced prompt) ──
+        task_id = params.get("task_id", "")
         content = await self._generate_narrative_section_streaming(
             title, content_hints, reference_data, company_info,
             llm_provider, skeleton, chunk_callback,
@@ -446,6 +447,7 @@ class ContentGenerationSkill(BaseSkill):
             sibling_titles=sibling_titles,
             linked_scoring=linked_scoring,
             linked_total_score=linked_total_score,
+            task_id=task_id,
         )
         missing = self._scan_missing(content)
         return self._result(title, content, missing, "generated")
@@ -456,6 +458,7 @@ class ContentGenerationSkill(BaseSkill):
         content_outline=None, matched_materials=None, company="",
         project_id=None, sibling_titles=None,
         linked_scoring=None, linked_total_score=0,
+        task_id="",
     ):
         # type: (str, str, str, str, str, Optional[str], Any, Optional[List], Optional[Dict], str) -> str
         """Stream narrative section using llm.stream(), calling chunk_callback per token."""
@@ -926,9 +929,9 @@ class ContentGenerationSkill(BaseSkill):
         # ── Collect training data for future SFT fine-tuning ──
         try:
             from app.core.skills.builtin.training_collector import save_training_sample
-            task_id = params.get("task_id", "")
+            _task_id = task_id
             save_training_sample(
-                task_id=task_id,
+                task_id=_task_id,
                 section_title=title,
                 prompt_skill=prompt_skill.name,
                 prompt=prompt,
