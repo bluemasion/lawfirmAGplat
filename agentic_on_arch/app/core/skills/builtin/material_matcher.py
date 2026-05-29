@@ -132,11 +132,13 @@ class MaterialMatcher:
         result["qualifications"] = _dedup_by_key(result["qualifications"], "name")
 
         # ── Cross-chapter dedup: exclude materials already used ──
-        # NOTE: resumes are NOT deduped across chapters because they serve
-        # different purposes: qualification chapters show photos/certs,
-        # team chapters show biographical detail. Both need the same resumes.
+        # NOTE: resumes and projects are NOT deduped across chapters because
+        # they serve different purposes in different sections:
+        #   - resumes: qualification=photo/certs, team=biographical detail
+        #   - projects: qualification=contract scans, project=detailed narrative
+        # Only qualifications are deduped (same cert shouldn't appear twice).
         if used_material_ids:
-            for mat_type in ["projects", "qualifications"]:
+            for mat_type in ["qualifications"]:
                 before = len(result[mat_type])
                 result[mat_type] = [
                     m for m in result[mat_type]
