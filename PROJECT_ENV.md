@@ -238,3 +238,133 @@ lawfirmAGplat/
 6. **React setState 竞态**：已用 `effectiveCompanyData` 修复（BiddingAgent.jsx:350）
 7. **template_filling.py**：`DEFAULT_COMPANY_DATA` 从 `company_profile.json` 加载，前端 `company_data` 会 override
 8. **anthropic SDK**：requirements.txt 中已注释（Python 3.8 不兼容 tokenizers Rust 编译）
+
+---
+
+## 九、章节生成路由（Data-Driven vs LLM 边界）
+
+> 代码位置: `content_generation.py` L310-466 `execute_streaming()`
+
+### 5 种生成路径
+
+| 路径 | 类型标记 | 耗时 | LLM | 触发条件 |
+|------|---------|------|-----|---------|
+| 📄 模板直出 | `template` | 0s | 无 | `sec_type == form/table` + 有代码模板 |
+| 📐 偏离表 | `deviation_table` | 0s | 无 | `section._deviation_table_content` 有预填内容 |
+| 📋 素材拼接 | `placeholder` | 0s | 无 | `sec_type == qualification` |
+| 📊 数据驱动 | `data_driven` | 0.1s | 无 | `sec_type == narrative` + 标题含团队/业绩关键词 + 有素材 |
+| 🤖 LLM生成 | `generated` | 68-188s | Qwen-max | 以上都不匹配的 narrative 章节 |
+
+### 路由决策链
+
+```
+execute_streaming(section)
+  │
+  ├── sec_type == qualification → 📋 素材拼接
+  ├── sec_type == table
+  │     ├── 有 _deviation_table_content → 📐 偏离表
+  │     └── 无 → 📄 表格模板
+  ├── sec_type == form → 📄 表单模板
+  │
+  └── sec_type == narrative
+        ├── 标题含 [团队/人员/律师/成员/配置] + resumes > 0 → 📊 数据驱动(团队)
+        ├── 标题含 [业绩/案例/经验/履约] + projects > 0 → 📊 数据驱动(业绩)
+        └── 其他 → 🤖 LLM 流式生成 (PromptSkill)
+```
+
+### 典型章节分布 (15章)
+
+| 章节 | 路径 | 评分 | 说明 |
+|------|------|------|------|
+| 投标函/授权委托书/保证金 | 📄 模板 | 0 | FORM_TEMPLATES 填充 |
+| 商务/技术偏离表 | 📐 偏离表 | 0 | Pass 2 自动生成 |
+| 资格审查资料 | 📋 素材 | 0 | 简历+资质+图片拼接 |
+| 荣誉奖项与行业排名 | 📋 素材 | 20 | 资质证书拼接 |
+| 项目团队配置 | 📊 数据驱动 | 20 | 简历数据→结构化叙述+图片 |
+| 律所业绩 | 📊 数据驱动 | 20 | 项目数据→结构化叙述+图片 |
+| **服务方案** | 🤖 LLM | **40** | PromptSkill=service_plan |
+| **质量控制方案** | 🤖 LLM | **20** | PromptSkill=quality_control |
+| 报价/声明/说明 | 📄 模板 | 0-15 | 代码直出 |
+
+### 跨章节素材去重规则
+
+| 素材类型 | 是否去重 | 原因 |
+|----------|---------|------|
+| resumes | ❌ 不去重 | 资格审查=证件照, 团队=详细介绍，用途不同 |
+| projects | ❌ 不去重 | 资格审查=合同扫描件, 业绩=详细叙述，用途不同 |
+| qualifications | ✅ 去重 | 同一证书不应重复展示 |
+
+代码位置: `material_matcher.py` L134-160
+
+---
+
+## 十、质检管线 (4层)
+
+```
+生成完成
+  → Layer 1: rule_verification.py — 规则校验 (结构/顺序/字数/废标/评分覆盖/降级检测)
+  → Layer 2: bid_doc_reviewer.py — LLM 4维审查 (合规/技术/响应度/一致性)
+  → 前端质检面板展示 (score + warnings + AI issues)
+```
+
+### 关键检查项
+
+| 检查 | 严重级别 | 说明 |
+|------|---------|------|
+| 结构缺失 | ERROR | 必要章节不存在 |
+| 章节顺序错误 | ERROR | 不符合招标要求 |
+| 废标条款未覆盖 | WARNING | 关键词匹配（非语义） |
+| 评分标准覆盖 | WARNING | 评分项在正文中未体现 |
+| 数据驱动降级 | WARNING | 团队/业绩章节 <2000字 |
+| 人员一致性 | WARNING | 跨章节人名/职位不一致 |
+| 金额一致性 | PASS/WARNING | 跨章节金额对比 |
+
+---
+
+## 十一、训练数据收集
+
+> 代码位置: `training_collector.py`，数据目录: `data/training/`
+
+每次 narrative 章节 LLM 生成完成后，自动保存 (prompt, system, output) 元组为 JSONL：
+
+```
+data/training/sft_samples_YYYYMMDD.jsonl
+```
+
+| 字段 | 说明 |
+|------|------|
+| task_id | 标书任务ID |
+| section_title | 章节标题 |
+| prompt_skill | PromptSkill 名称 |
+| prompt | 完整 user prompt |
+| system | system prompt |
+| output | LLM 生成内容 |
+| scoring_weight | 评分权重 |
+
+用途: 积累 200-500 条后用于微调 Qwen3-35B (SFT)。
+
+---
+
+## 十二、降级检测 (3层防护)
+
+| 层级 | 位置 | 触发 | 说明 |
+|------|------|------|------|
+| Layer 1 | MaterialMatcher | 去重清空所有素材 | `⚠️ ALL N items excluded` |
+| Layer 2 | ContentGeneration | 团队/业绩无素材走LLM | `⚠️ DEGRADATION: falling back` |
+| Layer 3 | RuleVerification | 章节字数 <2000 | 质检报告中可见 |
+
+---
+
+## 十三、PromptSkill 体系
+
+> 代码位置: `app/core/prompts/prompt_skill.py`
+
+| Skill 名称 | 匹配章节 | 特点 |
+|------------|---------|------|
+| service_plan | 服务方案 | 评分对齐+去重+行业约束, 2500-3500字 |
+| quality_control | 质量控制 | 管理制度引用 |
+| team | 团队介绍 | 简历数据引用 |
+| project_perf | 项目业绩 | 业绩数据引用 |
+| firm_intro | 律所简介 | 公司概况 |
+| compliance | 合规声明 | 法律合规 |
+| generic | 默认 | 通用 prompt |
