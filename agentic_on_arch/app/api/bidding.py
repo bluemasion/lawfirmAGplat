@@ -1853,10 +1853,15 @@ async def upload_archive(
                 fsize = os.path.getsize(fpath)
 
                 # Determine folder name (skip ZIP wrapper if present)
-                # ZIP often creates a same-name wrapper dir: dentonsdc.zip/北京/file.pdf
+                # ZIP often creates a wrapper dir: dentonsdc.zip/北京/file.pdf
                 # We want "北京" not "dentonsdc.zip" as the folder
                 parts = rel_path.replace("\\", "/").split("/")
-                if len(parts) > 2 and parts[0] == file.filename:
+                # Detect wrapper: parts[0] ends with .zip or matches uploaded filename
+                is_wrapper = (len(parts) > 2 and (
+                    parts[0].lower().endswith('.zip') or
+                    parts[0] == file.filename
+                ))
+                if is_wrapper:
                     # Skip ZIP wrapper: use parts[1] as folder
                     folder = parts[1]
                 elif len(parts) > 1:
