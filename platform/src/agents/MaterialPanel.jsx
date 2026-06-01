@@ -274,9 +274,9 @@ export default function MaterialPanel({ onClose }) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     archive_id: archiveData.archive_id,
-                    company: archiveData.company || selectedCompany || '',
+                    company: archiveData.detected_company || archiveData.company || selectedCompany || '',
                     selected_files: selectedFiles,
-                    folder_companies: archiveData.folder_companies || {},
+                    folder_projects: archiveData.folder_projects || archiveData.folders || [],
                 }),
             });
 
@@ -1838,9 +1838,31 @@ export default function MaterialPanel({ onClose }) {
                             });
                             const catLabels = { resume: '简历', project: '业绩', qualification: '资质', company_intro: '介绍', general: '其他' };
                             const catColors = { resume: 'bg-blue-500/20 text-blue-300 border-blue-500/30', project: 'bg-purple-500/20 text-purple-300 border-purple-500/30', qualification: 'bg-amber-500/20 text-amber-300 border-amber-500/30', company_intro: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30', general: 'bg-zinc-700 text-zinc-400 border-zinc-600' };
-                            const folderCompanies = archiveData.folder_companies || {};
-                            return Object.entries(grouped).map(([folder, files]) => {
-                                const detectedCompany = folderCompanies[folder] || '';
+                            const folderProjects = archiveData.folder_projects || archiveData.folders || [];
+                            return (
+                            <>
+                            {/* Top-level: editable company name */}
+                            {folderProjects.length > 0 && (
+                                <div className="px-4 py-2.5 bg-emerald-900/20 border-b border-emerald-500/20 flex items-center gap-2">
+                                    <Building2 size={14} className="text-emerald-400" />
+                                    <span className="text-[11px] text-emerald-400/70">公司名称</span>
+                                    <input
+                                        type="text"
+                                        value={archiveData.detected_company || archiveData.company || ''}
+                                        placeholder="输入公司名称（如：北京大成律师事务所）"
+                                        onClick={(e) => e.stopPropagation()}
+                                        onChange={(e) => {
+                                            setArchiveData(prev => ({
+                                                ...prev,
+                                                detected_company: e.target.value,
+                                                company: e.target.value,
+                                            }));
+                                        }}
+                                        className="flex-1 text-[11px] px-2 py-1 rounded bg-zinc-700/60 border border-emerald-500/30 text-emerald-300 outline-none focus:border-emerald-400 placeholder-zinc-600"
+                                    />
+                                </div>
+                            )}
+                            {Object.entries(grouped).map(([folder, files]) => {
                                 return (
                                 <div key={folder}>
                                     <div className="px-4 py-2 bg-zinc-800/60 flex items-center gap-2">
@@ -1848,25 +1870,7 @@ export default function MaterialPanel({ onClose }) {
                                         <span className="text-[11px] font-medium text-zinc-400">{folder}</span>
                                         <span className="text-[10px] text-zinc-600">({files.length})</span>
                                         {folder !== '根目录' && (
-                                            <div className="flex items-center gap-1.5 ml-auto">
-                                                <Building2 size={10} className="text-emerald-500/70" />
-                                                <input
-                                                    type="text"
-                                                    value={detectedCompany}
-                                                    placeholder="公司名称"
-                                                    onClick={(e) => e.stopPropagation()}
-                                                    onChange={(e) => {
-                                                        setArchiveData(prev => ({
-                                                            ...prev,
-                                                            folder_companies: {
-                                                                ...prev.folder_companies,
-                                                                [folder]: e.target.value,
-                                                            },
-                                                        }));
-                                                    }}
-                                                    className="text-[10px] px-2 py-0.5 rounded bg-zinc-700/60 border border-emerald-500/30 text-emerald-300 w-48 outline-none focus:border-emerald-400 placeholder-zinc-600"
-                                                />
-                                            </div>
+                                            <span className="text-[9px] text-amber-500/60 ml-auto px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">分所/项目</span>
                                         )}
                                     </div>
                                     {files.map(f => (
@@ -1887,7 +1891,9 @@ export default function MaterialPanel({ onClose }) {
                                     ))}
                                 </div>
                                 );
-                            });
+                            })}
+                            </>
+                            );
                         })()}
                         {archiveData.summary.skipped_count > 0 && (
                             <div className="px-4 py-2 bg-zinc-900/80">

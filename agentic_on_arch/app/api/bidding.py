@@ -1675,32 +1675,41 @@ async def confirm_materials(req: ConfirmMaterialsRequest):
         project_name = f"{company}"
     logger.info(f"[confirm] Target project: '{project_name}'")
 
-    # ── Multi-company saving: group materials by _company tag ──
-    folder_companies = pending.get("folder_companies", {})
-    if folder_companies:
-        # Group materials by their assigned company
-        company_groups = {}  # company_name → {resumes: [], projects: [], ...}
+    # ── Multi-project saving: group materials by _project tag ──
+    # All materials go to ONE company, but different bid_projects per folder
+    folder_projects = pending.get("folder_projects", [])
+    if folder_projects:
+        # Group materials by their _project tag
+        project_groups = {}  # project_name → {resumes: [], projects: [], ...}
         for cat in ("resumes", "projects", "qualifications"):
             for item in materials.get(cat, []):
-                item_company = item.pop("_company", company)
-                if not item_company:
-                    item_company = company
-                if item_company not in company_groups:
-                    company_groups[item_company] = {"resumes": [], "projects": [], "qualifications": [], "narrative_chunks": []}
-                company_groups[item_company][cat].append(item)
+                item_project = item.pop("_project", "")
+                item.pop("_company", None)  # remove legacy _company tag
+                if not item_project:
+                    item_project = company  # root files → shared/default project
+                if item_project not in project_groups:
+                    project_groups[item_project] = {"resumes": [], "projects": [], "qualifications": [], "narrative_chunks": []}
+                project_groups[item_project][cat].append(item)
 
-        # Save each company's materials separately
+        # Also group narrative chunks
+        for chunk in materials.get("narrative_chunks", []):
+            chunk_project = chunk.pop("_project", "") or company
+            chunk.pop("_company", None)
+            if chunk_project not in project_groups:
+                project_groups[chunk_project] = {"resumes": [], "projects": [], "qualifications": [], "narrative_chunks": []}
+            project_groups[chunk_project]["narrative_chunks"].append(chunk)
+
+        # Save each project's materials under the SAME company
         total_save_counts = {"resumes": 0, "projects": 0, "qualifications": 0, "narrative_chunks": 0}
-        for comp_name, comp_materials in company_groups.items():
-            comp_project = req.project_name or comp_name
-            counts = store.save_materials(comp_materials, company=comp_name, project=comp_project)
-            logger.info(f"[confirm] ✅ Saved to '{comp_name}': {counts}")
+        for proj_name, proj_materials in project_groups.items():
+            counts = store.save_materials(proj_materials, company=company, project=proj_name)
+            logger.info(f"[confirm] ✅ Saved to project '{proj_name}' (company={company}): {counts}")
             for k, v in counts.items():
                 total_save_counts[k] = total_save_counts.get(k, 0) + v
         save_counts = total_save_counts
-        logger.info(f"[confirm] ✅ Multi-company save complete: {len(company_groups)} companies, total={save_counts}")
+        logger.info(f"[confirm] ✅ Multi-project save complete: {len(project_groups)} projects under '{company}', total={save_counts}")
     else:
-        # Single company save (original flow)
+        # Single project save (original flow)
         save_counts = store.save_materials(materials, company=company,
                                            project=project_name)
         logger.info(f"[confirm] ✅ Save complete: {save_counts}")
@@ -1906,64 +1915,53 @@ async def upload_archive(
         image_count = sum(1 for f in file_tree if f["type"] == "image")
         pdf_count = sum(1 for f in file_tree if f["type"] == "pdf")
 
-        # ── Smart folder → company detection ──
-        # Collect unique top-level folders
+        # ── Smart folder → project detection ──
+        # Folders become bid_projects under a single company (集团→分所 model)
         folders = sorted(set(f["folder"] for f in file_tree if f["folder"]))
 
-        # Try to match folders to existing companies
-        from app.core.skills.builtin.material_store import get_material_store
-        store = get_material_store()
-        existing_companies = []
-        if store:
-            try:
-                existing_companies = [c["name"] for c in store.get_companies()]
-            except Exception:
-                pass
+        # Detect company name: from form input, or infer from ZIP name
+        detected_company = company or ""
+        if not detected_company:
+            # Try to infer from ZIP filename (strip .zip extension)
+            zip_stem = os.path.splitext(file.filename)[0]
+            # Remove version suffixes like "4" from "dentonsdc4"
+            import re
+            zip_stem_clean = re.sub(r'\d+$', '', zip_stem)
+            if zip_stem_clean and len(zip_stem_clean) >= 2:
+                # Try matching against existing companies
+                from app.core.skills.builtin.material_store import get_material_store
+                store = get_material_store()
+                if store:
+                    try:
+                        existing = [c["name"] for c in store.get_companies()]
+                        for comp in existing:
+                            if zip_stem_clean.lower() in comp.lower() or comp.lower() in zip_stem_clean.lower():
+                                detected_company = comp
+                                break
+                    except Exception:
+                        pass
 
-        folder_companies = {}
-        for folder in folders:
-            # Find all companies containing this folder name (or vice versa)
-            matches = [comp for comp in existing_companies
-                       if folder in comp or comp in folder]
-
-            if len(matches) == 1:
-                # Unique match → auto-assign
-                folder_companies[folder] = matches[0]
-            elif len(matches) > 1 and company:
-                # Multiple matches → try narrowing with ZIP-level company hint
-                # e.g. company="大成", folder="北京" → find "北京大成律师事务所"
-                narrowed = [c for c in matches
-                            if any(kw in c for kw in company.replace('.zip', '').split()
-                                   if len(kw) >= 2)]
-                if len(narrowed) == 1:
-                    folder_companies[folder] = narrowed[0]
-                else:
-                    # Still ambiguous → keep folder name for user to edit
-                    folder_companies[folder] = folder
-            else:
-                # No match or ambiguous without hint → keep folder name
-                folder_companies[folder] = folder
-
-        # Assign detected company to each file
+        # Assign folder (= project) to each file
         for f in file_tree:
-            if f["folder"] and f["folder"] in folder_companies:
-                f["detected_company"] = folder_companies[f["folder"]]
-            else:
-                f["detected_company"] = company or ""
+            f["project"] = f["folder"]  # folder name IS the project name
+            f.pop("detected_company", None)  # remove old field
 
         logger.info(f"[archive] Extracted: {len(file_tree)} files "
                     f"({docx_count} docx, {image_count} images, {pdf_count} pdf, "
                     f"{len(skipped_files)} skipped)")
-        if folder_companies:
-            logger.info(f"[archive] Folder→Company mapping: {folder_companies}")
+        if folders:
+            logger.info(f"[archive] Folders (→ projects): {folders}")
+        if detected_company:
+            logger.info(f"[archive] Detected company: '{detected_company}'")
 
         return {
             "success": True,
             "data": {
                 "archive_id": archive_id,
                 "company": company,
+                "detected_company": detected_company,
                 "file_tree": file_tree,
-                "folder_companies": folder_companies,
+                "folder_projects": folders,  # folders = project names
                 "folders": folders,
                 "summary": {
                     "total_files": len(file_tree),
@@ -1989,7 +1987,8 @@ class ParseArchiveRequest(BaseModel):
     archive_id: str
     company: str = ""
     selected_files: list  # list of relative paths to parse
-    folder_companies: dict = {}  # folder_name → company_name mapping
+    folder_companies: dict = {}  # DEPRECATED, kept for backward compat
+    folder_projects: list = []  # folder names as project names
     llm_provider: str = "qwen"
 
 
@@ -2638,24 +2637,20 @@ async def parse_archive(req: ParseArchiveRequest):
             logger.info(f"[archive] Detected companies: {dict(company_votes)}, "
                         f"winner='{detected_company}'")
 
-        # ── Resolve company per material using folder_companies mapping ──
-        folder_companies = req.folder_companies or {}
-        if folder_companies:
-            # Tag each material with its folder's company
+        # ── Tag each material with its folder (= project) ──
+        folder_projects = req.folder_projects or list(req.folder_companies.keys()) or []
+        if folder_projects:
             for cat in ("resumes", "projects", "qualifications"):
                 for item in all_materials.get(cat, []):
                     source_path = item.get("_source_path", "") or item.get("_source_file", "")
-                    # Determine folder from source path
-                    item_folder = ""
-                    for folder_name in folder_companies:
+                    # Determine folder/project from source path
+                    item_project = ""
+                    for folder_name in folder_projects:
                         if folder_name in source_path:
-                            item_folder = folder_name
+                            item_project = folder_name
                             break
-                    if item_folder and item_folder in folder_companies:
-                        item["_company"] = folder_companies[item_folder]
-                    else:
-                        item["_company"] = req.company or detected_company or ""
-            logger.info(f"[archive] Folder→Company mapping applied: {folder_companies}")
+                    item["_project"] = item_project  # empty = root/shared
+            logger.info(f"[archive] Folder→Project tagging applied: {folder_projects}")
 
         resolved_company = req.company or detected_company or store.get_default_company() or ""
         logger.info(f"[archive] Resolved company: '{resolved_company}' "
@@ -2664,7 +2659,7 @@ async def parse_archive(req: ParseArchiveRequest):
             "materials": all_materials,
             "company": resolved_company,
             "capability_tags": all_capability_tags,
-            "folder_companies": folder_companies,
+            "folder_projects": folder_projects,
         })
 
         # Send final "complete" event
@@ -2672,7 +2667,7 @@ async def parse_archive(req: ParseArchiveRequest):
             "type": "complete",
             "upload_id": upload_id,
             "company": resolved_company,
-            "folder_companies": folder_companies,
+            "folder_projects": folder_projects,
             "extracted": {
                 cat: len(all_materials.get(cat, []))
                 for cat in ("resumes", "projects", "qualifications", "narrative_chunks")
