@@ -443,6 +443,8 @@ class MaterialStore:
             '证书', '扫描件', '副本', '许可证', '社保', '实习证',
             '律师', '平台', '律所', '事务所', '信息', '记录',
             '代理人', '简历', '主要人员', '投标', '证明', '缴纳',
+            '完税', '开户', '缴税', '增值', '税收', '正本', '纳税',
+            '审计', '报告', '执照', '营业', '保险', '养老', '年检',
         ]
 
         def _is_person_part(part):
@@ -844,8 +846,13 @@ class MaterialStore:
             "narrative_chunks": self.get_narrative_chunks(company),
         }
 
-    def get_grouped_materials(self, company: str = "") -> Dict[str, Any]:
+    def get_grouped_materials(self, company: str = "",
+                              project_id: int = None) -> Dict[str, Any]:
         """Get materials organized by person and sub-category.
+
+        Args:
+            company: Filter by company name
+            project_id: Filter by bid_project id (for branch/分所 filtering)
 
         Returns:
             {
@@ -872,7 +879,15 @@ class MaterialStore:
         """
         conn = self._get_conn()
         try:
-            if company:
+            if project_id:
+                rows = conn.execute("""
+                    SELECT m.*, c.name as company_name
+                    FROM materials m
+                    JOIN companies c ON m.company_id = c.id
+                    WHERE m.project_id = ?
+                    ORDER BY m.parent_person, m.sub_category, m.name
+                """, (project_id,)).fetchall()
+            elif company:
                 rows = conn.execute("""
                     SELECT m.*, c.name as company_name
                     FROM materials m
@@ -901,7 +916,8 @@ class MaterialStore:
             # Firm-level sub-categories
             _FIRM_SUB_CATS = {
                 'ranking', 'award', 'firm_license',
-                'financial', 'bond', 'compliance', 'integrity'
+                'financial', 'bond', 'compliance', 'integrity',
+                'social_security'  # firm-level social security (no parent_person)
             }
 
             for row in rows:
@@ -925,21 +941,26 @@ class MaterialStore:
                 sub_cat = row["sub_category"] or ""
                 category = row["category"] or ""
 
-                if person and sub_cat in _PERSON_SUB_CATS:
+                # Person-level: only if has a real parent_person AND sub_cat is person-level
+                if person and sub_cat in _PERSON_SUB_CATS and category == "resumes":
                     if person not in persons:
                         persons[person] = {}
                     persons[person].setdefault(sub_cat, []).append(item)
-                elif sub_cat in _FIRM_SUB_CATS:
+                elif sub_cat in _FIRM_SUB_CATS and not person:
+                    # Firm-level: no parent_person
                     firm.setdefault(sub_cat, []).append(item)
-                elif person:
-                    # Has person but unknown sub_cat
+                elif person and category == "resumes":
+                    # Has person but unknown sub_cat (still person-level for resumes)
                     if person not in persons:
                         persons[person] = {}
                     persons[person].setdefault(
                         sub_cat or "other", []).append(item)
                 elif category == "qualifications":
-                    # Only qualifications go to unclassified
-                    unclassified.append(item)
+                    # Qualifications without person → check if firm sub_cat
+                    if sub_cat in _FIRM_SUB_CATS:
+                        firm.setdefault(sub_cat, []).append(item)
+                    else:
+                        unclassified.append(item)
 
             return {
                 "persons": persons,

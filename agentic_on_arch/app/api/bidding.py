@@ -2742,11 +2742,11 @@ async def get_companies():
 
 
 @router.get("/materials/grouped")
-async def get_grouped_materials(company: str = ""):
+async def get_grouped_materials(company: str = "", project_id: int = None):
     """获取按人员+子分类分组的素材列表"""
     from app.core.skills.builtin.material_store import get_material_store
     store = get_material_store()
-    grouped = store.get_grouped_materials(company)
+    grouped = store.get_grouped_materials(company, project_id=project_id)
 
     # Build summary
     person_count = len(grouped["persons"])

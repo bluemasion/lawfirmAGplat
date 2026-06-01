@@ -5,10 +5,13 @@
 
   "entity_type_rules": [
     {"keywords": ["排名证明"], "type": "ranking_proof"},
-    {"keywords": ["Legal 500", "LEGALBAND", "IFLR", "钱伯斯", "Chambers", "ALB", "亚洲法律", "榜单", "排名", "等"], "type": "ranking"},
+    {"keywords": ["Legal 500", "LEGALBAND", "IFLR", "钱伯斯", "Chambers", "ALB", "亚洲法律", "榜单", "排名"], "type": "ranking"},
     {"keywords": ["优秀律师事务所", "先进集体", "荣誉", "奖", "表彰", "破产管理人考核"], "type": "award"},
     {"keywords": ["营业执照", "执业许可", "律所证"], "type": "firm_license"},
     {"keywords": ["审计", "财务", "报表", "审计报告"], "type": "firm_audit"},
+    {"keywords": ["完税", "缴税", "纳税", "增值税", "税收", "税务"], "type": "tax_proof"},
+    {"keywords": ["开户许可", "银行开户"], "type": "bank_permit"},
+    {"keywords": ["等级保护", "安全等级", "信息安全"], "type": "compliance"},
     {"keywords": ["身份证"], "type": "id_card"},
     {"keywords": ["学历", "毕业证", "学位", "学士", "硕士", "博士"], "type": "degree"},
     {"keywords": ["执业证", "律师证", "律师执照"], "type": "practice_cert"},
@@ -34,6 +37,8 @@
     "firm_license":    ["firm_license",     "企业证照"],
     "firm_audit":      ["financial",        "财务资料"],
     "financial_proof": ["financial",        "财务资料"],
+    "tax_proof":       ["financial",        "财务资料"],
+    "bank_permit":     ["firm_license",     "企业证照"],
     "bond":            ["bond",             "保证金"],
     "compliance":      ["compliance",       "诚信证明"]
   },
