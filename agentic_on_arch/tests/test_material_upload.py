@@ -26,23 +26,26 @@ def test_folder_detection():
         # (rel_path, zip_filename, expected_folder)
         ("dentonsdc.zip/北京/简历.pdf", "dentonsdc4.zip", "北京"),
         ("dentonsdc.zip/上海/资质.pdf", "dentonsdc4.zip", "上海"),
-        ("dentonsdc.zip/关于大成.docx", "dentonsdc4.zip", "关于大成.docx"),  # root file in wrapper
+        ("dentonsdc.zip/关于大成.docx", "dentonsdc4.zip", ""),  # root file in wrapper → empty
         ("北京/简历.pdf", "test.zip", "北京"),  # no wrapper
         ("简历.pdf", "test.zip", ""),  # root file, no folder
         ("abc.zip/sub1/sub2/file.pdf", "abc.zip", "sub1"),  # exact match wrapper
         ("data.zip/team/resume.docx", "upload.zip", "team"),  # .zip suffix wrapper
+        ("data.zip/root.pdf", "upload.zip", ""),  # .zip wrapper root file → empty
     ]
     
     passed = 0
     failed = 0
     for rel_path, zip_filename, expected in test_cases:
         parts = rel_path.replace("\\", "/").split("/")
-        is_wrapper = (len(parts) > 2 and (
+        has_wrapper = (
             parts[0].lower().endswith('.zip') or
             parts[0] == zip_filename
-        ))
-        if is_wrapper:
+        )
+        if has_wrapper and len(parts) > 2:
             folder = parts[1]
+        elif has_wrapper and len(parts) == 2:
+            folder = ""
         elif len(parts) > 1:
             folder = parts[0]
         else:
@@ -80,58 +83,50 @@ def test_company_matching():
     ]
     
     test_cases = [
-        # (folder_name, expected_match_or_None)
-        ("北京", None),  # "北京" is ambiguous - matches multiple! Should NOT auto-match
-        ("上海", None),  # "上海" is also ambiguous if multiple companies
-        ("天元", "北京市天元律师事务所"),
-        ("大成", None),  # ambiguous - both 北京大成 and 上海大成
-        ("国信智数", "北京国信智数科技发展有限公司"),
-        ("完全不匹配", None),
+        # (folder_name, company_hint, expected)
+        # expected=None means ambiguous/no match → folder name kept
+        ("北京", "", None),           # 3 matches → ambiguous
+        ("上海", "", "上海大成律师事务所"),  # 1 match → unique auto-match
+        ("天元", "", "北京市天元律师事务所"),  # 1 match → unique
+        ("大成", "", None),           # 2 matches → ambiguous
+        ("国信智数", "", "北京国信智数科技发展有限公司"),  # 1 match
+        ("完全不匹配", "", None),      # 0 matches
     ]
     
     passed = 0
     failed = 0
-    for folder, expected in test_cases:
-        # Current matching logic (from bidding.py)
-        matched = None
-        for comp in existing_companies:
-            if folder in comp or comp in folder:
-                matched = comp
-                break
+    for folder, company, expected in test_cases:
+        # New matching logic: only auto-match when unique
+        matches = [comp for comp in existing_companies
+                   if folder in comp or comp in folder]
         
-        # Check if match is unique (not ambiguous)
-        all_matches = [c for c in existing_companies if folder in c or c in folder]
-        is_ambiguous = len(all_matches) > 1
+        if len(matches) == 1:
+            result = matches[0]
+        elif len(matches) > 1 and company:
+            narrowed = [c for c in matches
+                        if any(kw in c for kw in company.replace('.zip', '').split()
+                               if len(kw) >= 2)]
+            result = narrowed[0] if len(narrowed) == 1 else folder
+        else:
+            result = folder
         
         if expected is None:
-            if is_ambiguous:
-                status = "⚠️"  # Expected ambiguity
-                print(f"  {status} '{folder}' → ambiguous! matches: {all_matches}")
-                passed += 1
-            elif matched is None:
-                status = "✅"
-                print(f"  {status} '{folder}' → no match (correct)")
+            # Should NOT auto-match (ambiguous or no match)
+            if result == folder:
+                print(f"  ✅ '{folder}' → kept as '{result}' (ambiguous/no match)")
                 passed += 1
             else:
-                status = "❌"
-                print(f"  {status} '{folder}' → matched '{matched}' but expected no match")
+                print(f"  ❌ '{folder}' → '{result}' but expected to keep folder name")
                 failed += 1
         else:
-            if matched == expected and not is_ambiguous:
-                status = "✅"
-                print(f"  {status} '{folder}' → '{matched}'")
+            if result == expected:
+                print(f"  ✅ '{folder}' → '{result}'")
                 passed += 1
-            elif is_ambiguous:
-                status = "⚠️"
-                print(f"  {status} '{folder}' → ambiguous! expected='{expected}', matches={all_matches}")
-                failed += 1
             else:
-                status = "❌"
-                print(f"  {status} '{folder}' → '{matched}', expected='{expected}'")
+                print(f"  ❌ '{folder}' → '{result}', expected='{expected}'")
                 failed += 1
     
     print(f"\n  Result: {passed} passed, {failed} failed")
-    print(f"  ⚠️ Current matching has ambiguity issues - needs improvement")
     return failed == 0
 
 
@@ -303,13 +298,16 @@ def test_api_endpoints():
     
     for method, path, expected_status in endpoints:
         try:
+            from urllib.parse import quote, urlencode, urlparse, parse_qs
             url = base + path
-            # URL encode Chinese characters
-            from urllib.parse import quote
-            encoded_url = url.split("?")[0]
+            # Properly URL-encode Chinese characters
             if "?" in url:
-                params = url.split("?")[1]
-                encoded_url += "?" + params
+                base_url, qs = url.split("?", 1)
+                params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+                encoded_qs = urlencode(params)
+                encoded_url = base_url + "?" + encoded_qs
+            else:
+                encoded_url = url
             
             req = urllib.request.Request(encoded_url)
             resp = urllib.request.urlopen(req, timeout=5)
@@ -519,7 +517,7 @@ def test_auto_categorize():
         ("上海/完税证明2025年度.pdf", "完税证明2025年度.pdf", "general"),  # no matching keyword
         ("北京/正本彩扫件230824.pdf", "正本彩扫件230824.pdf", "general"),
         ("上海/开户许可证（2025-6-5）.pdf", "开户许可证（2025-6-5）.pdf", "qualification"),  # "许可证"
-        ("北京/20260401事务所执业许可（副本）.pdf", "20260401事务所执业许可（副本）.pdf", "company_intro"),  # "事务所"
+        ("北京/20260401事务所执业许可（副本）.pdf", "20260401事务所执业许可（副本）.pdf", "qualification"),  # "执业" hits qualification first
         ("dentonsdc.zip/新版关于大成文字介绍.docx", "新版关于大成文字介绍.docx", "company_intro"),  # "介绍"
         ("上海/20210203_环球租赁合同（加密版）.pdf", "20210203_环球租赁合同（加密版）.pdf", "project"),  # "合同"
     ]
