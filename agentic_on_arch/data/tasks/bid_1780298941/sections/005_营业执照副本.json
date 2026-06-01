@@ -1,0 +1,19 @@
+{
+  "title": "营业执照副本",
+  "content": "## 营业执照副本\n\n> ✅ 已具备：营业执照（编号：91430100MA4LXXX00X，有效期：长期）\n\n*请将 营业执照 扫描件附在本页之后。*\n",
+  "missing_fields": [
+    "营业执照副本"
+  ],
+  "status": "placeholder",
+  "order": 6,
+  "type": "qualification",
+  "level": 2,
+  "linked_scoring": [],
+  "linked_rejection": [
+    {
+      "condition": "投标文件未按要求封装",
+      "source": "第二章投标人须知前附表第18.5条"
+    }
+  ],
+  "linked_total_score": 0
+}

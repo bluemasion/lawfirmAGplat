@@ -1,0 +1,16 @@
+{
+  "title": "拟派实施人员表",
+  "content": "## 拟派实施人员表\n\n| 姓名 | 职位 | 执业年限 |\n| --- | --- | --- |\n| [待补充：姓名] | [待补充：职位] | [待补充：执业年限] |\n",
+  "missing_fields": [
+    "姓名",
+    "职位",
+    "执业年限"
+  ],
+  "status": "template",
+  "order": 11,
+  "type": "table",
+  "level": 2,
+  "linked_scoring": [],
+  "linked_rejection": [],
+  "linked_total_score": 0
+}

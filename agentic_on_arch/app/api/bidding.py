@@ -1763,6 +1763,47 @@ _ARCHIVE_MAX_SIZE = 500 * 1024 * 1024  # 500MB
 _ARCHIVE_MAX_FILES = 200
 
 
+def _dedup_doubled_text(text: str) -> str:
+    """Fix doubled characters from dual-layer PDF extraction.
+
+    Some PDFs have both a visible text layer and an OCR transparent layer.
+    pdfplumber extracts both, causing every character to appear twice:
+        '冷冷雪雪峰峰' → '冷雪峰'
+        '办办公公地地址址：：北京' → '办公地址：北京'
+
+    Handles both full and partial doubling.
+    """
+    lines = text.split('\n')
+    result = []
+    fixed_count = 0
+    for line in lines:
+        stripped = line.strip()
+        if len(stripped) < 4:
+            result.append(line)
+            continue
+
+        # Count consecutive doubled pairs from the start
+        i = 0
+        pairs = 0
+        while i + 1 < len(stripped) and stripped[i] == stripped[i + 1]:
+            pairs += 1
+            i += 2
+
+        # If ≥20% of the line is doubled pairs (min 2 pairs), it's dual-layer
+        doubled_chars = pairs * 2
+        if pairs >= 2 and doubled_chars >= len(stripped) * 0.2:
+            # Take one char from each pair, then append the remaining tail
+            deduped = stripped[::2][:pairs] + stripped[pairs * 2:]
+            result.append(deduped)
+            fixed_count += 1
+        else:
+            result.append(line)
+
+    if fixed_count > 0:
+        logger.info(f"[archive] Dedup doubled text: fixed {fixed_count} lines")
+    return '\n'.join(result)
+
+
 def _auto_categorize(rel_path: str, filename: str) -> str:
     """Guess category from full relative path and filename."""
     text = f"{rel_path} {filename}".lower()
@@ -2365,6 +2406,9 @@ async def parse_archive(req: ParseArchiveRequest):
 
                         auto_cat_pdf = _auto_categorize(rel_path, fname)
                         title = fname.rsplit(".", 1)[0]
+
+                        # Fix doubled text from dual-layer PDFs
+                        pdf_text = _dedup_doubled_text(pdf_text)
 
                         # OCR for scan PDFs (no text)
                         if not pdf_text.strip() and page_image_files:

@@ -1,0 +1,30 @@
+{
+  "title": "应诉评分",
+  "content": "## 应诉评分\n\n| 项目名称 | 报价金额 | 税率 | 总价 |\n| --- | --- | --- | --- |\n| [待补充：项目名称] | [待补充：报价金额] | [待补充：税率] | [待补充：总价] |\n",
+  "missing_fields": [
+    "项目名称",
+    "报价金额",
+    "税率",
+    "总价"
+  ],
+  "status": "template",
+  "order": 21,
+  "type": "table",
+  "level": 2,
+  "linked_scoring": [
+    {
+      "item": "应诉评分",
+      "max_score": 18,
+      "description": "评标基准价=各有效投标报价的最低报价。价格分=(P基准／P)×18；P基准为“所有有效报价的最低值；P为投标人有效报价；注：报价分保留两位小数。",
+      "sub_criteria": [
+        {
+          "name": "应诉评分",
+          "score": 18,
+          "scoring_rule": "价格分=(P基准／P)×18"
+        }
+      ]
+    }
+  ],
+  "linked_rejection": [],
+  "linked_total_score": 18
+}

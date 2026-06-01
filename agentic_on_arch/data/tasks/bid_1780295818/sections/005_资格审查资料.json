@@ -1,0 +1,14 @@
+{
+  "title": "资格审查资料",
+  "content": "## 资格审查资料\n\n> ⚠️ 本章节需要提供资质文件：\n\n**招标要求**：提供营业执照副本、法定代表人身份证复印件、投标人代表身份证复印件、资质及认证体系证书复印件。不写业绩、团队、服务方案等内容。\n\n- [ ] 资格审查资料 [待补充：资格审查资料]\n\n*请将相关证书扫描件附在投标文件相应位置。*",
+  "missing_fields": [
+    "资格审查资料"
+  ],
+  "status": "placeholder",
+  "order": 6,
+  "type": "qualification",
+  "level": 2,
+  "linked_scoring": [],
+  "linked_rejection": [],
+  "linked_total_score": 0
+}

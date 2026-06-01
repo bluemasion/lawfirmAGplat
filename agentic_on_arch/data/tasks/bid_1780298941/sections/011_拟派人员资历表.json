@@ -1,0 +1,17 @@
+{
+  "title": "拟派人员资历表",
+  "content": "## 拟派人员资历表\n\n| 姓名 | 职位 | 执业年限 | 资格证书 |\n| --- | --- | --- | --- |\n| [待补充：姓名] | [待补充：职位] | [待补充：执业年限] | [待补充：资格证书] |\n",
+  "missing_fields": [
+    "姓名",
+    "职位",
+    "执业年限",
+    "资格证书"
+  ],
+  "status": "template",
+  "order": 12,
+  "type": "table",
+  "level": 2,
+  "linked_scoring": [],
+  "linked_rejection": [],
+  "linked_total_score": 0
+}
