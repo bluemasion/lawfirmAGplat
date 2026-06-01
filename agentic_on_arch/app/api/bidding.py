@@ -1852,9 +1852,17 @@ async def upload_archive(
                 ext = os.path.splitext(fname)[1].lower()
                 fsize = os.path.getsize(fpath)
 
-                # Determine folder name (first level)
+                # Determine folder name (skip ZIP wrapper if present)
+                # ZIP often creates a same-name wrapper dir: dentonsdc.zip/北京/file.pdf
+                # We want "北京" not "dentonsdc.zip" as the folder
                 parts = rel_path.replace("\\", "/").split("/")
-                folder = parts[0] if len(parts) > 1 else ""
+                if len(parts) > 2 and parts[0] == file.filename:
+                    # Skip ZIP wrapper: use parts[1] as folder
+                    folder = parts[1]
+                elif len(parts) > 1:
+                    folder = parts[0]
+                else:
+                    folder = ""
 
                 if ext in _SUPPORTED_EXTENSIONS:
                     if ext in {".jpg", ".jpeg", ".png"}:
