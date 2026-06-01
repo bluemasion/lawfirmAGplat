@@ -1895,7 +1895,8 @@ async def upload_archive(
         folders = sorted(set(f["folder"] for f in file_tree if f["folder"]))
 
         # Try to match folders to existing companies
-        store = _get_material_store()
+        from app.core.skills.builtin.material_store import get_material_store
+        store = get_material_store()
         existing_companies = []
         if store:
             try:
