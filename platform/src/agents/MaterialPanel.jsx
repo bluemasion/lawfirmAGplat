@@ -597,7 +597,11 @@ export default function MaterialPanel({ onClose }) {
         if (!selectedCompany) return;
         setGroupedLoading(true);
         try {
-            const res = await fetch(`${API_BASE}/api/bidding/materials/grouped?company=${encodeURIComponent(selectedCompany)}`);
+            let url = `${API_BASE}/api/bidding/materials/grouped?company=${encodeURIComponent(selectedCompany)}`;
+            if (selectedProject) {
+                url += `&project_id=${selectedProject.id}`;
+            }
+            const res = await fetch(url);
             const data = await res.json();
             if (data.success) {
                 setGroupedData(data.data);
@@ -607,7 +611,7 @@ export default function MaterialPanel({ onClose }) {
         } finally {
             setGroupedLoading(false);
         }
-    }, [selectedCompany]);
+    }, [selectedCompany, selectedProject]);
 
     // Load grouped data when switching to qualifications tab
     useEffect(() => {
@@ -2030,7 +2034,12 @@ export default function MaterialPanel({ onClose }) {
                     {/* Tabs */}
                     <div className="flex border-b border-zinc-800">
                         {TABS.map(tab => {
-                            const count = (materials[tab.key] || []).length;
+                            let count = (materials[tab.key] || []).length;
+                            // For qualifications tab, use grouped summary if available
+                            if (tab.key === 'qualifications' && groupedData) {
+                                const gs = groupedData.summary || {};
+                                count = (gs.person_count || 0) + (gs.firm_count || 0) + (gs.unclassified_count || 0);
+                            }
                             return (
                                 <button key={tab.key}
                                     onClick={() => setActiveTab(tab.key)}
