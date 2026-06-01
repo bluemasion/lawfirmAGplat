@@ -1857,13 +1857,16 @@ async def upload_archive(
                 # We want "北京" not "dentonsdc.zip" as the folder
                 parts = rel_path.replace("\\", "/").split("/")
                 # Detect wrapper: parts[0] ends with .zip or matches uploaded filename
-                is_wrapper = (len(parts) > 2 and (
+                has_wrapper = (
                     parts[0].lower().endswith('.zip') or
                     parts[0] == file.filename
-                ))
-                if is_wrapper:
+                )
+                if has_wrapper and len(parts) > 2:
                     # Skip ZIP wrapper: use parts[1] as folder
                     folder = parts[1]
+                elif has_wrapper and len(parts) == 2:
+                    # File directly under wrapper: treat as root
+                    folder = ""
                 elif len(parts) > 1:
                     folder = parts[0]
                 else:
@@ -1919,29 +1922,27 @@ async def upload_archive(
 
         folder_companies = {}
         for folder in folders:
-            folder_lower = folder.lower()
-            # Strategy 1: exact match with existing company
-            matched = None
-            for comp in existing_companies:
-                if folder in comp or comp in folder:
-                    matched = comp
-                    break
-            if matched:
-                folder_companies[folder] = matched
-            else:
-                # Strategy 2: infer from folder name + parent company
-                # e.g. "北京" + company="大成" → "北京大成律师事务所"
-                if company:
-                    # Check if any existing company contains both folder and company keywords
-                    for comp in existing_companies:
-                        if folder in comp and any(kw in comp for kw in company.split()):
-                            matched = comp
-                            break
-                if matched:
-                    folder_companies[folder] = matched
+            # Find all companies containing this folder name (or vice versa)
+            matches = [comp for comp in existing_companies
+                       if folder in comp or comp in folder]
+
+            if len(matches) == 1:
+                # Unique match → auto-assign
+                folder_companies[folder] = matches[0]
+            elif len(matches) > 1 and company:
+                # Multiple matches → try narrowing with ZIP-level company hint
+                # e.g. company="大成", folder="北京" → find "北京大成律师事务所"
+                narrowed = [c for c in matches
+                            if any(kw in c for kw in company.replace('.zip', '').split()
+                                   if len(kw) >= 2)]
+                if len(narrowed) == 1:
+                    folder_companies[folder] = narrowed[0]
                 else:
-                    # Strategy 3: use folder name as-is (user can edit in frontend)
+                    # Still ambiguous → keep folder name for user to edit
                     folder_companies[folder] = folder
+            else:
+                # No match or ambiguous without hint → keep folder name
+                folder_companies[folder] = folder
 
         # Assign detected company to each file
         for f in file_tree:

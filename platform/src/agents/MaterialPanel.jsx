@@ -104,7 +104,8 @@ function ImagesBlock({ images }) {
                 </div>
                 <div className="flex flex-wrap gap-2">
                     {images.map((img, i) => {
-                        const src = `${API_BASE}/api/bidding/materials/images/${img}`;
+                        const imgFile = typeof img === 'object' ? img.file : img;
+                        const src = `${API_BASE}/api/bidding/materials/images/${imgFile}`;
                         return (
                             <div
                                 key={i}
@@ -199,23 +200,19 @@ export default function MaterialPanel({ onClose }) {
     // ── File Upload Handler (auto-routes .docx vs .zip) ──
     const handleFileUpload = async (e) => {
         const file = e.target.files?.[0];
-        console.log('[MaterialPanel] handleFileUpload triggered, file:', file?.name, file?.size);
         if (!file) return;
         e.target.value = ''; // reset input
 
         // Route by file extension
         if (file.name.toLowerCase().endsWith('.zip')) {
-            console.log('[MaterialPanel] Routing to ZIP upload');
             return handleArchiveUpload(file);
         }
         // Default: .docx flow (existing)
-        console.log('[MaterialPanel] Routing to DOCX upload');
         return handleDocxUpload(file);
     };
 
     // ── Archive (ZIP) Upload Handler ──
     const handleArchiveUpload = async (file) => {
-        console.log('[MaterialPanel] handleArchiveUpload start:', file.name, file.size, 'bytes');
         setUploading(true);
         setUploadFileName(file.name);
         setArchiveStep(1); // uploading
@@ -224,7 +221,7 @@ export default function MaterialPanel({ onClose }) {
             const formData = new FormData();
             formData.append('file', file);
             if (selectedCompany) formData.append('company', selectedCompany);
-            console.log('[MaterialPanel] Sending fetch to', `${API_BASE}/api/bidding/upload-archive`);
+
 
             const res = await fetch(`${API_BASE}/api/bidding/upload-archive`, {
                 method: 'POST',
@@ -1521,7 +1518,7 @@ export default function MaterialPanel({ onClose }) {
                                                             {item.data._images.map((img, ii) => (
                                                                 <img
                                                                     key={ii}
-                                                                    src={`${API_BASE}/api/bidding/materials/images/${img}`}
+                                                                    src={`${API_BASE}/api/bidding/materials/images/${typeof img === 'object' ? img.file : img}`}
                                                                     alt={img}
                                                                     className="w-14 h-14 rounded border border-zinc-700 object-cover hover:border-orange-500/60 transition-colors"
                                                                     onError={(e) => { e.target.style.display = 'none'; }}
