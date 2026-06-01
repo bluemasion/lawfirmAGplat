@@ -597,10 +597,8 @@ export default function MaterialPanel({ onClose }) {
         if (!selectedCompany) return;
         setGroupedLoading(true);
         try {
-            let url = `${API_BASE}/api/bidding/materials/grouped?company=${encodeURIComponent(selectedCompany)}`;
-            if (selectedProject) {
-                url += `&project_id=${selectedProject.id}`;
-            }
+            // Qualifications are shared across all branches — query by company only
+            const url = `${API_BASE}/api/bidding/materials/grouped?company=${encodeURIComponent(selectedCompany)}`;
             const res = await fetch(url);
             const data = await res.json();
             if (data.success) {
@@ -611,7 +609,7 @@ export default function MaterialPanel({ onClose }) {
         } finally {
             setGroupedLoading(false);
         }
-    }, [selectedCompany, selectedProject]);
+    }, [selectedCompany]);
 
     // Load grouped data when switching to qualifications tab
     useEffect(() => {

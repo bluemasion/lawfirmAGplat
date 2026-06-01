@@ -884,7 +884,7 @@ class MaterialStore:
                     SELECT m.*, c.name as company_name
                     FROM materials m
                     JOIN companies c ON m.company_id = c.id
-                    WHERE m.project_id = ?
+                    WHERE m.project_id = ? AND m.category = 'qualifications'
                     ORDER BY m.parent_person, m.sub_category, m.name
                 """, (project_id,)).fetchall()
             elif company:
@@ -892,7 +892,7 @@ class MaterialStore:
                     SELECT m.*, c.name as company_name
                     FROM materials m
                     JOIN companies c ON m.company_id = c.id
-                    WHERE c.name = ?
+                    WHERE c.name = ? AND m.category = 'qualifications'
                     ORDER BY m.parent_person, m.sub_category, m.name
                 """, (company,)).fetchall()
             else:
@@ -900,6 +900,7 @@ class MaterialStore:
                     SELECT m.*, c.name as company_name
                     FROM materials m
                     JOIN companies c ON m.company_id = c.id
+                    WHERE m.category = 'qualifications'
                     ORDER BY m.parent_person, m.sub_category, m.name
                 """).fetchall()
 
