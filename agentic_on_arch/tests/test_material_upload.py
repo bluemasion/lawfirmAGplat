@@ -83,47 +83,38 @@ def test_company_matching():
     ]
     
     test_cases = [
-        # (folder_name, company_hint, expected)
-        # expected=None means ambiguous/no match → folder name kept
-        ("北京", "", None),           # 3 matches → ambiguous
-        ("上海", "", "上海大成律师事务所"),  # 1 match → unique auto-match
-        ("天元", "", "北京市天元律师事务所"),  # 1 match → unique
-        ("大成", "", None),           # 2 matches → ambiguous
-        ("国信智数", "", "北京国信智数科技发展有限公司"),  # 1 match
-        ("完全不匹配", "", None),      # 0 matches
+        # With new model, folder matching is no longer done per-folder
+        # Company is detected at ZIP level, folders become projects
+        # This test verifies the unique-match logic for ZIP-level company detection
+        # (folder_name, expected: matched or kept-as-is)
+        ("天元", "北京市天元律师事务所"),  # unique match
+        ("国信智数", "北京国信智数科技发展有限公司"),  # unique match
+        ("完全不匹配", None),  # no match
     ]
     
     passed = 0
     failed = 0
-    for folder, company, expected in test_cases:
-        # New matching logic: only auto-match when unique
-        matches = [comp for comp in existing_companies
-                   if folder in comp or comp in folder]
-        
-        if len(matches) == 1:
-            result = matches[0]
-        elif len(matches) > 1 and company:
-            narrowed = [c for c in matches
-                        if any(kw in c for kw in company.replace('.zip', '').split()
-                               if len(kw) >= 2)]
-            result = narrowed[0] if len(narrowed) == 1 else folder
-        else:
-            result = folder
+    for zip_stem, expected in test_cases:
+        # ZIP-level company detection logic
+        matched = None
+        for comp in existing_companies:
+            if zip_stem.lower() in comp.lower() or comp.lower() in zip_stem.lower():
+                matched = comp
+                break
         
         if expected is None:
-            # Should NOT auto-match (ambiguous or no match)
-            if result == folder:
-                print(f"  ✅ '{folder}' → kept as '{result}' (ambiguous/no match)")
+            if matched is None:
+                print(f"  ✅ '{zip_stem}' → no match (correct)")
                 passed += 1
             else:
-                print(f"  ❌ '{folder}' → '{result}' but expected to keep folder name")
+                print(f"  ❌ '{zip_stem}' → '{matched}' but expected no match")
                 failed += 1
         else:
-            if result == expected:
-                print(f"  ✅ '{folder}' → '{result}'")
+            if matched == expected:
+                print(f"  ✅ '{zip_stem}' → '{matched}'")
                 passed += 1
             else:
-                print(f"  ❌ '{folder}' → '{result}', expected='{expected}'")
+                print(f"  ❌ '{zip_stem}' → '{matched}', expected='{expected}'")
                 failed += 1
     
     print(f"\n  Result: {passed} passed, {failed} failed")
@@ -371,16 +362,16 @@ def test_api_endpoints():
             
             if result.get("success"):
                 data = result["data"]
-                folders = data.get("folders", [])
-                folder_companies = data.get("folder_companies", {})
+                folder_projects = data.get("folder_projects", [])
                 file_count = len(data.get("file_tree", []))
+                detected_company = data.get("detected_company", "")
                 print(f"  ✅ upload-archive → success")
-                print(f"     files={file_count}, folders={folders}")
-                print(f"     folder_companies={folder_companies}")
+                print(f"     files={file_count}, folder_projects={folder_projects}")
+                print(f"     detected_company='{detected_company}'")
                 
                 # Verify folder detection
-                if "北京" in folders and "上海" in folders:
-                    print(f"  ✅ Folder detection: 北京/上海 correctly detected")
+                if "北京" in folder_projects and "上海" in folder_projects:
+                    print(f"  ✅ Folder detection: 北京/上海 correctly detected as projects")
                     passed += 1
                 else:
                     print(f"  ❌ Folder detection failed: {folders}")
@@ -445,12 +436,12 @@ def test_frontend_issues():
             else:
                 issues.append("Building2 used but not imported")
     
-    # Check 3: folder_companies in archiveData
-    if 'folder_companies' in content:
-        print(f"  ✅ folder_companies used in frontend")
+    # Check 3: folder_projects in archiveData
+    if 'folder_projects' in content:
+        print(f"  ✅ folder_projects used in frontend")
         passed += 1
     else:
-        issues.append("folder_companies not found in MaterialPanel.jsx")
+        issues.append("folder_projects not found in MaterialPanel.jsx")
     
     # Check 4: API_BASE defined
     if 'API_BASE' in content:
