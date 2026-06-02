@@ -597,8 +597,12 @@ class RequirementExtractionSkill(BaseSkill):
             # Clean trailing text from title
             # e.g. "投标一览表中内容进行报价；" → "投标一览表"
             # but keep "法定代表人（单位负责人）授权书" intact
-            if len(att_name) > 15:
-                for sep in ['中内容', '）。', '）；', '。', '；', ',', '，']:
+            # Always strip '中内容' — definitive trailing text marker
+            mid_idx = att_name.find('中内容')
+            if mid_idx > 2:
+                att_name = att_name[:mid_idx].strip()
+            elif len(att_name) > 15:
+                for sep in ['）。', '）；', '。', '；', ',', '，']:
                     idx2 = att_name.find(sep)
                     if idx2 > 2:
                         att_name = att_name[:idx2].strip()
