@@ -594,6 +594,13 @@ class RequirementExtractionSkill(BaseSkill):
         for m in attachment_pattern.finditer(format_text):
             att_id = int(m.group(1))
             att_name = m.group(2).strip()
+            # Clean trailing text from title
+            # e.g. "投标一览表中内容进行报价；" → "投标一览表"
+            for sep in ['中内容', '）。', '）；', '。', '；', '（', ',', '，']:
+                idx2 = att_name.find(sep)
+                if idx2 > 0:
+                    att_name = att_name[:idx2].strip()
+                    break
             if att_id not in seen_ids:
                 seen_ids.add(att_id)
                 attachments.append({

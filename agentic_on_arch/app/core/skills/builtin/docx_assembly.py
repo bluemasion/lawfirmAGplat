@@ -127,9 +127,10 @@ class DocxAssemblySkill(BaseSkill):
             # which already starts on a new page after TOC)
             if i > 0:
                 doc.add_page_break()
-            # Use tender attachment ID if available
+            # Use att_id from section (SectionPlanner) or from mapping
             title = section.get('title', '')
-            att_id = self._attachment_ids.get(title, '')
+            att_id = section.get('att_id', '') or \
+                self._attachment_ids.get(title, '')
             self._add_section(doc, section, att_id=att_id, chapter_num=i + 1)
 
         if self._dedup_stats["deduped"] > 0:
