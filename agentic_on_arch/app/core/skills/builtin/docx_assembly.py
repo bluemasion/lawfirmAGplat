@@ -99,8 +99,10 @@ class DocxAssemblySkill(BaseSkill):
         self._dedup_stats = {"total_images": 0, "deduped": 0}
 
         # ── Build section→table template mapping from format_spec ──
-        # Maps section_title_keyword → list of table XML paths
+        # Maps section_title → list of table XML paths
         self._table_templates = {}  # type: Dict[str, List[Dict]]
+        # Maps section_title → tender attachment ID (e.g. '附件4')
+        self._attachment_ids = {}  # type: Dict[str, str]
         if format_spec.get('has_format_chapter'):
             self._build_table_template_map(format_spec, sections)
 
@@ -125,7 +127,17 @@ class DocxAssemblySkill(BaseSkill):
             # which already starts on a new page after TOC)
             if i > 0:
                 doc.add_page_break()
-            self._add_section(doc, section, chapter_num=i + 1)
+            # Use tender attachment ID if available, else auto-increment
+            title = section.get('title', '')
+            att_id = self._attachment_ids.get(title, '')
+            if att_id:
+                # Extract number from '附件4' → 4
+                import re
+                m = re.search(r'\d+', att_id)
+                chapter_num = int(m.group()) if m else i + 1
+            else:
+                chapter_num = i + 1
+            self._add_section(doc, section, chapter_num=chapter_num)
 
         if self._dedup_stats["deduped"] > 0:
             logger.info(
@@ -437,47 +449,87 @@ class DocxAssemblySkill(BaseSkill):
         attachments = format_spec.get('attachments', [])
         section_titles = [s.get('title', '') for s in sections]
 
-        # Build keyword→attachment mapping
-        # tender attachment title keywords → our section title keywords
+        logger.info(
+            f"  Building table template map: "
+            f"{len(attachments)} attachments, {len(section_titles)} sections"
+        )
+        atts_with_tables = [a for a in attachments if a.get('tables')]
+        logger.info(
+            f"  Attachments with tables: {len(atts_with_tables)}: "
+            + ", ".join(f"{a['id']}({len(a['tables'])})" for a in atts_with_tables)
+        )
+
+        # Keyword map: tender attachment title keyword → our section title keywords
         _keyword_map = {
-            '评标索引表':      ['评标索引', '索引表'],
-            '投标一览表':      ['投标一览', '一览表', '报价'],
-            '商务条款响应':    ['商务偏离', '商务评分偏离', '商务条款'],
-            '技术条款响应':    ['技术偏离', '技术评分偏离', '技术条款'],
-            '价格':            ['价格偏离', '价格评分偏离'],
-            '业绩清单':        ['业绩', '律所业绩', '项目业绩'],
-            '投标人情况表':    ['投标人情况', '团队', '项目团队'],
-            '拟派实施人员':    ['拟派', '实施人员', '项目团队'],
-            '拟派人员资历':    ['资历', '人员资历'],
+            '评标索引表':       ['评标索引', '索引表'],
+            '投标函':           ['投标函'],
+            '投标一览表':       ['投标一览', '一览表', '报价一览'],
+            '商务条款响应':     ['商务偏离', '商务评分偏离', '商务条款'],
+            '技术条款响应':     ['技术偏离', '技术评分偏离', '技术条款'],
+            '业绩清单':         ['业绩清单', '律所业绩', '项目业绩', '业绩'],
+            '授权书':           ['授权委托', '授权书'],
+            '投标保证金':       ['投标保证金', '保证金'],
+            '投标人情况表':     ['投标人情况', '项目团队', '团队配置'],
+            '拟派实施人员':     ['拟派实施', '实施人员'],
+            '拟派人员资历':     ['人员资历', '资历表'],
+            '招标代理服务费':   ['代理服务费', '承诺书'],
+            '服务响应方案':     ['服务响应', '详细的服务'],
         }
 
+        # Map ALL attachments to sections (not just ones with tables)
         for att in attachments:
             att_title = att.get('title', '')
+            att_id = att.get('id', '')
             att_tables = att.get('tables', [])
-            if not att_tables:
-                continue
 
-            # Find matching section(s) by keyword
+            matched = False
             for kw_group, section_kws in _keyword_map.items():
                 if kw_group in att_title:
-                    # Found the attachment type — now find our section
+                    # Found the attachment type — find our section
                     for sec_title in section_titles:
+                        if sec_title in self._attachment_ids:
+                            continue  # already mapped
                         for skw in section_kws:
                             if skw in sec_title:
-                                self._table_templates[sec_title] = att_tables
-                                logger.info(
-                                    f"  Table template mapped: "
-                                    f"'{sec_title}' ← {att['id']} "
-                                    f"({len(att_tables)} tables)"
-                                )
+                                # Map attachment ID
+                                self._attachment_ids[sec_title] = att_id
+                                # Map table templates if any
+                                if att_tables:
+                                    self._table_templates[sec_title] = att_tables
+                                    logger.info(
+                                        f"  Table template mapped: "
+                                        f"'{sec_title}' ← {att_id} "
+                                        f"({len(att_tables)} tables)"
+                                    )
+                                else:
+                                    logger.info(
+                                        f"  Section mapped: "
+                                        f"'{sec_title}' ← {att_id}"
+                                    )
+                                matched = True
                                 break
-                        if sec_title in self._table_templates:
+                        if matched:
                             break
                     break
 
+            if not matched:
+                # Try direct title match
+                for sec_title in section_titles:
+                    if sec_title in self._attachment_ids:
+                        continue
+                    if att_title in sec_title or sec_title in att_title:
+                        self._attachment_ids[sec_title] = att_id
+                        if att_tables:
+                            self._table_templates[sec_title] = att_tables
+                        logger.info(
+                            f"  Mapped (direct): '{sec_title}' ← {att_id}"
+                        )
+                        matched = True
+                        break
+
         logger.info(
-            f"Table template mapping: {len(self._table_templates)} "
-            f"sections have templates"
+            f"Template mapping: {len(self._attachment_ids)} sections mapped to attachments, "
+            f"{len(self._table_templates)} have table templates"
         )
 
     def _insert_cloned_table(self, doc, table_info):
@@ -506,11 +558,11 @@ class DocxAssemblySkill(BaseSkill):
             # Deep copy to avoid mutation
             new_tbl = deepcopy(tbl_element)
 
-            # Add spacing paragraph before table
-            doc.add_paragraph("")
-
-            # Insert into document body
-            doc.element.body.append(new_tbl)
+            # Insert after the last element in the document body
+            # (which should be the heading paragraph just added)
+            # Use add_paragraph + addnext pattern to ensure correct position
+            spacer = doc.add_paragraph("")
+            spacer._element.addnext(new_tbl)
 
             # Add spacing paragraph after table
             doc.add_paragraph("")

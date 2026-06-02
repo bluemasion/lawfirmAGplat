@@ -1,0 +1,14 @@
+{
+  "title": "资质及认证体系证书复印件",
+  "content": "## 资质及认证体系证书复印件\n\n> ⚠️ 本章节需要提供资质文件：\n\n**招标要求**：必须提供: 资质及认证体系证书复印件\n\n- [ ] 资质及认证体系证书复印件 [待补充：资质及认证体系证书复印件]\n\n*请将相关证书扫描件附在投标文件相应位置。*",
+  "missing_fields": [
+    "资质及认证体系证书复印件"
+  ],
+  "status": "placeholder",
+  "order": 20,
+  "type": "qualification",
+  "level": 2,
+  "linked_scoring": [],
+  "linked_rejection": [],
+  "linked_total_score": 0
+}

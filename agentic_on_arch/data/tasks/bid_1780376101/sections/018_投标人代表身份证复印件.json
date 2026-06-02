@@ -1,0 +1,14 @@
+{
+  "title": "投标人代表身份证复印件",
+  "content": "## 投标人代表身份证复印件\n\n> ⚠️ 本章节需要提供资质文件：\n\n**招标要求**：必须提供: 投标人代表身份证复印件\n\n- [ ] 投标人代表身份证复印件 [待补充：投标人代表身份证复印件]\n\n*请将相关证书扫描件附在投标文件相应位置。*",
+  "missing_fields": [
+    "投标人代表身份证复印件"
+  ],
+  "status": "placeholder",
+  "order": 19,
+  "type": "qualification",
+  "level": 2,
+  "linked_scoring": [],
+  "linked_rejection": [],
+  "linked_total_score": 0
+}
