@@ -596,11 +596,20 @@ class RequirementExtractionSkill(BaseSkill):
             att_name = m.group(2).strip()
             # Clean trailing text from title
             # e.g. "投标一览表中内容进行报价；" → "投标一览表"
-            for sep in ['中内容', '）。', '）；', '。', '；', '（', ',', '，']:
-                idx2 = att_name.find(sep)
-                if idx2 > 0:
-                    att_name = att_name[:idx2].strip()
-                    break
+            # but keep "法定代表人（单位负责人）授权书" intact
+            if len(att_name) > 15:
+                for sep in ['中内容', '）。', '）；', '。', '；', ',', '，']:
+                    idx2 = att_name.find(sep)
+                    if idx2 > 2:
+                        att_name = att_name[:idx2].strip()
+                        break
+                else:
+                    # Handle （ only if no matching ）
+                    pi = att_name.find('（')
+                    if pi > 2:
+                        ci = att_name.find('）', pi)
+                        if ci < 0:
+                            att_name = att_name[:pi].strip()
             if att_id not in seen_ids:
                 seen_ids.add(att_id)
                 attachments.append({

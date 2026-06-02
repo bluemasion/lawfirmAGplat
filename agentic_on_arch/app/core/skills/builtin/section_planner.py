@@ -76,12 +76,40 @@ def clean_attachment_title(raw_title: str) -> str:
     Example:
         "投标一览表中内容进行报价；" → "投标一览表"
         "招标代理服务费承诺书）。招标代理..." → "招标代理服务费承诺书"
+        "法定代表人（单位负责人）授权书" → kept intact
     """
-    # Common terminators
-    for sep in ['中内容', '）。', '）；', '。', '；', '（', ',', '，']:
+    # Don't clean short titles — they're usually complete
+    if len(raw_title) <= 15:
+        return raw_title.strip()
+
+    # Separators that indicate trailing text
+    # Note: （ is only a separator if no matching ） follows nearby
+    simple_seps = ['中内容', '）。', '）；', '。', '；', ',', '，']
+    for sep in simple_seps:
         idx = raw_title.find(sep)
-        if idx > 0:
+        if idx > 2:
             raw_title = raw_title[:idx]
+            return raw_title.strip()
+
+    # Handle （ only if no matching ）— means it's trailing text
+    paren_idx = raw_title.find('（')
+    if paren_idx > 2:
+        close_idx = raw_title.find('）', paren_idx)
+        if close_idx < 0:
+            # No closing paren — it's trailing text
+            raw_title = raw_title[:paren_idx]
+        else:
+            # Has matching ）— check if there's more text after ）
+            after_close = raw_title[close_idx + 1:].strip()
+            if len(after_close) > 10:
+                # Long text after ）— might be trailing
+                # Keep up to some reasonable endpoint
+                for sep in ['。', '；', ',', '，']:
+                    sep_idx = after_close.find(sep)
+                    if sep_idx > 0:
+                        raw_title = raw_title[:close_idx + 1 + sep_idx]
+                        return raw_title.strip()
+
     return raw_title.strip()
 
 

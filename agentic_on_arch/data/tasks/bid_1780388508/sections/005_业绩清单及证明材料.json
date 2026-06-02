@@ -1,0 +1,27 @@
+{
+  "title": "业绩清单及证明材料",
+  "content": "## 业绩清单及证明材料\n\n- [ ] 业绩清单及证明材料 [待补充：业绩清单及证明材料]\n\n*请将相关证书扫描件附在投标文件相应位置。*",
+  "missing_fields": [
+    "业绩清单及证明材料"
+  ],
+  "status": "placeholder",
+  "order": 6,
+  "type": "qualification",
+  "level": 2,
+  "linked_scoring": [
+    {
+      "item": "单位类似业绩",
+      "max_score": 15,
+      "description": "投标人近五年（2021年1月至今）具有与本项目类似的香港或境外的胜诉业绩，投标人须提供相关合同复印件及相关证明并加盖单位公章作为证明材料。每提供一个类似业绩得2分，最高得10分。注：投标人经证明的联营律师事务所可视为投标人单位类似业绩。",
+      "sub_criteria": [
+        {
+          "name": "类似业绩",
+          "score": 2,
+          "scoring_rule": "每提供一个类似业绩得2分，最高得10分"
+        }
+      ]
+    }
+  ],
+  "linked_rejection": [],
+  "linked_total_score": 0
+}
