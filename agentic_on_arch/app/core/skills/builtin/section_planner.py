@@ -113,6 +113,56 @@ def clean_attachment_title(raw_title: str) -> str:
     return raw_title.strip()
 
 
+# ─── Material reference generation ─────────────────────────────
+# Maps attachment titles to material_refs that MaterialMatcher understands.
+
+_MATERIAL_REF_MAP = {
+    # Qualification type → qualification refs
+    '业绩清单':       ['律所业绩', '项目业绩', '业绩证明材料'],
+    '业绩证明':       ['律所业绩', '项目业绩', '业绩证明材料'],
+    '营业执照':       ['营业执照副本'],
+    '法定代表人':     ['法定代表人身份证'],
+    '投标人代表':     ['投标人代表身份证'],
+    '资质证书':       ['资质及认证体系证书复印件'],
+    '认证体系':       ['资质及认证体系证书复印件'],
+    '社保':           ['社保缴费证明'],
+    '财务报表':       ['财务审计报告'],
+    '荣誉':           ['荣誉奖项与排名'],
+    '排名':           ['荣誉奖项与排名'],
+
+    # Table type → data refs
+    '投标人情况':     ['投标人情况表', '项目团队配置'],
+    '拟派实施人员':   ['拟派实施人员表', '项目团队配置'],
+    '拟派人员资历':   ['项目负责人资历', '拟派人员资历表'],
+
+    # Narrative type → content refs
+    '服务方案':       ['服务方案', '服务响应方案'],
+    '服务响应':       ['服务方案', '服务响应方案'],
+    '团队':           ['项目团队配置'],
+    '人员配置':       ['项目团队配置'],
+}
+
+
+def _build_material_refs(title: str, content_type: str) -> List[str]:
+    """Build material_refs for a section based on its title and type.
+
+    These refs are used by MaterialMatcher to find relevant materials
+    from the material store.
+    """
+    refs = []
+
+    # Match from keyword map
+    for kw, kw_refs in _MATERIAL_REF_MAP.items():
+        if kw in title:
+            refs.extend(kw_refs)
+
+    # Always add the title itself as a ref (for fallback matching)
+    if title not in refs:
+        refs.append(title)
+
+    return refs
+
+
 def build_sections_from_attachments(
     format_spec: Dict,
     llm_sections: Optional[List[Dict]] = None,
@@ -159,6 +209,9 @@ def build_sections_from_attachments(
         # Try to find matching LLM section for content
         matched_llm = _find_matching_llm_section(title, att_id, llm_lookup)
 
+        # Build material_refs based on content type
+        material_refs = _build_material_refs(title, content_type)
+
         # Build section
         section = {
             "title": title,
@@ -167,6 +220,7 @@ def build_sections_from_attachments(
             "level": 2,
             "att_id": att_id,
             "linked_scoring": [],
+            "material_refs": material_refs,
         }
 
         # Merge LLM content if available

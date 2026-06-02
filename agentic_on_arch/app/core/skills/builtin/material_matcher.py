@@ -104,8 +104,8 @@ class MaterialMatcher:
             "match_summary": "",
         }
 
-        if not material_refs and sec_type == "narrative":
-            # For narrative sections without explicit refs, try title-based matching
+        if not material_refs:
+            # For ANY section type without explicit refs, try title-based matching
             material_refs = [title]
 
         for ref in material_refs:
