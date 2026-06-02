@@ -127,17 +127,10 @@ class DocxAssemblySkill(BaseSkill):
             # which already starts on a new page after TOC)
             if i > 0:
                 doc.add_page_break()
-            # Use tender attachment ID if available, else auto-increment
+            # Use tender attachment ID if available
             title = section.get('title', '')
             att_id = self._attachment_ids.get(title, '')
-            if att_id:
-                # Extract number from '附件4' → 4
-                import re
-                m = re.search(r'\d+', att_id)
-                chapter_num = int(m.group()) if m else i + 1
-            else:
-                chapter_num = i + 1
-            self._add_section(doc, section, chapter_num=chapter_num)
+            self._add_section(doc, section, att_id=att_id, chapter_num=i + 1)
 
         if self._dedup_stats["deduped"] > 0:
             logger.info(
@@ -579,7 +572,8 @@ class DocxAssemblySkill(BaseSkill):
 
     # ─── Section / Chapter ────────────────────────────────────────
 
-    def _add_section(self, doc: Document, section: Dict, chapter_num: int = 1):
+    def _add_section(self, doc: Document, section: Dict,
+                     att_id: str = '', chapter_num: int = 1):
         """Add a single section as a chapter with heading + content."""
         title = section.get("title", "")
         content = section.get("content", "")
@@ -587,20 +581,34 @@ class DocxAssemblySkill(BaseSkill):
         # Track current chapter for cross-reference in dedup
         self._current_chapter = title
 
-        # Chapter heading — use format_spec numbering
-        if self._section_numbering == '附件':
-            # Use attachment-style numbering: "附件N：标题"
-            heading_text = f"附件{chapter_num}：{title}"
+        tf = self._title_font or 'Arial'
+
+        # Chapter heading — match tender Chapter 6 format exactly
+        if att_id:
+            # ── Tender attachment format ──
+            # Line 1: "附件N：标题" — Arial/12pt, not bold, left-aligned
+            att_title_p = doc.add_paragraph()
+            att_title_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            run1 = att_title_p.add_run(f"{att_id}：{title}")
+            _set_font(run1, tf, tf, size=Pt(12), bold=False)
+
+            # Line 2: "标题" subtitle — Arial/15pt, centered
+            subtitle_p = doc.add_paragraph()
+            subtitle_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run2 = subtitle_p.add_run(title)
+            _set_font(run2, tf, tf, size=Pt(15), bold=False)
+        elif self._section_numbering == '附件':
+            # Unmapped section — just title as heading
+            heading = doc.add_heading(title, level=1)
+            heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in heading.runs:
+                _set_font(run, tf, tf, size=self._title_size, bold=True)
         else:
-            # Default: "第N章  标题"
             heading_text = f"第{self._to_chinese_num(chapter_num)}章  {title}"
-        heading = doc.add_heading(heading_text, level=1)
-        heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        # Override heading font — use format_spec title font
-        tf = self._title_font
-        ts = self._title_size
-        for run in heading.runs:
-            _set_font(run, tf, tf, size=ts, bold=True)
+            heading = doc.add_heading(heading_text, level=1)
+            heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in heading.runs:
+                _set_font(run, tf, tf, size=self._title_size, bold=True)
 
         # ── Check for cloned table templates ──
         has_cloned_tables = False
