@@ -292,7 +292,8 @@ class MaterialMatcher:
         name and merge them into the resume's _images list."""
         # Get ALL materials (resumes + qualifications) to search for name matches
         all_resumes = self.store.get_resumes(company=company, project_id=project_id)
-        all_quals = self.store.get_qualifications(company=company, project_id=project_id)
+        # Qualifications are shared — query by company only
+        all_quals = self.store.get_qualifications(company=company)
         all_records = list(all_resumes or []) + list(all_quals or [])
 
         for resume in resumes:
@@ -379,8 +380,9 @@ class MaterialMatcher:
         elif any(kw in context for kw in _LICENSE_KW):
             entity_type_filter = "firm_license,firm_audit,financial_proof"
 
+        # Qualifications are company-level shared resources — don't filter by project
         all_quals = self.store.get_qualifications(
-            company=company, project_id=project_id,
+            company=company,
             entity_type=entity_type_filter
         )
         if not all_quals:

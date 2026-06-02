@@ -18,7 +18,7 @@ from app.config import settings
 from app.utils.logger import logger
 
 
-def _set_font(run, font_name='仿宋', east_asia='仿宋', size=None, bold=False):
+def _set_font(run, font_name='宋体', east_asia='宋体', size=None, bold=False):
     """Helper to set font name, east-asia fallback, size and bold."""
     run.font.name = font_name
     if bold:
@@ -135,13 +135,13 @@ class DocxAssemblySkill(BaseSkill):
         section.page_width = Cm(21.0)
         section.page_height = Cm(29.7)
 
-        # Default Normal style → 仿宋 12pt (小四)
+        # Default Normal style → 宋体 12pt (小四)
         style = doc.styles['Normal']
         font = style.font
-        font.name = '仿宋'
+        font.name = '宋体'
         font.size = Pt(12)
         try:
-            style.element.rPr.rFonts.set(qn('w:eastAsia'), '仿宋')
+            style.element.rPr.rFonts.set(qn('w:eastAsia'), '宋体')
         except Exception:
             pass
 
@@ -151,9 +151,9 @@ class DocxAssemblySkill(BaseSkill):
 
         # Configure heading styles
         for level, (name, size) in enumerate([
-            ('黑体', 18),   # Heading 1
-            ('黑体', 15),   # Heading 2
-            ('黑体', 13),   # Heading 3
+            ('黑体', 16),   # Heading 1: 三号
+            ('黑体', 15),   # Heading 2: 小三
+            ('黑体', 14),   # Heading 3: 四号
         ], start=1):
             try:
                 h_style = doc.styles[f'Heading {level}']
@@ -184,21 +184,21 @@ class DocxAssemblySkill(BaseSkill):
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p.paragraph_format.space_after = Pt(24)
         run = p.add_run(title)
-        _set_font(run, '黑体', '黑体', size=26, bold=True)
+        _set_font(run, '方正小标宋简体', '方正小标宋简体', size=26, bold=True)
 
         # Document type
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p.paragraph_format.space_after = Pt(60)
         run = p.add_run("投 标 文 件")
-        _set_font(run, '黑体', '黑体', size=36, bold=True)
+        _set_font(run, '方正小标宋简体', '方正小标宋简体', size=36, bold=True)
 
         # Subtitle
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p.paragraph_format.space_after = Pt(36)
         run = p.add_run("（商务技术部分）")
-        _set_font(run, '仿宋', '仿宋', size=18)
+        _set_font(run, '宋体', '宋体', size=18)
 
         # Decorative line
         p = doc.add_paragraph()
@@ -222,7 +222,7 @@ class DocxAssemblySkill(BaseSkill):
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             p.paragraph_format.space_after = Pt(8)
             run = p.add_run(f"{label}：{value}")
-            _set_font(run, '仿宋', '仿宋', size=16)
+            _set_font(run, '宋体', '宋体', size=16)
 
         # Page break
         doc.add_page_break()
@@ -317,7 +317,7 @@ class DocxAssemblySkill(BaseSkill):
         hp.text = ""  # Clear default
         hp.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = hp.add_run(title)
-        _set_font(run, '仿宋', '仿宋', size=9)
+        _set_font(run, '宋体', '宋体', size=9)
         run.font.color.rgb = RGBColor(128, 128, 128)
         # Add bottom border to header paragraph
         try:
@@ -338,7 +338,7 @@ class DocxAssemblySkill(BaseSkill):
         fp.text = ""  # Clear default
         fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = fp.add_run("— ")
-        _set_font(run, 'Times New Roman', '仿宋', size=9)
+        _set_font(run, 'Times New Roman', '宋体', size=9)
         run.font.color.rgb = RGBColor(128, 128, 128)
         # Insert page number field
         try:
@@ -372,7 +372,7 @@ class DocxAssemblySkill(BaseSkill):
             run6._r.append(fldChar_end)
 
             run7 = fp.add_run(" —")
-            _set_font(run7, 'Times New Roman', '仿宋', size=9)
+            _set_font(run7, 'Times New Roman', '宋体', size=9)
             run7.font.color.rgb = RGBColor(128, 128, 128)
         except Exception as e:
             logger.warning(f"Failed to add page number field: {e}")
@@ -401,9 +401,10 @@ class DocxAssemblySkill(BaseSkill):
         # Chapter heading (Heading 1 with number)
         heading_text = f"第{self._to_chinese_num(chapter_num)}章  {title}"
         heading = doc.add_heading(heading_text, level=1)
+        heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
         # Override heading font
         for run in heading.runs:
-            _set_font(run, '黑体', '黑体', size=18, bold=True)
+            _set_font(run, '黑体', '黑体', size=16, bold=True)
 
         # Parse and add content
         if content:
@@ -507,7 +508,7 @@ class DocxAssemblySkill(BaseSkill):
                                 f"详见\u201c{first_chapter}\u201d章节）"
                             )
                             run = para.add_run(ref_text)
-                            _set_font(run, '仿宋', '仿宋', size=10.5)
+                            _set_font(run, '宋体', '宋体', size=10.5)
                             run.italic = True
                             run.font.color.rgb = RGBColor(100, 100, 100)
                             continue
@@ -522,7 +523,7 @@ class DocxAssemblySkill(BaseSkill):
                                 cap_para = doc.add_paragraph()
                                 cap_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
                                 cap_run = cap_para.add_run(caption)
-                                _set_font(cap_run, '仿宋', '仿宋',
+                                _set_font(cap_run, '宋体', '宋体',
                                           size=10.5)
                                 cap_run.font.color.rgb = RGBColor(
                                     100, 100, 100
@@ -534,7 +535,7 @@ class DocxAssemblySkill(BaseSkill):
                             run = para.add_run(
                                 f"[图片：{caption or '未命名'}]"
                             )
-                            _set_font(run, '仿宋', '仿宋', size=12)
+                            _set_font(run, '宋体', '宋体', size=12)
                             run.font.color.rgb = RGBColor(200, 0, 0)
                             logger.warning(
                                 f"Failed to embed image {img_path}: {e}"
@@ -544,7 +545,7 @@ class DocxAssemblySkill(BaseSkill):
                         run = para.add_run(
                             f"[图片缺失：{caption or img_path}]"
                         )
-                        _set_font(run, '仿宋', '仿宋', size=12)
+                        _set_font(run, '宋体', '宋体', size=12)
                         run.font.color.rgb = RGBColor(200, 0, 0)
                     continue
 
@@ -552,7 +553,7 @@ class DocxAssemblySkill(BaseSkill):
             if stripped.startswith("### "):
                 h = doc.add_heading(stripped[4:], level=3)
                 for run in h.runs:
-                    _set_font(run, '黑体', '黑体', size=13, bold=True)
+                    _set_font(run, '黑体', '黑体', size=14, bold=True)
             elif stripped.startswith("## "):
                 h = doc.add_heading(stripped[3:], level=2)
                 for run in h.runs:
@@ -567,7 +568,7 @@ class DocxAssemblySkill(BaseSkill):
                 para.style = 'List Bullet'
                 run = para.add_run(stripped[2:])
                 run.italic = True
-                _set_font(run, '仿宋', '仿宋', size=12)
+                _set_font(run, '宋体', '宋体', size=12)
             # Checklist items
             elif stripped.startswith("- [ ] "):
                 doc.add_paragraph("☐ " + stripped[6:], style='List Bullet')
@@ -599,14 +600,14 @@ class DocxAssemblySkill(BaseSkill):
                 continue
             if part.startswith("**") and part.endswith("**"):
                 run = para.add_run(part[2:-2])
-                _set_font(run, '仿宋', '仿宋', size=12, bold=True)
+                _set_font(run, '宋体', '宋体', size=12, bold=True)
             elif part.startswith("[待补充"):
                 run = para.add_run(part)
                 _set_font(run, '仿宋', '仿宋', size=12, bold=True)
                 run.font.color.rgb = RGBColor(255, 0, 0)
             else:
                 run = para.add_run(part)
-                _set_font(run, '仿宋', '仿宋', size=12)
+                _set_font(run, '宋体', '宋体', size=12)
 
     def _add_table(self, doc: Document, rows: List[List[str]]):
         """Add a formatted table to the document."""
@@ -625,7 +626,7 @@ class DocxAssemblySkill(BaseSkill):
                     cell.text = ""
                     p = cell.paragraphs[0]
                     run = p.add_run(cell_text)
-                    _set_font(run, '仿宋', '仿宋', size=10.5)
+                    _set_font(run, '宋体', '宋体', size=10.5)
 
                     # Bold + gray bg for header row
                     if i == 0:
