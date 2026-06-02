@@ -555,6 +555,155 @@ class RequirementExtractionSkill(BaseSkill):
 
         return fallback_structure
 
+    @staticmethod
+    def _extract_format_spec(raw_text, sections, file_path=''):
+        """Extract bid document format specification from tender Chapter 6.
+
+        Scans the tender for a '投标文件格式' section, then extracts:
+        - Attachment list (附件1, 附件2, etc.) with names
+        - Font specifications (from the docx file if available)
+        - Table templates (column headers)
+
+        Returns a format_spec dict, or empty dict if no format chapter found.
+        """
+        import re
+        import os
+
+        # ── Step 1: Find format chapter in text ──
+        format_keywords = ['投标文件格式', '投标文件编制格式', '投标文件组成']
+        has_format = False
+        format_text = ''
+
+        for kw in format_keywords:
+            idx = raw_text.find(kw)
+            if idx >= 0:
+                has_format = True
+                # Extract from keyword to end (format chapter is usually last)
+                format_text = raw_text[idx:]
+                break
+
+        if not has_format:
+            return {}
+
+        # ── Step 2: Extract attachment list ──
+        # Pattern: "附件N：标题" or "附件N: 标题" or "附件N 标题"
+        attachment_pattern = re.compile(
+            r'附件\s*(\d+)\s*[：:]\s*(.+?)(?:\n|$)'
+        )
+        attachments = []
+        seen_ids = set()
+        for m in attachment_pattern.finditer(format_text):
+            att_id = int(m.group(1))
+            att_name = m.group(2).strip()
+            if att_id not in seen_ids:
+                seen_ids.add(att_id)
+                attachments.append({
+                    'id': f'附件{att_id}',
+                    'order': att_id,
+                    'title': att_name,
+                })
+
+        # Also find standalone titled sections (e.g. "拟派实施人员表", "拟派人员资历表")
+        standalone_titles = []
+        for pattern in [r'拟派实施人员表', r'拟派人员资历表', r'其他资格证明文件',
+                        r'评标索引表', r'投标人情况表']:
+            if pattern in format_text:
+                # Check if it's already captured as an attachment
+                already = any(pattern in a['title'] for a in attachments)
+                if not already:
+                    standalone_titles.append(pattern)
+
+        # ── Step 3: Extract font info from docx ──
+        font_spec = {'name': 'Arial', 'size': 12, 'title_size': 15}
+        table_font_spec = {'name': 'Arial', 'size': 11}
+
+        if file_path and os.path.exists(file_path):
+            try:
+                from docx import Document as _Doc
+                doc = _Doc(file_path)
+                # Sample font from paragraphs in the format chapter area
+                format_start = False
+                font_samples = {}  # font_name → count
+                for p in doc.paragraphs:
+                    text = p.text.strip()
+                    if any(kw in text for kw in format_keywords):
+                        format_start = True
+                    if format_start and p.runs:
+                        for r in p.runs:
+                            fn = r.font.name
+                            if fn:
+                                font_samples[fn] = font_samples.get(fn, 0) + 1
+                # Use most common font
+                if font_samples:
+                    most_common = max(font_samples, key=font_samples.get)
+                    font_spec['name'] = most_common
+                    table_font_spec['name'] = most_common
+
+                # Extract table templates from format chapter
+                format_tables = []
+                for table in doc.tables:
+                    # Check if this table is in the format chapter area
+                    # by checking if its first cell content appears in format_text
+                    first_cell = table.cell(0, 0).text.strip()[:30]
+                    if first_cell and first_cell in format_text:
+                        headers = []
+                        for cell in table.rows[0].cells:
+                            h = cell.text.strip()
+                            if h:
+                                headers.append(h)
+                        if headers:
+                            # Try to match to an attachment
+                            format_tables.append({
+                                'headers': headers,
+                                'cols': len(table.columns),
+                                'rows': len(table.rows),
+                            })
+                            # Get table font size
+                            for row in table.rows[1:2]:  # sample from data row
+                                for cell in row.cells:
+                                    for p in cell.paragraphs:
+                                        for r in p.runs:
+                                            if r.font.size:
+                                                table_font_spec['size'] = r.font.size.pt
+                                                break
+            except Exception as e:
+                logger.warning(f"Failed to extract font info from docx: {e}")
+
+        # ── Step 4: Match tables to attachments ──
+        # Simple heuristic: tables appear in order after their attachment heading
+        if file_path:
+            try:
+                for att in attachments:
+                    title = att['title']
+                    for ft in format_tables:
+                        # Check if table headers relate to this attachment
+                        # (crude: assign tables in order to attachments that likely have tables)
+                        table_keywords = ['序号', '项目名称', '姓名', '条目号',
+                                          '评审内容', '单位名称', '类别']
+                        if any(h in table_keywords for h in ft['headers']):
+                            att['table_template'] = ft
+                            format_tables.remove(ft)
+                            break
+            except Exception:
+                pass
+
+        format_spec = {
+            'has_format_chapter': True,
+            'section_numbering': '附件' if attachments else '章',
+            'font': font_spec,
+            'table_font': table_font_spec,
+            'attachments': attachments,
+            'standalone_sections': standalone_titles,
+        }
+
+        logger.info(
+            f"Format spec extracted: {len(attachments)} attachments, "
+            f"font={font_spec['name']}/{font_spec['size']}pt, "
+            f"table_font={table_font_spec['name']}/{table_font_spec['size']}pt"
+        )
+
+        return format_spec
+
     def _verify_structure(self, analysis, structure):
         # type: (Dict, Dict) -> Dict
         """Pass 3: Deterministic cross-reference verification.

@@ -443,6 +443,20 @@ async def parse_tender_structure(file: UploadFile = File(...),
                 for i, t in enumerate(sample_titles, 1):
                     yield emit("log", message=f"   {i}. {t[:60]}")
 
+            # ── Step 1b: Extract format spec from tender ──
+            from app.core.skills.builtin.requirement_extraction import RequirementExtractionSkill
+            format_spec = RequirementExtractionSkill._extract_format_spec(
+                parse_result.get("raw_text", ""),
+                parse_result.get("sections", []),
+                file_path=temp_path,
+            )
+            if format_spec:
+                att_count = len(format_spec.get("attachments", []))
+                font_name = format_spec.get("font", {}).get("name", "?")
+                font_size = format_spec.get("font", {}).get("size", "?")
+                yield emit("log", message=f"📐 检测到投标文件格式章节: "
+                           f"{att_count} 个附件, 字体={font_name}/{font_size}pt")
+
             # ── Step 2: Tender Analysis (V3 multi-pass) ──
             yield emit("phase", phase="analyzing", message=f"🤖 正在深度分析招标文件 (AI 多轮解析)...")
 
@@ -573,6 +587,7 @@ async def parse_tender_structure(file: UploadFile = File(...),
                 "tender_file_path": temp_path,
                 "requirements": extract_result,
                 "parse_result": parse_result,
+                "format_spec": format_spec or {},
                 "generated_sections": [],
                 "output_file": "",
                 "created_at": time.time(),
@@ -1045,6 +1060,7 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
                 "company_name": task.get("company_name", "投标人"),
                 "sections": generated_sections,
                 "format_rules": requirements.get("format_requirements", {}),
+                "format_spec": task.get("format_spec", {}),
             })
 
             task["output_file"] = assembly_result["file_path"]
