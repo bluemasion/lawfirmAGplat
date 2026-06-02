@@ -590,13 +590,13 @@ class DocxAssemblySkill(BaseSkill):
             att_title_p = doc.add_paragraph()
             att_title_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
             run1 = att_title_p.add_run(f"{att_id}：{title}")
-            _set_font(run1, tf, tf, size=Pt(12), bold=False)
+            _set_font(run1, tf, tf, size=12, bold=False)
 
             # Line 2: "标题" subtitle — Arial/15pt, centered
             subtitle_p = doc.add_paragraph()
             subtitle_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             run2 = subtitle_p.add_run(title)
-            _set_font(run2, tf, tf, size=Pt(15), bold=False)
+            _set_font(run2, tf, tf, size=15, bold=False)
         elif self._section_numbering == '附件':
             # Unmapped section — just title as heading
             heading = doc.add_heading(title, level=1)
