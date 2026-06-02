@@ -780,6 +780,116 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
         for volume in requirements.get("volumes", []):
             for section in volume.get("sections", []):
                 all_sections.append(section)
+
+        # ── Filter sections by tender Chapter 6 attachments ──
+        format_spec = task.get("format_spec", {})
+        attachments = format_spec.get("attachments", [])
+        if attachments and format_spec.get("has_format_chapter"):
+            att_titles = [a.get("title", "") for a in attachments]
+            logger.info(
+                f"[generate-full] Filtering sections by {len(attachments)} "
+                f"tender attachments"
+            )
+
+            # Build keyword map: attachment title → keywords to match
+            _att_kw = {
+                '评标索引表':       ['评标索引', '索引表'],
+                '投标函':           ['投标函'],
+                '投标一览表':       ['投标一览', '一览表'],
+                '商务条款响应':     ['商务偏离', '商务评分偏离', '商务条款响应'],
+                '技术条款响应':     ['技术偏离', '技术评分偏离', '技术条款响应'],
+                '业绩清单':         ['业绩清单', '律所业绩', '业绩'],
+                '授权书':           ['授权委托', '授权书'],
+                '投标保证金':       ['投标保证金', '保证金'],
+                '投标人情况表':     ['投标人情况', '项目团队', '团队配置'],
+                '拟派实施人员':     ['拟派实施', '实施人员'],
+                '拟派人员资历':     ['人员资历', '资历表'],
+                '招标代理服务费':   ['代理服务费', '承诺书'],
+                '服务响应方案':     ['服务响应', '详细的服务', '服务方案'],
+                '资格':             ['资格审查', '营业执照', '法定代表人',
+                                     '投标人代表', '资质及认证'],
+            }
+
+            def _section_matches_attachment(sec_title, att_title):
+                """Check if a section title matches a tender attachment."""
+                # Direct match
+                if sec_title in att_title or att_title in sec_title:
+                    return True
+                # Keyword match
+                for kw_group, sec_kws in _att_kw.items():
+                    if kw_group in att_title:
+                        for skw in sec_kws:
+                            if skw in sec_title:
+                                return True
+                return False
+
+            # Map each section to an attachment (or None)
+            matched_sections = []
+            unmatched_sections = []
+            used_att_indices = set()
+
+            for sec in all_sections:
+                sec_title = sec.get("title", "")
+                found = False
+                for ai, att in enumerate(attachments):
+                    att_title = att.get("title", "")
+                    if _section_matches_attachment(sec_title, att_title):
+                        sec["_att_index"] = ai
+                        sec["_att_id"] = att.get("id", "")
+                        matched_sections.append(sec)
+                        used_att_indices.add(ai)
+                        found = True
+                        break
+                if not found:
+                    # Check if it's a qualification doc (part of 附件10)
+                    qual_kws = ['营业执照', '法定代表人', '投标人代表',
+                                '资质及认证', '荣誉', '排名']
+                    is_qual = any(k in sec_title for k in qual_kws)
+                    if is_qual:
+                        # Find 附件10 index
+                        for ai, att in enumerate(attachments):
+                            if '投标人情况表' in att.get('title', ''):
+                                sec["_att_index"] = ai
+                                sec["_att_id"] = att.get("id", "")
+                                matched_sections.append(sec)
+                                found = True
+                                break
+                    if not found:
+                        # Check service-related sections → 附件12
+                        svc_kws = ['服务方案', '重点难点', '响应时间',
+                                   '增值服务', '服务响应']
+                        is_svc = any(k in sec_title for k in svc_kws)
+                        if is_svc:
+                            for ai, att in enumerate(attachments):
+                                if '服务响应' in att.get('title', '') or \
+                                   '详细' in att.get('title', ''):
+                                    sec["_att_index"] = ai
+                                    sec["_att_id"] = att.get("id", "")
+                                    matched_sections.append(sec)
+                                    found = True
+                                    break
+                    if not found:
+                        unmatched_sections.append(sec)
+
+            # Sort matched sections by attachment order
+            matched_sections.sort(key=lambda s: (
+                s.get("_att_index", 999),
+                s.get("order", 0)
+            ))
+
+            dropped = [s.get("title", "") for s in unmatched_sections]
+            if dropped:
+                logger.info(
+                    f"[generate-full] Dropped {len(dropped)} sections "
+                    f"not in tender: {dropped}"
+                )
+
+            all_sections = matched_sections
+            logger.info(
+                f"[generate-full] Section list: {len(all_sections)} sections "
+                f"(matched to {len(used_att_indices)} attachments)"
+            )
+
         total_sections = len(all_sections)
 
         if total_sections == 0:
