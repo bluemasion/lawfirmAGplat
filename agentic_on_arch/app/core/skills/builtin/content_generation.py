@@ -333,6 +333,7 @@ class ContentGenerationSkill(BaseSkill):
         material_refs = section.get("material_refs", [])
         linked_scoring = section.get("linked_scoring", [])
         linked_total_score = section.get("linked_total_score", 0)
+        is_sub_section = section.get("is_sub_section", False)
 
         logger.info(f"Generating (stream) content for: [{sec_type}] {title}")
         if linked_scoring:
@@ -737,7 +738,7 @@ class ContentGenerationSkill(BaseSkill):
         # ── Deterministic content block: pre-compose real data ──
         # Scope-filtered: only inject categories relevant to this section.
         deterministic_block = ""
-        if company:
+        if company and not is_sub_section:
             # Check if this section should get any materials at all
             det_allowed = None
             for kw, cats in self._SECTION_MATERIAL_SCOPE.items():

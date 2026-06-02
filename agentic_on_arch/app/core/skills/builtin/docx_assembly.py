@@ -65,8 +65,10 @@ class DocxAssemblySkill(BaseSkill):
 
         os.makedirs(output_dir, exist_ok=True)
 
-        # ── Store format_spec for use across methods ──
+        # ── Store format_spec and company info for use across methods ──
         self._format_spec = format_spec
+        self._company_name = company_name
+        self._project_id = params.get("project_id", None)
         # Derive effective fonts from format_spec or defaults
         if format_spec.get('has_format_chapter'):
             fs = format_spec.get('font', {})
@@ -529,9 +531,7 @@ class DocxAssemblySkill(BaseSkill):
     def _insert_cloned_table(self, doc, table_info):
         """Insert a cloned table from XML template into the document.
 
-        Args:
-            doc: The Document object
-            table_info: Dict with 'xml_path', 'headers', 'cols', 'rows'
+        Returns the inserted table element (lxml) or None on failure.
         """
         import os
         from lxml import etree
@@ -540,7 +540,7 @@ class DocxAssemblySkill(BaseSkill):
         xml_path = table_info.get('xml_path', '')
         if not xml_path or not os.path.exists(xml_path):
             logger.warning(f"Table template XML not found: {xml_path}")
-            return False
+            return None
 
         try:
             with open(xml_path, 'r', encoding='utf-8') as f:
@@ -553,8 +553,6 @@ class DocxAssemblySkill(BaseSkill):
             new_tbl = deepcopy(tbl_element)
 
             # Insert after the last element in the document body
-            # (which should be the heading paragraph just added)
-            # Use add_paragraph + addnext pattern to ensure correct position
             spacer = doc.add_paragraph("")
             spacer._element.addnext(new_tbl)
 
@@ -566,10 +564,229 @@ class DocxAssemblySkill(BaseSkill):
                 f"{table_info.get('rows', '?')}x{table_info.get('cols', '?')} "
                 f"from {os.path.basename(xml_path)}"
             )
-            return True
+            return new_tbl
         except Exception as e:
             logger.warning(f"Failed to clone table from {xml_path}: {e}")
-            return False
+            return None
+
+    # ─── Table Data Filling ──────────────────────────────────────
+
+    @staticmethod
+    def _set_cell_text(tbl_element, row_idx, col_idx, text):
+        """Set text in a specific cell of an lxml table element."""
+        ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+        rows = tbl_element.findall('.//w:tr', ns)
+        if row_idx >= len(rows):
+            return
+        cells = rows[row_idx].findall('w:tc', ns)
+        if col_idx >= len(cells):
+            return
+        # Find or create paragraph in cell
+        paras = cells[col_idx].findall('w:p', ns)
+        if paras:
+            # Clear existing text runs
+            for p in paras:
+                for r in p.findall('w:r', ns):
+                    p.remove(r)
+            # Add new text run to first paragraph
+            from lxml import etree
+            nsmap = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+            run = etree.SubElement(paras[0], f'{{{nsmap}}}r')
+            t = etree.SubElement(run, f'{{{nsmap}}}t')
+            t.text = str(text)
+            t.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
+
+    def _fill_table_data(self, tbl_element, att_id, title, section):
+        """Fill a cloned table with real data based on attachment type.
+
+        Detects table type from att_id/title keywords and fills
+        data from the material store.
+        """
+        if tbl_element is None:
+            return
+
+        store = None
+        try:
+            from app.core.skills.builtin.material_store import get_material_store
+            store = get_material_store()
+        except Exception:
+            pass
+
+        company = self._company_name or ''
+        project_id = self._project_id
+
+        # Get header row to detect table type
+        ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+        rows = tbl_element.findall('.//w:tr', ns)
+        if len(rows) < 2:
+            return
+
+        # Read headers
+        header_cells = rows[0].findall('w:tc', ns)
+        headers = []
+        for cell in header_cells:
+            texts = cell.findall('.//w:t', ns)
+            headers.append(''.join(t.text or '' for t in texts).strip())
+        header_str = '|'.join(headers)
+
+        filled = False
+
+        # ── Deviation tables (商务/技术偏离表) ──
+        if '偏离' in title or '响应' in title:
+            if '条款' in header_str or '响应' in header_str:
+                filled = self._fill_deviation_table(tbl_element, rows, headers)
+
+        # ── Performance table (业绩表) ──
+        elif '业绩' in title:
+            if store and ('用户' in header_str or '项目名称' in header_str):
+                projects = store.get_projects(company=company, project_id=project_id)
+                if projects:
+                    filled = self._fill_project_table(tbl_element, rows, headers, projects)
+
+        # ── Personnel tables (拟派人员) ──
+        elif '拟派' in title or '人员' in title or '情况' in title:
+            if store and ('姓名' in header_str):
+                resumes = store.get_resumes(company=company, project_id=project_id)
+                if resumes:
+                    filled = self._fill_personnel_table(tbl_element, rows, headers, resumes)
+
+        if filled:
+            logger.info(f"  ✅ Table data filled for: {title}")
+
+    def _fill_deviation_table(self, tbl_element, rows, headers):
+        """Fill deviation table with '无偏离' responses."""
+        ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+        filled_count = 0
+
+        for row_idx in range(1, len(rows)):
+            cells = rows[row_idx].findall('w:tc', ns)
+            for col_idx, h in enumerate(headers):
+                if col_idx >= len(cells):
+                    continue
+                # Check if cell is empty
+                cell_texts = cells[col_idx].findall('.//w:t', ns)
+                cell_text = ''.join(t.text or '' for t in cell_texts).strip()
+                if cell_text:
+                    continue  # Already has data
+
+                # Fill based on header type
+                if '响应' in h and '偏离' not in h:
+                    self._set_cell_text(tbl_element, row_idx, col_idx, '完全响应')
+                    filled_count += 1
+                elif '偏离' in h:
+                    self._set_cell_text(tbl_element, row_idx, col_idx, '无偏离')
+                    filled_count += 1
+                elif '备注' in h or '说明' in h:
+                    self._set_cell_text(tbl_element, row_idx, col_idx, '/')
+                    filled_count += 1
+                elif '序号' in h:
+                    self._set_cell_text(tbl_element, row_idx, col_idx, str(row_idx))
+                    filled_count += 1
+
+        logger.info(f"  Deviation table: filled {filled_count} cells")
+        return filled_count > 0
+
+    def _fill_project_table(self, tbl_element, rows, headers, projects):
+        """Fill project/performance table with store data."""
+        filled_count = 0
+
+        # Map header → project field
+        _field_map = {
+            '用户名称': 'client',
+            '委托方': 'client',
+            '项目名称': 'project_name',
+            '实施内容': 'description',
+            '服务内容': 'description',
+            '服务时间': 'service_period',
+            '合同金额': 'contract_amount',
+            '证明文件': '_cert',
+            '备注': '_note',
+        }
+
+        for row_idx in range(1, min(len(rows), len(projects) + 1)):
+            proj = projects[row_idx - 1]
+            for col_idx, h in enumerate(headers):
+                # Find matching field
+                field = None
+                for kw, f in _field_map.items():
+                    if kw in h:
+                        field = f
+                        break
+                if not field:
+                    if '序号' in h:
+                        self._set_cell_text(tbl_element, row_idx, col_idx, str(row_idx))
+                        filled_count += 1
+                    continue
+
+                if field == '_cert':
+                    value = '见附件'
+                elif field == '_note':
+                    value = ''
+                else:
+                    value = proj.get(field, '')
+                    if not value:
+                        value = proj.get('amount', '') if field == 'contract_amount' else ''
+
+                if value:
+                    self._set_cell_text(tbl_element, row_idx, col_idx, str(value)[:100])
+                    filled_count += 1
+
+        logger.info(f"  Project table: filled {filled_count} cells from {len(projects)} projects")
+        return filled_count > 0
+
+    def _fill_personnel_table(self, tbl_element, rows, headers, resumes):
+        """Fill personnel table with resume data."""
+        filled_count = 0
+
+        # Map header → resume field
+        _field_map = {
+            '姓名': 'name',
+            '职务': 'title',
+            '职称': 'title',
+            '专业': 'specialty',
+            '资历': '_full',
+            '工作经验': '_full',
+            '部门': 'department',
+            '类别': '_category',
+        }
+
+        for row_idx in range(1, min(len(rows), len(resumes) + 1)):
+            resume = resumes[row_idx - 1]
+            for col_idx, h in enumerate(headers):
+                field = None
+                for kw, f in _field_map.items():
+                    if kw in h:
+                        field = f
+                        break
+                if not field:
+                    if '序号' in h:
+                        self._set_cell_text(tbl_element, row_idx, col_idx, str(row_idx))
+                        filled_count += 1
+                    continue
+
+                if field == '_full':
+                    # Compose from multiple fields
+                    parts = []
+                    if resume.get('specialty'):
+                        parts.append(f"专业方向：{resume['specialty']}")
+                    if resume.get('years_of_practice'):
+                        parts.append(f"从业{resume['years_of_practice']}年")
+                    if resume.get('education'):
+                        parts.append(resume['education'])
+                    value = '，'.join(parts) if parts else ''
+                elif field == '_category':
+                    value = '项目组成员'
+                    if row_idx == 1:
+                        value = '项目负责人'
+                else:
+                    value = resume.get(field, '')
+
+                if value:
+                    self._set_cell_text(tbl_element, row_idx, col_idx, str(value)[:100])
+                    filled_count += 1
+
+        logger.info(f"  Personnel table: filled {filled_count} cells from {len(resumes)} resumes")
+        return filled_count > 0
 
     # ─── Section / Chapter ────────────────────────────────────────
 
@@ -616,8 +833,11 @@ class DocxAssemblySkill(BaseSkill):
         if title in self._table_templates:
             table_templates = self._table_templates[title]
             for tpl in table_templates:
-                if self._insert_cloned_table(doc, tpl):
+                tbl_element = self._insert_cloned_table(doc, tpl)
+                if tbl_element is not None:
                     has_cloned_tables = True
+                    # Fill cloned table with real data
+                    self._fill_table_data(tbl_element, att_id, title, section)
 
         # Parse and add content (skip LLM tables if we already cloned tender tables)
         if content:

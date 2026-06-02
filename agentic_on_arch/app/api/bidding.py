@@ -1084,6 +1084,7 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
                 "sections": generated_sections,
                 "format_rules": requirements.get("format_requirements", {}),
                 "format_spec": task.get("format_spec", {}),
+                "project_id": req.project_id,
             })
 
             task["output_file"] = assembly_result["file_path"]

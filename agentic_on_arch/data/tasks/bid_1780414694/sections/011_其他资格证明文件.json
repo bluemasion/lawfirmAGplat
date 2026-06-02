@@ -1,0 +1,14 @@
+{
+  "title": "其他资格证明文件",
+  "content": "## 其他资格证明文件\n\n- [ ] 其他资格证明文件 [待补充：其他资格证明文件]\n\n*请将相关证书扫描件附在投标文件相应位置。*",
+  "missing_fields": [
+    "其他资格证明文件"
+  ],
+  "status": "placeholder",
+  "order": 10,
+  "type": "qualification",
+  "level": 2,
+  "linked_scoring": [],
+  "linked_rejection": [],
+  "linked_total_score": 0
+}
