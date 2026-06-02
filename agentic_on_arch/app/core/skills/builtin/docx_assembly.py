@@ -98,6 +98,12 @@ class DocxAssemblySkill(BaseSkill):
         self._current_chapter = ""  # set per-chapter in _add_section
         self._dedup_stats = {"total_images": 0, "deduped": 0}
 
+        # ── Build section→table template mapping from format_spec ──
+        # Maps section_title_keyword → list of table XML paths
+        self._table_templates = {}  # type: Dict[str, List[Dict]]
+        if format_spec.get('has_format_chapter'):
+            self._build_table_template_map(format_spec, sections)
+
         doc = Document()
 
         # Apply document-level formatting
@@ -420,6 +426,105 @@ class DocxAssemblySkill(BaseSkill):
         except Exception as e:
             logger.warning(f"Failed to restart page numbering: {e}")
 
+    # ─── Table Template Cloning ───────────────────────────────────
+
+    def _build_table_template_map(self, format_spec, sections):
+        """Build mapping from bid section titles to tender table templates.
+
+        Uses keyword matching between our section titles and tender
+        attachment titles to find which tables belong to which section.
+        """
+        attachments = format_spec.get('attachments', [])
+        section_titles = [s.get('title', '') for s in sections]
+
+        # Build keyword→attachment mapping
+        # tender attachment title keywords → our section title keywords
+        _keyword_map = {
+            '评标索引表':      ['评标索引', '索引表'],
+            '投标一览表':      ['投标一览', '一览表', '报价'],
+            '商务条款响应':    ['商务偏离', '商务评分偏离', '商务条款'],
+            '技术条款响应':    ['技术偏离', '技术评分偏离', '技术条款'],
+            '价格':            ['价格偏离', '价格评分偏离'],
+            '业绩清单':        ['业绩', '律所业绩', '项目业绩'],
+            '投标人情况表':    ['投标人情况', '团队', '项目团队'],
+            '拟派实施人员':    ['拟派', '实施人员', '项目团队'],
+            '拟派人员资历':    ['资历', '人员资历'],
+        }
+
+        for att in attachments:
+            att_title = att.get('title', '')
+            att_tables = att.get('tables', [])
+            if not att_tables:
+                continue
+
+            # Find matching section(s) by keyword
+            for kw_group, section_kws in _keyword_map.items():
+                if kw_group in att_title:
+                    # Found the attachment type — now find our section
+                    for sec_title in section_titles:
+                        for skw in section_kws:
+                            if skw in sec_title:
+                                self._table_templates[sec_title] = att_tables
+                                logger.info(
+                                    f"  Table template mapped: "
+                                    f"'{sec_title}' ← {att['id']} "
+                                    f"({len(att_tables)} tables)"
+                                )
+                                break
+                        if sec_title in self._table_templates:
+                            break
+                    break
+
+        logger.info(
+            f"Table template mapping: {len(self._table_templates)} "
+            f"sections have templates"
+        )
+
+    def _insert_cloned_table(self, doc, table_info):
+        """Insert a cloned table from XML template into the document.
+
+        Args:
+            doc: The Document object
+            table_info: Dict with 'xml_path', 'headers', 'cols', 'rows'
+        """
+        import os
+        from lxml import etree
+        from copy import deepcopy
+
+        xml_path = table_info.get('xml_path', '')
+        if not xml_path or not os.path.exists(xml_path):
+            logger.warning(f"Table template XML not found: {xml_path}")
+            return False
+
+        try:
+            with open(xml_path, 'r', encoding='utf-8') as f:
+                xml_str = f.read()
+
+            # Parse the XML
+            tbl_element = etree.fromstring(xml_str)
+
+            # Deep copy to avoid mutation
+            new_tbl = deepcopy(tbl_element)
+
+            # Add spacing paragraph before table
+            doc.add_paragraph("")
+
+            # Insert into document body
+            doc.element.body.append(new_tbl)
+
+            # Add spacing paragraph after table
+            doc.add_paragraph("")
+
+            logger.info(
+                f"  Cloned table inserted: "
+                f"{table_info.get('rows', '?')}x{table_info.get('cols', '?')} "
+                f"from {os.path.basename(xml_path)}"
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to clone table from {xml_path}: {e}")
+            return False
+
     # ─── Section / Chapter ────────────────────────────────────────
 
     def _add_section(self, doc: Document, section: Dict, chapter_num: int = 1):
@@ -445,7 +550,15 @@ class DocxAssemblySkill(BaseSkill):
         for run in heading.runs:
             _set_font(run, tf, tf, size=ts, bold=True)
 
-        # Parse and add content
+        # ── Check for cloned table templates ──
+        has_cloned_tables = False
+        if title in self._table_templates:
+            table_templates = self._table_templates[title]
+            for tpl in table_templates:
+                if self._insert_cloned_table(doc, tpl):
+                    has_cloned_tables = True
+
+        # Parse and add content (skip LLM tables if we already cloned tender tables)
         if content:
             # Strip leading headings that duplicate the chapter title
             cleaned = content.strip()
@@ -466,7 +579,38 @@ class DocxAssemblySkill(BaseSkill):
                             cleaned = cleaned[first_line_end + 1:].strip()
                     break
             if cleaned:
-                self._add_markdown_content(doc, cleaned)
+                if has_cloned_tables:
+                    # Strip markdown tables from LLM content — we already have tender tables
+                    cleaned = self._strip_markdown_tables(cleaned)
+                if cleaned.strip():
+                    self._add_markdown_content(doc, cleaned)
+
+    @staticmethod
+    def _strip_markdown_tables(content):
+        """Remove markdown table blocks from content.
+
+        Preserves non-table text (paragraphs, headings, lists, images).
+        """
+        lines = content.split('\n')
+        result = []
+        in_table = False
+        for line in lines:
+            stripped = line.strip()
+            # Detect table row: starts/ends with | or is a separator
+            if '|' in stripped and not stripped.startswith('!['):
+                if all(c in '-| :' for c in stripped):
+                    in_table = True
+                    continue
+                cells = [c.strip() for c in stripped.split('|') if c.strip()]
+                if len(cells) >= 2:
+                    in_table = True
+                    continue
+            if in_table and not stripped:
+                in_table = False
+                continue
+            if not in_table:
+                result.append(line)
+        return '\n'.join(result)
 
     @staticmethod
     def _to_chinese_num(n):

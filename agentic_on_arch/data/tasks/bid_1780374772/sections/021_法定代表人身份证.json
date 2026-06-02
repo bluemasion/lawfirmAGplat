@@ -1,0 +1,14 @@
+{
+  "title": "法定代表人身份证",
+  "content": "## 法定代表人身份证\n\n> ⚠️ 本章节需要提供资质文件：\n\n**招标要求**：必须提供: 法定代表人身份证\n\n- [ ] 法定代表人身份证 [待补充：法定代表人身份证]\n\n*请将相关证书扫描件附在投标文件相应位置。*",
+  "missing_fields": [
+    "法定代表人身份证"
+  ],
+  "status": "placeholder",
+  "order": 22,
+  "type": "qualification",
+  "level": 2,
+  "linked_scoring": [],
+  "linked_rejection": [],
+  "linked_total_score": 0
+}

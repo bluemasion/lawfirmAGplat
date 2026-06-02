@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS bid_tasks (
     section_checked  TEXT DEFAULT '{}',
     generated_sections TEXT DEFAULT '[]',
     output_file      TEXT DEFAULT '',
+    format_spec      TEXT DEFAULT '{}',
     created_at       REAL NOT NULL,
     confirmed_at     REAL,
     completed_at     REAL
@@ -58,6 +59,13 @@ class BiddingStore:
         conn = self._get_conn()
         try:
             conn.executescript(_SCHEMA_SQL)
+            # Migrate: add format_spec column if missing
+            try:
+                conn.execute("ALTER TABLE bid_tasks ADD COLUMN format_spec TEXT DEFAULT '{}'")
+                conn.commit()
+                logger.info("Migrated bid_tasks: added format_spec column")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
             conn.commit()
             logger.info(f"BiddingStore initialized: {self.db_path}")
         finally:
@@ -75,8 +83,9 @@ class BiddingStore:
                     (task_id, status, tender_filename, tender_file_path,
                      requirements, parse_result, company_name,
                      section_checked, generated_sections, output_file,
+                     format_spec,
                      created_at, confirmed_at, completed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(task_id) DO UPDATE SET
                     status=excluded.status,
                     tender_filename=excluded.tender_filename,
@@ -87,6 +96,7 @@ class BiddingStore:
                     section_checked=excluded.section_checked,
                     generated_sections=excluded.generated_sections,
                     output_file=excluded.output_file,
+                    format_spec=excluded.format_spec,
                     confirmed_at=excluded.confirmed_at,
                     completed_at=excluded.completed_at
             """, (
@@ -100,6 +110,7 @@ class BiddingStore:
                 json.dumps(task_data.get("section_checked", {}), ensure_ascii=False),
                 json.dumps(task_data.get("generated_sections", []), ensure_ascii=False),
                 task_data.get("output_file", ""),
+                json.dumps(task_data.get("format_spec", {}), ensure_ascii=False),
                 task_data.get("created_at", time.time()),
                 task_data.get("confirmed_at"),
                 task_data.get("completed_at"),
@@ -186,7 +197,8 @@ class BiddingStore:
         """Convert a DB row to a dict with JSON fields parsed."""
         d = dict(row)
         for json_field in ("requirements", "parse_result",
-                           "section_checked", "generated_sections"):
+                           "section_checked", "generated_sections",
+                           "format_spec"):
             if json_field in d and isinstance(d[json_field], str):
                 try:
                     d[json_field] = json.loads(d[json_field])

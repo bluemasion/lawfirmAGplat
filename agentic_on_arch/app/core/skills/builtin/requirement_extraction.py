@@ -562,12 +562,13 @@ class RequirementExtractionSkill(BaseSkill):
         Scans the tender for a '投标文件格式' section, then extracts:
         - Attachment list (附件1, 附件2, etc.) with names
         - Font specifications (from the docx file if available)
-        - Table templates (column headers)
+        - Table templates as XML files for exact cloning
 
         Returns a format_spec dict, or empty dict if no format chapter found.
         """
         import re
         import os
+        from copy import deepcopy
 
         # ── Step 1: Find format chapter in text ──
         format_keywords = ['投标文件格式', '投标文件编制格式', '投标文件组成']
@@ -578,15 +579,13 @@ class RequirementExtractionSkill(BaseSkill):
             idx = raw_text.find(kw)
             if idx >= 0:
                 has_format = True
-                # Extract from keyword to end (format chapter is usually last)
                 format_text = raw_text[idx:]
                 break
 
         if not has_format:
             return {}
 
-        # ── Step 2: Extract attachment list ──
-        # Pattern: "附件N：标题" or "附件N: 标题" or "附件N 标题"
+        # ── Step 2: Extract attachment list from text ──
         attachment_pattern = re.compile(
             r'附件\s*(\d+)\s*[：:]\s*(.+?)(?:\n|$)'
         )
@@ -601,91 +600,173 @@ class RequirementExtractionSkill(BaseSkill):
                     'id': f'附件{att_id}',
                     'order': att_id,
                     'title': att_name,
+                    'tables': [],  # will be filled with table file paths
                 })
 
-        # Also find standalone titled sections (e.g. "拟派实施人员表", "拟派人员资历表")
-        standalone_titles = []
-        for pattern in [r'拟派实施人员表', r'拟派人员资历表', r'其他资格证明文件',
-                        r'评标索引表', r'投标人情况表']:
-            if pattern in format_text:
-                # Check if it's already captured as an attachment
-                already = any(pattern in a['title'] for a in attachments)
-                if not already:
-                    standalone_titles.append(pattern)
+        if not file_path or not os.path.exists(file_path):
+            return {
+                'has_format_chapter': True,
+                'section_numbering': '附件' if attachments else '章',
+                'font': {'name': 'Arial', 'size': 12, 'title_size': 15},
+                'table_font': {'name': 'Arial', 'size': 11},
+                'attachments': attachments,
+            }
 
-        # ── Step 3: Extract font info from docx ──
-        font_spec = {'name': 'Arial', 'size': 12, 'title_size': 15}
-        table_font_spec = {'name': 'Arial', 'size': 11}
+        # ── Step 3: Walk through docx body to extract tables with context ──
+        try:
+            from docx import Document as _Doc
+            from lxml import etree
 
-        if file_path and os.path.exists(file_path):
-            try:
-                from docx import Document as _Doc
-                doc = _Doc(file_path)
-                # Sample font from paragraphs in the format chapter area
-                format_start = False
-                font_samples = {}  # font_name → count
-                for p in doc.paragraphs:
-                    text = p.text.strip()
-                    if any(kw in text for kw in format_keywords):
-                        format_start = True
-                    if format_start and p.runs:
-                        for r in p.runs:
-                            fn = r.font.name
-                            if fn:
-                                font_samples[fn] = font_samples.get(fn, 0) + 1
-                # Use most common font
-                if font_samples:
-                    most_common = max(font_samples, key=font_samples.get)
-                    font_spec['name'] = most_common
-                    table_font_spec['name'] = most_common
+            doc = _Doc(file_path)
 
-                # Extract table templates from format chapter
-                format_tables = []
-                for table in doc.tables:
-                    # Check if this table is in the format chapter area
-                    # by checking if its first cell content appears in format_text
-                    first_cell = table.cell(0, 0).text.strip()[:30]
-                    if first_cell and first_cell in format_text:
-                        headers = []
-                        for cell in table.rows[0].cells:
-                            h = cell.text.strip()
-                            if h:
-                                headers.append(h)
-                        if headers:
-                            # Try to match to an attachment
-                            format_tables.append({
-                                'headers': headers,
-                                'cols': len(table.columns),
-                                'rows': len(table.rows),
-                            })
-                            # Get table font size
-                            for row in table.rows[1:2]:  # sample from data row
+            # Create directory for table templates
+            base_dir = os.path.dirname(file_path)
+            tpl_dir = os.path.join(base_dir, 'table_templates')
+            os.makedirs(tpl_dir, exist_ok=True)
+
+            # Walk body elements in order, tracking current attachment
+            format_started = False
+            current_attachment = None  # index into attachments list
+            font_samples = {}  # font_name → count
+            table_font_spec = {'name': 'Arial', 'size': 11}
+            font_spec = {'name': 'Arial', 'size': 12, 'title_size': 15}
+            table_count = 0
+
+            for element in doc.element.body:
+                # ── Paragraph: check for format chapter start / attachment heading ──
+                if element.tag.endswith('}p'):
+                    for p in doc.paragraphs:
+                        if p._element is element:
+                            text = p.text.strip()
+
+                            # Detect format chapter start
+                            if not format_started:
+                                if any(kw in text for kw in format_keywords):
+                                    format_started = True
+
+                            if not format_started:
+                                break
+
+                            # Track font samples
+                            if p.runs:
+                                for r in p.runs:
+                                    fn = r.font.name
+                                    if fn:
+                                        font_samples[fn] = font_samples.get(fn, 0) + 1
+
+                            # Detect attachment heading: "附件N：xxx" or standalone title
+                            att_match = re.match(r'附件\s*(\d+)', text)
+                            if att_match:
+                                att_id = int(att_match.group(1))
+                                # Find matching attachment in our list
+                                for i, att in enumerate(attachments):
+                                    if att['order'] == att_id:
+                                        current_attachment = i
+                                        break
+
+                            # Also detect standalone section titles
+                            standalone_map = {
+                                '拟派实施人员表': None,
+                                '拟派人员资历表': None,
+                                '投标人情况表': None,
+                            }
+                            for st_title in standalone_map:
+                                if st_title in text and len(text) < 30:
+                                    # Find parent attachment (附件10 usually)
+                                    # Keep current_attachment
+                                    pass
+                            break
+
+                # ── Table: save XML if in format chapter ──
+                elif element.tag.endswith('}tbl') and format_started:
+                    for table in doc.tables:
+                        if table._element is element:
+                            # Extract table metadata
+                            rows = len(table.rows)
+                            cols = len(table.columns)
+
+                            # Get headers
+                            headers = []
+                            for ci in range(cols):
+                                try:
+                                    h = table.cell(0, ci).text.strip()
+                                    headers.append(h)
+                                except Exception:
+                                    headers.append('')
+
+                            # Get column widths
+                            col_widths = []
+                            for col in table.columns:
+                                try:
+                                    w = col.width
+                                    if w:
+                                        col_widths.append(w)
+                                    else:
+                                        col_widths.append(0)
+                                except Exception:
+                                    col_widths.append(0)
+
+                            # Get font info from table
+                            for row in table.rows[:2]:
                                 for cell in row.cells:
                                     for p in cell.paragraphs:
                                         for r in p.runs:
+                                            if r.font.name:
+                                                table_font_spec['name'] = r.font.name
                                             if r.font.size:
                                                 table_font_spec['size'] = r.font.size.pt
-                                                break
-            except Exception as e:
-                logger.warning(f"Failed to extract font info from docx: {e}")
+                                            break
+                                        break
+                                    break
 
-        # ── Step 4: Match tables to attachments ──
-        # Simple heuristic: tables appear in order after their attachment heading
-        if file_path:
-            try:
-                for att in attachments:
-                    title = att['title']
-                    for ft in format_tables:
-                        # Check if table headers relate to this attachment
-                        # (crude: assign tables in order to attachments that likely have tables)
-                        table_keywords = ['序号', '项目名称', '姓名', '条目号',
-                                          '评审内容', '单位名称', '类别']
-                        if any(h in table_keywords for h in ft['headers']):
-                            att['table_template'] = ft
-                            format_tables.remove(ft)
+                            # Save table XML to file
+                            table_count += 1
+                            att_label = attachments[current_attachment]['id'] if current_attachment is not None else f'unknown_{table_count}'
+                            xml_filename = f'table_{att_label}_{table_count}.xml'
+                            xml_path = os.path.join(tpl_dir, xml_filename)
+
+                            # Serialize the table element XML
+                            xml_bytes = etree.tostring(
+                                table._element,
+                                xml_declaration=False,
+                                encoding='unicode',
+                            )
+                            with open(xml_path, 'w', encoding='utf-8') as f:
+                                f.write(xml_bytes)
+
+                            table_info = {
+                                'xml_path': xml_path,
+                                'headers': headers,
+                                'col_widths': col_widths,
+                                'rows': rows,
+                                'cols': cols,
+                            }
+
+                            # Attach to current attachment
+                            if current_attachment is not None:
+                                attachments[current_attachment]['tables'].append(table_info)
+                                logger.info(
+                                    f"  Table template saved: {att_label} "
+                                    f"({rows}x{cols}) → {xml_filename}"
+                                )
+                            else:
+                                logger.info(
+                                    f"  Table template saved (unmatched): "
+                                    f"({rows}x{cols}) → {xml_filename}"
+                                )
                             break
-            except Exception:
-                pass
+
+            # Determine most common font
+            if font_samples:
+                most_common = max(font_samples, key=font_samples.get)
+                font_spec['name'] = most_common
+                if table_font_spec['name'] == 'Arial':
+                    table_font_spec['name'] = most_common
+
+        except Exception as e:
+            logger.warning(f"Failed to extract table templates from docx: {e}")
+            import traceback
+            traceback.print_exc()
 
         format_spec = {
             'has_format_chapter': True,
@@ -693,11 +774,12 @@ class RequirementExtractionSkill(BaseSkill):
             'font': font_spec,
             'table_font': table_font_spec,
             'attachments': attachments,
-            'standalone_sections': standalone_titles,
         }
 
+        tables_saved = sum(len(a.get('tables', [])) for a in attachments)
         logger.info(
             f"Format spec extracted: {len(attachments)} attachments, "
+            f"{tables_saved} table templates, "
             f"font={font_spec['name']}/{font_spec['size']}pt, "
             f"table_font={table_font_spec['name']}/{table_font_spec['size']}pt"
         )
