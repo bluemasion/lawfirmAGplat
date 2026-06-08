@@ -763,16 +763,54 @@ class MaterialStore:
     def _get_materials(self, category: str,
                        company: str = "",
                        project_id: int = None) -> List[Dict]:
-        """Get materials by category, optionally filtered by company or project."""
+        """Get materials by category, with company-wide fallback.
+
+        When querying by project_id, if the result is insufficient,
+        also includes materials from other projects of the same company.
+        This handles the common case where materials are spread across
+        multiple bid projects (e.g. resumes in project A, qualifications
+        in project B).
+        """
         conn = self._get_conn()
         try:
             if project_id:
+                # First: query by project_id
                 rows = conn.execute("""
                     SELECT m.*, c.name as company_name
                     FROM materials m JOIN companies c ON m.company_id = c.id
                     WHERE m.category = ? AND m.project_id = ?
                     ORDER BY m.name
                 """, (category, project_id)).fetchall()
+
+                # Fallback: if project has few results, also get
+                # from same company's other projects (dedup by name)
+                if len(rows) < 3:
+                    company_id_row = conn.execute(
+                        "SELECT company_id FROM materials WHERE project_id = ? LIMIT 1",
+                        (project_id,)
+                    ).fetchone()
+                    if company_id_row:
+                        cid = company_id_row["company_id"]
+                        extra_rows = conn.execute("""
+                            SELECT m.*, c.name as company_name
+                            FROM materials m JOIN companies c ON m.company_id = c.id
+                            WHERE m.category = ? AND m.company_id = ?
+                              AND m.project_id != ?
+                            ORDER BY m.name
+                        """, (category, cid, project_id)).fetchall()
+                        if extra_rows:
+                            # Dedup: project-specific takes priority
+                            existing_names = {r["name"] for r in rows}
+                            for er in extra_rows:
+                                if er["name"] not in existing_names:
+                                    rows.append(er)
+                                    existing_names.add(er["name"])
+                            logger.info(
+                                f"  Material fallback: {category} project {project_id} "
+                                f"had {len(rows) - len(extra_rows)}, "
+                                f"added {len(extra_rows)} from same company"
+                            )
+
             elif company:
                 rows = conn.execute("""
                     SELECT m.*, c.name as company_name
