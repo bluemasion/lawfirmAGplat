@@ -1,0 +1,15 @@
+{
+  "title": "法定代表人（单位负责人）授权书",
+  "content": "## 法定代表人（单位负责人）授权书\n\n（请根据招标文件要求填写本部分内容）\n\n声明单位（盖章）：北京大成律师事务所\n法定代表人（签字）：[待补充：法定代表人]\n日期：[待补充：日期]\n",
+  "missing_fields": [
+    "法定代表人",
+    "日期"
+  ],
+  "status": "template",
+  "order": 7,
+  "type": "form",
+  "level": 2,
+  "linked_scoring": [],
+  "linked_rejection": [],
+  "linked_total_score": 0
+}

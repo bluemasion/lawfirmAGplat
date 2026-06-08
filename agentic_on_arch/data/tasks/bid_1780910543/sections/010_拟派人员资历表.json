@@ -1,0 +1,33 @@
+{
+  "title": "拟派人员资历表",
+  "content": "## 拟派人员资历表\n\n| 项目 | 内容 |\n|------|------|\n| [待补充] | [待补充] |\n\n\n---\n\n### 附件：相关证明材料\n\n#### 简历_冷雪峰 — 执业证书\n\n![简历_冷雪峰 - 其他证件](/Users/mason/Desktop/code /angenimi-agentic/lawfirmAGplat/agentic_on_arch/data/materials/images/dfae2d910225.png)\n![简历_冷雪峰 - 其他证件](/Users/mason/Desktop/code /angenimi-agentic/lawfirmAGplat/agentic_on_arch/data/materials/images/fee500f17cf8.png)\n![简历_冷雪峰 - 其他证件](/Users/mason/Desktop/code /angenimi-agentic/lawfirmAGplat/agentic_on_arch/data/materials/images/2349b9d18810.png)\n\n#### 简历_杨国华 — 执业证书\n\n![简历_杨国华 - 其他证件](/Users/mason/Desktop/code /angenimi-agentic/lawfirmAGplat/agentic_on_arch/data/materials/images/5fc6a7625199.png)\n![简历_杨国华 - 其他证件](/Users/mason/Desktop/code /angenimi-agentic/lawfirmAGplat/agentic_on_arch/data/materials/images/e957338b9b84.png)\n![简历_杨国华 - 其他证件](/Users/mason/Desktop/code /angenimi-agentic/lawfirmAGplat/agentic_on_arch/data/materials/images/843fcaaa768a.png)\n\n#### 简历_梁君 — 执业证书\n\n![简历_梁君 - 其他证件](/Users/mason/Desktop/code /angenimi-agentic/lawfirmAGplat/agentic_on_arch/data/materials/images/b1b7b64a169a.png)\n![简历_梁君 - 其他证件](/Users/mason/Desktop/code /angenimi-agentic/lawfirmAGplat/agentic_on_arch/data/materials/images/33842bffa1eb.png)\n![简历_梁君 - 其他证件](/Users/mason/Desktop/code /angenimi-agentic/lawfirmAGplat/agentic_on_arch/data/materials/images/1091ff8bcf2c.png)\n\n#### 简历_王章伟 — 执业证书\n\n![简历_王章伟 - 其他证件](/Users/mason/Desktop/code /angenimi-agentic/lawfirmAGplat/agentic_on_arch/data/materials/images/3882f6c0f700.png)\n![简历_王章伟 - 其他证件](/Users/mason/Desktop/code /angenimi-agentic/lawfirmAGplat/agentic_on_arch/data/materials/images/fdfe7639188d.png)\n![简历_王章伟 - 其他证件](/Users/mason/Desktop/code /angenimi-agentic/lawfirmAGplat/agentic_on_arch/data/materials/images/368c63522076.png)\n\n#### 简历_林微 — 执业证书\n\n![简历_林微 - 其他证件](/Users/mason/Desktop/code /angenimi-agentic/lawfirmAGplat/agentic_on_arch/data/materials/images/95cfa88951f0.png)\n![简历_林微 - 其他证件](/Users/mason/Desktop/code /angenimi-agentic/lawfirmAGplat/agentic_on_arch/data/materials/images/b1addf5d5041.png)\n\n#### 简历_马江涛 — 执业证书\n\n![简历_马江涛 - 其他证件](/Users/mason/Desktop/code /angenimi-agentic/lawfirmAGplat/agentic_on_arch/data/materials/images/011db8481f8f.png)\n![简历_马江涛 - 其他证件](/Users/mason/Desktop/code /angenimi-agentic/lawfirmAGplat/agentic_on_arch/data/materials/images/d72d76764231.png)\n",
+  "missing_fields": [
+    "",
+    ""
+  ],
+  "status": "template",
+  "order": 10,
+  "type": "table",
+  "level": 2,
+  "linked_scoring": [
+    {
+      "item": "项目负责人综合素质",
+      "max_score": 5,
+      "description": "项目负责人（主办律师）为律所主任、合伙人的，得2分。项目负责人（主办律师）执业年限（以执业许可证号为准）10年（含）以上的，得3分；5年（含）到10（不含）年的，得2分；5（不含）年以下的，得1分。须提供加盖投标人公章的团队负责人通过年检考核的律师执业证复印件。",
+      "sub_criteria": [
+        {
+          "name": "职务",
+          "score": 2,
+          "scoring_rule": "项目负责人（主办律师）为律所主任、合伙人的，得2分"
+        },
+        {
+          "name": "执业年限",
+          "score": 3,
+          "scoring_rule": "执业年限10年（含）以上的，得3分；5年（含）到10（不含）年的，得2分；5（不含）年以下的，得1分"
+        }
+      ]
+    }
+  ],
+  "linked_rejection": [],
+  "linked_total_score": 0
+}
