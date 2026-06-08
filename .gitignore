@@ -32,3 +32,10 @@ logs/
 models/
 training_data/
 data/paired_docs/
+
+# Large binary files
+agentic_on_arch/data/bidding/bidding.db
+agentic_on_arch/data/materials/materials.db
+agentic_on_arch/data/tasks/*/bid_document_*.docx
+agentic_on_arch/uploads/*.docx
+
