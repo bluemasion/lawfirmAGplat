@@ -387,6 +387,13 @@ class ContentGenerationSkill(BaseSkill):
                 title, content_hints, data_fields,
                 company=company, project_id=project_id
             )
+            # Append material images for table sections (e.g. resume scans
+            # for 拟派人员表, project evidence for 业绩表)
+            if matched_materials:
+                scoped = self._filter_materials_for_section(title, matched_materials)
+                img_block = self._append_material_images(title, scoped)
+                if img_block:
+                    content += img_block
             if chunk_callback:
                 await chunk_callback(content)
             missing = self._scan_missing(content)
@@ -995,6 +1002,7 @@ class ContentGenerationSkill(BaseSkill):
         "律师": ["resumes"],
         "成员": ["resumes"],
         "拟投入": ["resumes"],
+        "情况表": ["resumes"],
         # 业绩类: 只附业绩合同扫描件
         "业绩": ["projects"],
         "案例": ["projects"],
