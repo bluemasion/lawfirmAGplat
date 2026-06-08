@@ -67,6 +67,12 @@ class RuleVerificationSkill(BaseSkill):
         checks.extend(self._check_amount_consistency(generated))
         checks.extend(self._check_data_driven_degradation(generated))
 
+        # NEW: Content quality checks (14-16)
+        format_spec = params.get("format_spec", {})
+        checks.extend(self._check_table_fill_rate(generated))
+        checks.extend(self._check_narrative_word_count(generated))
+        checks.extend(self._check_attachment_completeness(format_spec, generated))
+
         # Calculate overall status
         error_count = sum(1 for c in checks if c["status"] == "ERROR")
         warning_count = sum(1 for c in checks if c["status"] == "WARNING")
@@ -481,4 +487,93 @@ class RuleVerificationSkill(BaseSkill):
                         f"'{title}' 内容 {len(content)} 字，素材匹配正常",
                     ).to_dict())
 
+        return checks
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # Content quality checks (14-16)
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    def _check_table_fill_rate(self, generated):
+        """14. Check if table-type sections have sufficient content."""
+        checks = []
+        for section in generated:
+            sec_type = section.get("type", "")
+            title = section.get("title", "")
+            content = section.get("content", "")
+
+            if sec_type == "table" and len(content) < 100:
+                checks.append(VerificationItem(
+                    "table_fill", title, "ERROR",
+                    f"表格章节 '{title}' 内容仅 {len(content)} 字，"
+                    f"表格可能未填充数据", "ERROR",
+                ).to_dict())
+            elif sec_type == "table":
+                checks.append(VerificationItem(
+                    "table_fill", title, "PASS",
+                    f"表格章节 '{title}' 内容 {len(content)} 字",
+                ).to_dict())
+        return checks
+
+    def _check_narrative_word_count(self, generated):
+        """15. Check if narrative sections meet minimum word count."""
+        checks = []
+        MIN_NARRATIVE = 800
+        MIN_SUB_NARRATIVE = 500
+
+        for section in generated:
+            sec_type = section.get("type", "")
+            title = section.get("title", "")
+            content = section.get("content", "")
+            is_sub = section.get("is_sub_section", False)
+
+            if sec_type != "narrative":
+                continue
+
+            min_chars = MIN_SUB_NARRATIVE if is_sub else MIN_NARRATIVE
+            if len(content) < min_chars:
+                checks.append(VerificationItem(
+                    "word_count", title, "WARNING",
+                    f"'{title}' 内容仅 {len(content)} 字"
+                    f"（建议 ≥{min_chars} 字）", "WARNING",
+                ).to_dict())
+            else:
+                checks.append(VerificationItem(
+                    "word_count", title, "PASS",
+                    f"'{title}' 内容 {len(content)} 字，达标",
+                ).to_dict())
+        return checks
+
+    def _check_attachment_completeness(self, format_spec, generated):
+        """16. Verify all format_spec attachments have corresponding sections."""
+        checks = []
+        attachments = format_spec.get("attachments", [])
+        if not attachments:
+            return checks
+
+        gen_titles = set(s.get("title", "") for s in generated)
+        gen_att_ids = set(s.get("att_id", "") for s in generated)
+
+        missing = []
+        for att in attachments:
+            att_id = att.get("id", "")
+            att_title = att.get("title", "")[:30]
+
+            # Check if attachment is covered by att_id or title match
+            if att_id in gen_att_ids:
+                continue
+            if any(att_title[:8] in gt for gt in gen_titles):
+                continue
+            missing.append(f"{att_id}：{att_title}")
+
+        if missing:
+            checks.append(VerificationItem(
+                "completeness", "附件完整性", "ERROR",
+                f"{len(missing)} 个附件缺失: " + ", ".join(missing[:5]),
+                "ERROR",
+            ).to_dict())
+        else:
+            checks.append(VerificationItem(
+                "completeness", "附件完整性", "PASS",
+                f"全部 {len(attachments)} 个附件已覆盖",
+            ).to_dict())
         return checks

@@ -597,10 +597,10 @@ class DocxAssemblySkill(BaseSkill):
             t.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
 
     def _fill_table_data(self, tbl_element, att_id, title, section):
-        """Fill a cloned table with real data based on attachment type.
+        """Fill a cloned table with real data — header-driven (泛化).
 
-        Detects table type from att_id/title keywords and fills
-        data from the material store.
+        Detects table type from header row keywords, not from title.
+        This allows any tender format to be filled correctly.
         """
         if tbl_element is None:
             return
@@ -631,24 +631,28 @@ class DocxAssemblySkill(BaseSkill):
 
         filled = False
 
-        # ── Deviation tables (商务/技术偏离表) ──
-        if '偏离' in title or '响应' in title:
-            if '条款' in header_str or '响应' in header_str:
-                filled = self._fill_deviation_table(tbl_element, rows, headers)
+        # ── Header-driven type detection (泛化) ──
+        # Priority: deviation > project > personnel > profile
 
-        # ── Performance table (业绩表) ──
-        elif '业绩' in title:
-            if store and ('用户' in header_str or '项目名称' in header_str):
-                projects = store.get_projects(company=company, project_id=project_id)
-                if projects:
-                    filled = self._fill_project_table(tbl_element, rows, headers, projects)
+        # 1. Deviation table: headers contain 偏离/响应
+        if any(h for h in headers if '偏离' in h or '响应' in h and '条' in header_str):
+            filled = self._fill_deviation_table(tbl_element, rows, headers)
 
-        # ── Personnel tables (拟派人员) ──
-        elif '拟派' in title or '人员' in title or '情况' in title:
-            if store and ('姓名' in header_str):
-                resumes = store.get_resumes(company=company, project_id=project_id)
-                if resumes:
-                    filled = self._fill_personnel_table(tbl_element, rows, headers, resumes)
+        # 2. Project/performance table: headers contain 项目名称/用户名称
+        elif store and any(h for h in headers if '项目名称' in h or '用户名称' in h or '委托方' in h):
+            projects = store.get_projects(company=company, project_id=project_id)
+            if projects:
+                filled = self._fill_project_table(tbl_element, rows, headers, projects)
+
+        # 3. Personnel table: headers contain 姓名
+        elif store and any(h for h in headers if '姓名' in h):
+            resumes = store.get_resumes(company=company, project_id=project_id)
+            if resumes:
+                filled = self._fill_personnel_table(tbl_element, rows, headers, resumes)
+
+        # 4. Company profile table: headers contain 单位名称/注册
+        elif store and any(h for h in headers if '单位名称' in h or '注册' in h):
+            filled = self._fill_profile_table(tbl_element, rows, headers)
 
         if filled:
             logger.info(f"  ✅ Table data filled for: {title}")
@@ -786,6 +790,71 @@ class DocxAssemblySkill(BaseSkill):
                     filled_count += 1
 
         logger.info(f"  Personnel table: filled {filled_count} cells from {len(resumes)} resumes")
+        return filled_count > 0
+
+    def _fill_profile_table(self, tbl_element, rows, headers):
+        """Fill company profile table (投标人情况表) with company data."""
+        ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+        filled_count = 0
+
+        # Get company profile from store
+        store = None
+        try:
+            from app.core.skills.builtin.material_store import get_material_store
+            store = get_material_store()
+        except Exception:
+            pass
+
+        company = self._company_name or ''
+        profile = {}
+        if store:
+            try:
+                profile = store.get_company_profile(company=company) or {}
+            except Exception:
+                pass
+
+        if not profile:
+            # Minimal profile from company name
+            profile = {"company_name": company}
+
+        # Scan all cells looking for known label→value patterns
+        # Profile tables often have "label | value" layout in rows
+        _LABEL_MAP = {
+            '单位名称': profile.get('company_name', company),
+            '投标人名称': profile.get('company_name', company),
+            '法定代表人': profile.get('legal_rep', ''),
+            '注册地址': profile.get('address', ''),
+            '联系电话': profile.get('phone', ''),
+            '传真': profile.get('fax', ''),
+            '邮编': profile.get('zip_code', ''),
+            '成立日期': profile.get('established_date', ''),
+            '注册资金': profile.get('registered_capital', ''),
+            '营业执照号': profile.get('license_no', ''),
+            '律所执业许可证号': profile.get('license_no', ''),
+            '电子邮箱': profile.get('email', ''),
+            '联系人': profile.get('contact_person', ''),
+        }
+
+        for row_idx in range(1, len(rows)):
+            cells = rows[row_idx].findall('w:tc', ns)
+            for col_idx, cell in enumerate(cells):
+                cell_texts = cell.findall('.//w:t', ns)
+                cell_text = ''.join(t.text or '' for t in cell_texts).strip()
+
+                # Check if this cell is a label that we know
+                for label, value in _LABEL_MAP.items():
+                    if label in cell_text and value:
+                        # Fill the NEXT cell with the value
+                        next_col = col_idx + 1
+                        if next_col < len(cells):
+                            next_texts = cells[next_col].findall('.//w:t', ns)
+                            next_text = ''.join(t.text or '' for t in next_texts).strip()
+                            if not next_text:
+                                self._set_cell_text(tbl_element, row_idx, next_col, str(value))
+                                filled_count += 1
+                        break
+
+        logger.info(f"  Profile table: filled {filled_count} cells")
         return filled_count > 0
 
     # ─── Section / Chapter ────────────────────────────────────────

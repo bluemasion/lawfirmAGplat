@@ -1100,6 +1100,7 @@ async def generate_full_document(task_id: str, req: FullBiddingRequest):
             verification = await _verifier.execute({
                 "tender_requirements": requirements,
                 "generated_sections": generated_sections,
+                "format_spec": task.get("format_spec", {}),
             })
             task["verification"] = verification
         except Exception as e:

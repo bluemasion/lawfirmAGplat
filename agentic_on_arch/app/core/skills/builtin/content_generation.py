@@ -902,7 +902,28 @@ class ContentGenerationSkill(BaseSkill):
             "title": title,
             "content_hints": hints or "按照招标要求撰写",
         }
+
+        # ── Word count requirement (dynamic by scoring weight) ──
+        if is_sub_section:
+            min_words = 1500
+        elif linked_total_score >= 20:
+            min_words = 3000
+        elif linked_total_score >= 10:
+            min_words = 2500
+        else:
+            min_words = 2000
+
+        word_count_hint = (
+            f"\n\n⚠️ 字数要求：本章节内容不少于 {min_words} 字。"
+            f"请详细展开论述，包含具体措施、时间节点、人员安排等细节。"
+            f"避免空洞的承诺性语言，每个要点至少展开2-3段。\n"
+        )
+        prompt_context["word_count_hint"] = word_count_hint
+
         prompt = prompt_skill.build_prompt(section_dict, prompt_context)
+        # Append word count hint directly to prompt if not already included
+        if f"{min_words}" not in prompt:
+            prompt += word_count_hint
         system_prompt = prompt_skill.get_system_prompt()
 
         logger.info(

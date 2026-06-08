@@ -341,7 +341,12 @@ def _merge_service_sub_sections(
     sections: List[Dict],
     llm_sections: List[Dict],
 ):
-    """Merge service-related sub-sections into 服务响应方案 attachment."""
+    """Create narrative sub-sections for service-type attachments.
+
+    Always creates standard sub-sections (重点难点/响应承诺/增值服务)
+    even if LLM didn't generate them — these are essential for
+    content volume and scoring coverage.
+    """
     # Find service attachment
     svc_idx = None
     for i, sec in enumerate(sections):
@@ -353,24 +358,52 @@ def _merge_service_sub_sections(
     if svc_idx is None:
         return
 
-    # Find service sub-sections from LLM
-    sub_kws = ['重点难点', '响应时间', '增值服务', '保障机制']
-    insert_after = svc_idx
+    parent = sections[svc_idx]
+
+    # Standard sub-sections that should always exist for service proposals
+    # (泛化: these apply to most industries — legal, IT, engineering)
+    _STANDARD_SUBS = [
+        {"title": "重点难点分析及应对措施", "material_scope": ["projects"]},
+        {"title": "响应时间承诺及保障机制", "material_scope": []},
+        {"title": "增值服务方案", "material_scope": ["projects", "resumes"]},
+    ]
+
+    # Build lookup of LLM-generated sub-sections
+    llm_sub_lookup = {}
     for llm_sec in llm_sections:
-        title = llm_sec.get("title", "")
-        if any(kw in title for kw in sub_kws):
-            insert_after += 1
-            sub_section = {
-                "title": title,
-                "type": "narrative",
-                "order": sections[svc_idx]["order"],
-                "level": 3,
-                "att_id": sections[svc_idx].get("att_id", ""),
-                "content": llm_sec.get("content", ""),
-                "linked_scoring": llm_sec.get("linked_scoring", []),
-                "is_sub_section": True,
-            }
-            sections.insert(insert_after, sub_section)
+        llm_title = llm_sec.get("title", "")
+        for std in _STANDARD_SUBS:
+            # Match by keyword overlap
+            std_kws = std["title"].replace("及", " ").replace("方案", "").split()
+            if any(kw in llm_title for kw in std_kws if len(kw) >= 2):
+                llm_sub_lookup[std["title"]] = llm_sec
+                break
+
+    # Insert sub-sections after parent
+    insert_after = svc_idx
+    created = 0
+    for std in _STANDARD_SUBS:
+        insert_after += 1
+        llm_match = llm_sub_lookup.get(std["title"])
+        sub_section = {
+            "title": llm_match.get("title", std["title"]) if llm_match else std["title"],
+            "type": "narrative",
+            "order": parent["order"],
+            "level": 3,
+            "att_id": parent.get("att_id", ""),
+            "content": llm_match.get("content", "") if llm_match else "",
+            "linked_scoring": llm_match.get("linked_scoring", []) if llm_match else [],
+            "is_sub_section": True,
+            "material_refs": _build_material_refs(std["title"], "narrative"),
+        }
+        sections.insert(insert_after, sub_section)
+        created += 1
+        src = "LLM" if llm_match else "standard"
+        logger.info(f"  Sub-section: {std['title']} ({src})")
+
+    if created:
+        logger.info(f"  Service sub-sections: {created} created for '{parent['title']}'")
+
 
 
 def _link_scoring(
